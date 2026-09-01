@@ -1,16 +1,14 @@
 package run
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"log/slog"
-	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,11 +16,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/transport"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
-// serveConfig holds the common configuration for launching an RPC subprocess.
+// serveConfig holds the shared configuration for `ai serve` / `ai run`.
 type serveConfig struct {
 	session      string
 	systemPrompt string
@@ -32,268 +32,23 @@ type serveConfig struct {
 	name         string
 	role         string
 	model        string
-	daemon       bool // true for serve (new process group), false for run
+	idFile       string // write run ID here once the ACP server is live
 }
 
-// serveProcess holds the runtime state of a managed RPC subprocess.
-type serveProcess struct {
-	cmd          *exec.Cmd
-	stdinWriter  *os.File
-	broadcaster  *tui.EventBroadcaster
-	meta         *tui.RunMeta
-	metaPath     string
-	sockPath     string
-	baseDir      string
-	socketServer *tui.SocketServer
-	bridgeDone   chan struct{}
-	logFile      *os.File
-}
-
-// Close stops the socket server and releases resources.
-func (sp *serveProcess) Close() {
-	sp.socketServer.Stop()
-	os.Remove(sp.sockPath)
-	sp.broadcaster.Close()
-	sp.logFile.Close()
-}
-
-// startServeProcess launches an RPC subprocess with shared infrastructure:
-// run ID, log file, stdin/stdout pipes, event broadcaster, and socket server.
-func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
-	if err := checkSubagentSpawnAllowed(os.LookupEnv); err != nil {
-		slog.Error(err.Error())
-		os.Exit(1)
-	}
-
-	// Generate run ID and create directory.
-	id := tui.GenerateID()
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		slog.Error("failed to get home directory", "error", err)
-		os.Exit(1)
-	}
-	baseDir := filepath.Join(homeDir, ".ai")
-	runDir := tui.RunDir(baseDir, id)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		slog.Error("failed to create run directory", "path", runDir, "error", err)
-		os.Exit(1)
-	}
-
-	// Resolve system prompt from --system-prompt only (--role is passed through to rpc).
-	sysPrompt, err := helpers.ParseSystemPrompt(cfg.systemPrompt)
-	if err != nil {
-		slog.Error("invalid system prompt", "error", err)
-		os.Exit(1)
-	}
-
-	// Build RPC flags to forward.
-	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
-	if cfg.role != "" {
-		// Validate role exists before spawning to avoid silent failure.
-		roleConfigPath := filepath.Join(homeDir, ".ai", "roles", cfg.role, "agent.yaml")
-		if _, err := os.Stat(roleConfigPath); err != nil {
-			slog.Error("role not found", "role", cfg.role, "path", roleConfigPath)
-			os.Exit(1)
-		}
-		rpcFlags = append(rpcFlags, "--role", cfg.role)
-	}
-	cwd, _ := os.Getwd()
-	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
-	cmd.Dir = cwd
-	cmd.Env = subagentProcessEnv(os.Environ())
-
-	// Daemon mode: detach from terminal with new process group.
-	if cfg.daemon {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-
-	// Redirect subprocess stderr to log file.
-	logPath := filepath.Join(runDir, "error.log")
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		slog.Error("failed to create log file", "path", logPath, "error", err)
-		os.Exit(1)
-	}
-	cmd.Stderr = logFile
-
-	// Stdin pipe for sending commands.
-	// Use os.Pipe instead of io.Pipe: io.Pipe is a synchronous in-memory
-	// pipe that requires Go's os/exec to spawn internal goroutines for copying
-	// between the pipe and the child's file descriptors. This is unreliable —
-	// data written to the io.PipeWriter may never reach the subprocess.
-	// os.Pipe provides kernel-buffered OS-level pipes that the child reads
-	// directly, with no intermediate goroutines.
-	stdinReader, stdinWriter, err := os.Pipe()
-	if err != nil {
-		slog.Error("failed to create stdin pipe", "error", err)
-		os.Exit(1)
-	}
-	cmd.Stdin = stdinReader
-
-	// Stdout goes to event broadcaster instead of events.jsonl.
-	// The broadcaster fans out to N watch clients via ring buffer + channels.
-	broadcaster := tui.NewEventBroadcaster()
-
-	pipeReader, pipeWriter, err := os.Pipe()
-	if err != nil {
-		slog.Error("failed to create stdout pipe", "error", err)
-		os.Exit(1)
-	}
-	cmd.Stdout = pipeWriter
-
-	// Start the subprocess.
-	if err := cmd.Start(); err != nil {
-		slog.Error("failed to start rpc subprocess", "error", err)
-		os.Exit(1)
-	}
-
-	// Close parent's copies of child-side file descriptors.
-	// After cmd.Start(), the child has inherited these FDs via fork/exec.
-	// Keeping them open in the parent would prevent EOF detection.
-	stdinReader.Close()
-	pipeWriter.Close()
-
-	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
-	bridgeDone := make(chan struct{})
-	go func() {
-		defer close(bridgeDone)
-		defer pipeReader.Close()
-		scanner := bufio.NewScanner(pipeReader)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			lineCopy := make([]byte, len(line))
-			copy(lineCopy, line)
-			broadcaster.Push(lineCopy)
-		}
-		if err := scanner.Err(); err != nil {
-			slog.Error("stdout bridge scanner error", "error", err)
-		}
-	}()
-
-	// Write initial tui.json.
-	meta := &tui.RunMeta{
-		ID:           id,
-		PID:          cmd.Process.Pid,
-		CWD:          cwd,
-		Status:       tui.StatusRunning,
-		StartedAt:    time.Now().Unix(),
-		Name:         cfg.name,
-		PidStartTime: tui.GetProcessStartTime(cmd.Process.Pid),
-	}
-	metaPath := tui.RunMetaPath(baseDir, id)
-	if err := tui.SaveRunMeta(meta, metaPath); err != nil {
-		slog.Error("failed to save run meta", "error", err)
-	}
-
-	// Start socket server for external commands + event streaming.
-	sockPath := tui.SocketPath(baseDir, id)
-	socketServer := tui.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
-	socketServer.SetBroadcaster(broadcaster)
-	if err := socketServer.Start(); err != nil {
-		slog.Error("failed to start socket server", "error", err)
-		cmd.Process.Kill()
-		meta.Status = tui.StatusFailed
-		meta.FinishedAt = time.Now().Unix()
-		tui.SaveRunMeta(meta, metaPath)
-		os.Exit(1)
-	}
-
-	return &serveProcess{
-		cmd:          cmd,
-		stdinWriter:  stdinWriter,
-		broadcaster:  broadcaster,
-		meta:         meta,
-		metaPath:     metaPath,
-		sockPath:     sockPath,
-		baseDir:      baseDir,
-		socketServer: socketServer,
-		bridgeDone:   bridgeDone,
-		logFile:      logFile,
-	}
-}
-
-func RunSubcommand(binPath string) {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
-	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
-	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
-	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
-	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
-	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
-	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
-	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
-	fs.Parse(os.Args[1:])
-
-	sp := startServeProcess(binPath, serveConfig{
-		session:      *sessionFlag,
-		systemPrompt: *systemPromptFlag,
-		maxTurns:     *maxTurnsFlag,
-		timeout:      *timeoutFlag,
-		http:         *httpFlag,
-		name:         *nameFlag,
-		role:         *roleFlag,
-		model:        *modelFlag,
-	})
-	defer sp.Close()
-
-	// Send initial input if provided.
-	if *inputFlag != "" {
-		if err := sendRPCCommand(sp.stdinWriter, "prompt", *inputFlag); err != nil {
-			slog.Error("failed to send initial input", "error", err)
-		}
-	}
-
-	// Launch watch TUI in foreground.
-	// The TUI reads events from broadcaster via ring buffer and renders to the terminal.
-	// User input is forwarded to the subprocess via the socket.
-	m := newRunModel(sp.broadcaster, sp.meta.ID, sp.sockPath, sp.cmd.Process, sp.stdinWriter, sp.meta, sp.metaPath)
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		slog.Error("TUI error", "error", err)
-	}
-
-	// TUI exited — clean up subprocess.
-	// Close stdin pipe so the child sees EOF on stdin.
-	sp.stdinWriter.Close()
-
-	sp.cmd.Process.Signal(syscall.SIGINT)
-	done := make(chan *os.ProcessState, 1)
-	go func() {
-		state, _ := sp.cmd.Process.Wait()
-		done <- state
-	}()
-	var processState *os.ProcessState
-	select {
-	case processState = <-done:
-	case <-time.After(5 * time.Second):
-		sp.cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case processState = <-done:
-		case <-time.After(3 * time.Second):
-			sp.cmd.Process.Kill()
-			processState = <-done
-		}
-	}
-
-	// Update final status.
-	sp.meta.Status = statusFromProcessState(processState)
-	sp.meta.FinishedAt = time.Now().Unix()
-	tui.SaveRunMeta(sp.meta, sp.metaPath)
-}
-
-// ServeSubcommand starts the agent as a daemon process.
-// It runs in the foreground but keeps I/O silent (redirected to files).
-// The socket server runs in-process, enabling ai send/watch control.
+// ServeSubcommand starts the agent in this process. The ACP server runs over
+// a transport.Hub served on a unix socket, so local clients (`ai watch`,
+// `ai send`, the `ai run` TUI) attach via ACP while the control client keeps
+// one long-lived connection for the initial prompt and the events.jsonl
+// mirror.
+//
 // Use "ai serve &" or "nohup ai serve &" for background operation.
 func ServeSubcommand(binPath string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
-	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
-	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
-	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
-	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
+	sessionFlag := fs.String("session", "", "Session file path")
+	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
+	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
+	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
@@ -302,7 +57,12 @@ func ServeSubcommand(binPath string) {
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
-	sp := startServeProcess(binPath, serveConfig{
+	// Daemon mode: detach from the terminal with a new process group.
+	if err := syscall.Setpgid(0, 0); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: failed to set process group: %v\n", err)
+	}
+
+	sp := startServeApp(serveConfig{
 		session:      *sessionFlag,
 		systemPrompt: *systemPromptFlag,
 		maxTurns:     *maxTurnsFlag,
@@ -311,247 +71,478 @@ func ServeSubcommand(binPath string) {
 		name:         *nameFlag,
 		role:         *roleFlag,
 		model:        *modelFlag,
-		daemon:       true,
+		idFile:       *idFileFlag,
 	})
 	defer sp.Close()
 
-	// Send initial input if provided.
+	// Send the initial prompt, if any. This must happen after
+	// startServeApp returns: the signal handler installed there may call
+	// control.Cancel concurrently with this PromptAsync, and the client's
+	// internal lock serializes them safely, but the handler must exist first.
 	inputText := *inputFlag
 	if *inputFileFlag != "" {
 		data, err := os.ReadFile(*inputFileFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: failed to read input file: %v\n", err)
-			sp.cmd.Process.Kill()
 			os.Exit(1)
 		}
 		inputText = string(data)
 	}
 	if inputText != "" {
-		if err := sendRPCCommand(sp.stdinWriter, "prompt", inputText); err != nil {
+		if err := sp.control.PromptAsync(sp.sessionID, inputText); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
 		}
 	}
 
-	// Capture process exit state to avoid the double-wait race with cmd.Wait().
-	// Close stdinWriter when the subprocess exits so the child sees EOF on stdin
-	// and the pipe is properly cleaned up.
-	processStateCh := make(chan *os.ProcessState, 1)
-	go func() {
-		state, _ := sp.cmd.Process.Wait()
-		processStateCh <- state
-		sp.stdinWriter.Close()
-	}()
+	// Wait for the agent to exit.
+	<-sp.done
 
-	// Write run ID to file if requested (caller can poll this file instead of
-	// capturing stdout — useful when running in background via "&").
-	if *idFileFlag != "" {
-		if err := os.WriteFile(*idFileFlag, []byte(sp.meta.ID+"\n"), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: failed to write id-file: %v\n", err)
-		}
-	}
-
-	// Wait for subprocess to exit. The process-state goroutine is the single
-	// owner of Process.Wait; calling cmd.Wait here would wait on the same
-	// process a second time.
-	//
-	// Wait for the bridge goroutine to finish reading remaining stdout.
-	// pipeWriter was already closed after cmd.Start(), so the bridge goroutine
-	// will see EOF once the child exits and its stdout is closed.
-	<-sp.bridgeDone
-
-	// Determine final status using the captured process state.
-	processState := <-processStateCh
-	status := statusFromProcessState(processState)
-
+	status := sp.status
 	sp.meta.Status = status
 	sp.meta.FinishedAt = time.Now().Unix()
 	tui.SaveRunMeta(sp.meta, sp.metaPath)
+
+	// Exit non-zero on failure so callers (e.g. `ai run`) can detect it.
+	if status == tui.StatusFailed {
+		os.Exit(1)
+	}
 }
 
-// statusFromProcessState maps a child process exit to the persisted run status.
-func statusFromProcessState(state *os.ProcessState) string {
-	if state == nil {
-		return tui.StatusKilled
-	}
-	if state.Success() {
-		return tui.StatusDone
-	}
-	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return tui.StatusKilled
-	}
-	return tui.StatusFailed
+// serveApp holds the runtime state of the in-process ACP server.
+type serveApp struct {
+	meta       *tui.RunMeta
+	metaPath   string
+	eventsPath string
+	sockPath   string
+	socket     *transport.UnixSocket
+	hub        *transport.Hub
+	control    *rpc.ACPClient
+	sessionID  string
+	logFile    *os.File
+
+	mu       sync.Mutex
+	finished bool
+	status   string // final status (done/killed/failed)
+	done     chan struct{}
 }
 
-// BuildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
-func BuildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model, runid string) []string {
-	var flags []string
-	if session != "" {
-		flags = append(flags, "--session", session)
+// finish records the final status and closes done exactly once.
+func (sp *serveApp) finish(status string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if sp.finished {
+		return
 	}
-	if systemPrompt != "" {
-		flags = append(flags, "--system-prompt", systemPrompt)
-	}
-	if maxTurns > 0 {
-		flags = append(flags, "--max-turns", fmt.Sprintf("%d", maxTurns))
-	}
-	if timeout > 0 {
-		flags = append(flags, "--timeout", timeout.String())
-	}
-	if http != "" {
-		flags = append(flags, "--http", http)
-	}
-	if model != "" {
-		flags = append(flags, "--model", model)
-	}
-	if runid != "" {
-		flags = append(flags, "--runid", runid)
-	}
-	return flags
+	sp.finished = true
+	sp.status = status
+	close(sp.done)
 }
 
-// sendRPCCommand writes a JSON-RPC command to the subprocess stdin.
-func sendRPCCommand(w io.Writer, cmdType, message string) error {
-	rpcCmd := map[string]string{
-		"type":    cmdType,
-		"message": message,
+// Close releases the control connection, hub, socket and log file.
+func (sp *serveApp) Close() {
+	if sp.control != nil {
+		sp.control.Close()
 	}
-	data, err := json.Marshal(rpcCmd)
+	if sp.hub != nil {
+		sp.hub.Close()
+	}
+	if sp.socket != nil {
+		sp.socket.Close()
+	}
+	if sp.logFile != nil {
+		sp.logFile.Close()
+	}
+}
+
+func failServe(msg string) {
+	fmt.Fprintf(os.Stderr, "error: %s\n", msg)
+	os.Exit(1)
+}
+
+// startServeApp sets up the run directory, meta file, unix socket, hub and
+// control client, then starts the in-process ACP server. The process exits
+// when a turn completes (_turn_end) or a termination signal arrives.
+func startServeApp(cfg serveConfig) *serveApp {
+	if err := checkSubagentSpawnAllowed(os.LookupEnv); err != nil {
+		failServe(err.Error())
+	}
+	// Mark this process so agent-launched commands cannot recursively spawn
+	// another subagent.
+	if err := os.Setenv(subagentDepthEnv, "0"); err != nil {
+		failServe(fmt.Sprintf("failed to mark subagent environment: %v", err))
+	}
+
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("marshal rpc command: %w", err)
+		failServe(fmt.Sprintf("failed to get home directory: %v", err))
 	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
-}
+	baseDir := filepath.Join(homeDir, ".ai")
 
-// sendRPCCommandResult is like sendRPCCommand but returns the write count.
-func sendRPCCommandResult(w io.Writer, cmdType, message string) (int, error) {
-	rpcCmd := map[string]string{
-		"type":    cmdType,
-		"message": message,
-	}
-	data, err := json.Marshal(rpcCmd)
+	// Resolve system prompt.
+	sysPrompt, err := helpers.ParseSystemPrompt(cfg.systemPrompt)
 	if err != nil {
-		return 0, fmt.Errorf("marshal rpc command: %w", err)
+		failServe(fmt.Sprintf("invalid system prompt: %v", err))
 	}
-	data = append(data, '\n')
-	return w.Write(data)
-}
-
-// sendRPCCommandWithTimeout is like sendRPCCommand but aborts the write
-// after the given deadline. This is a safety measure for cases where the
-// subprocess is dead or unresponsive — with os.Pipe, writes return quickly
-// (kernel buffer), but the process may have exited and the data is lost anyway.
-func sendRPCCommandWithTimeout(w io.Writer, cmdType, message string, timeout time.Duration) error {
-	type result struct {
-		n   int
-		err error
+	if cfg.role != "" {
+		roleConfigPath := filepath.Join(homeDir, ".ai", "roles", cfg.role, "agent.yaml")
+		if _, err := os.Stat(roleConfigPath); err != nil {
+			failServe(fmt.Sprintf("role not found: %s (path %s)", cfg.role, roleConfigPath))
+		}
 	}
-	done := make(chan result, 1)
 
+	// Create the run meta first so its ID is fixed before anything else
+	// (run dir, socket, id file) is derived from it.
+	cwd, _ := os.Getwd()
+	meta, err := tui.CreateRun(baseDir, cwd, os.Getpid())
+	if err != nil {
+		failServe(fmt.Sprintf("failed to create run meta: %v", err))
+	}
+	id := meta.ID
+	runDir := tui.RunDir(baseDir, id)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		failServe(fmt.Sprintf("failed to create run directory: %v", err))
+	}
+
+	// Log file for agent errors.
+	logFile, err := os.Create(filepath.Join(runDir, "error.log"))
+	if err != nil {
+		failServe(fmt.Sprintf("failed to create log file: %v", err))
+	}
+
+	if cfg.name != "" {
+		meta.Name = cfg.name
+		if err := tui.SaveRunMeta(meta, tui.RunMetaPath(baseDir, id)); err != nil {
+			failServe(fmt.Sprintf("failed to save run meta: %v", err))
+		}
+	}
+
+	// Listen for ACP clients.
+	sockPath := tui.SocketPath(baseDir, id)
+	socket, err := transport.NewUnixSocket(sockPath)
+	if err != nil {
+		failServe(fmt.Sprintf("failed to create ACP socket: %v", err))
+	}
+	hub := transport.NewHub()
 	go func() {
-		n, err := sendRPCCommandResult(w, cmdType, message)
-		done <- result{n, err}
+		for {
+			conn, err := socket.Accept()
+			if err != nil {
+				return
+			}
+			hub.AddConn(conn)
+		}
 	}()
 
-	select {
-	case r := <-done:
-		return r.err
-	case <-time.After(timeout):
-		return fmt.Errorf("write timed out after %v (subprocess likely dead)", timeout)
+	sp := &serveApp{
+		meta:       meta,
+		metaPath:   tui.RunMetaPath(baseDir, id),
+		eventsPath: tui.EventsPath(baseDir, id),
+		sockPath:   sockPath,
+		socket:     socket,
+		hub:        hub,
+		logFile:    logFile,
+		done:       make(chan struct{}),
+	}
+
+	// In-process ACP server. Runs until the hub is closed (see Close) or it
+	// errors out.
+	go func() {
+		if err := rpc.RunACP(hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id); err != nil {
+			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
+		}
+		sp.finish(tui.StatusFailed)
+	}()
+
+	// Control client: initial prompt, signal abort and events.jsonl mirror.
+	control, sessionID, err := rpc.DialACP(sockPath)
+	if err != nil {
+		failServe(fmt.Sprintf("failed to start agent: %v (see %s)", err, filepath.Join(runDir, "error.log")))
+	}
+	sp.control = control
+	sp.sessionID = sessionID
+
+	// Publish the run ID only once the ACP server is live, so callers that
+	// poll this file can immediately dial the socket.
+	if cfg.idFile != "" {
+		if err := os.WriteFile(cfg.idFile, []byte(id+"\n"), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: failed to write id file: %v\n", err)
+		}
+	}
+
+	// Mirror ACP updates into events.jsonl (agent_end lines, consumed by
+	// `ai ls`) and finalize status when a turn ends.
+	go sp.mirror()
+
+	// Graceful shutdown: abort the in-flight turn; status becomes "killed".
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		fmt.Fprintf(os.Stderr, "[serve] received signal: %v, aborting agent\n", sig)
+		if sp.control != nil {
+			_ = sp.control.Cancel(sp.sessionID)
+		}
+		sp.finish(tui.StatusKilled)
+	}()
+
+	return sp
+}
+
+// mirror consumes the control client's ACP update stream and appends
+// agent_end lines to events.jsonl — the contract `ai ls` uses for idle
+// detection and result display.
+//
+// Serve stays alive across turns (agent_end only means the current prompt
+// finished, not process exit — callers clean up with `ai kill`). Final
+// status is set by the signal handler (killed) or a fatal agent error
+// (failed).
+func (sp *serveApp) mirror() {
+	f, err := os.OpenFile(sp.eventsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	for u := range sp.control.Updates() {
+		if u.SessionUpdate != "_turn_end" {
+			continue
+		}
+		success := true
+		errMsg := ""
+		if meta, ok := u.Meta.(map[string]any); ok {
+			if s, ok := meta["success"].(bool); ok {
+				success = s
+			}
+			errMsg, _ = meta["error"].(string)
+		}
+		line, err := json.Marshal(map[string]any{
+			"type":      "agent_end",
+			"success":   success,
+			"error":     errMsg,
+			"timestamp": time.Now().Unix(),
+		})
+		if err == nil {
+			f.Write(append(line, '\n'))
+		}
 	}
 }
 
-// runSocketHandler creates a command handler for the socket server.
-// It wraps the RPC subprocess stdin/stdout with liveness checks and timeouts.
-func runSocketHandler(meta *tui.RunMeta, metaPath string, proc *os.Process, stdinWriter io.Writer) tui.CommandHandler {
-	var mu sync.Mutex
+// --- ai run: spawn a detached serve process and attach the TUI over ACP ---
 
-	// isAlive checks whether the subprocess is still running.
-	// Signal(0) returns an error if the process has exited but hasn't been reaped yet.
-	isAlive := func() bool {
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
-			return false
-		}
-		return true
+// RunSubcommand runs the agent as a detached `ai serve` subprocess and
+// attaches an interactive TUI over ACP.
+func RunSubcommand(binPath string) {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	sessionFlag := fs.String("session", "", "Session file path")
+	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
+	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
+	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
+	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+	nameFlag := fs.String("name", "", "Human-readable name for the run")
+	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
+	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
+	fs.Parse(os.Args[1:])
+
+	cfg := serveConfig{
+		session:      *sessionFlag,
+		systemPrompt: *systemPromptFlag,
+		maxTurns:     *maxTurnsFlag,
+		timeout:      *timeoutFlag,
+		http:         *httpFlag,
+		name:         *nameFlag,
+		role:         *roleFlag,
+		model:        *modelFlag,
 	}
 
-	return func(cmd tui.Command) tui.Response {
-		mu.Lock()
-		defer mu.Unlock()
+	// Serve writes its run ID here once the ACP server is live.
+	idFile, err := os.CreateTemp("", "ai-run-*.id")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to create temp file: %v\n", err)
+		os.Exit(1)
+	}
+	idFile.Close()
+	defer os.Remove(idFile.Name())
 
-		switch cmd.Type {
-		case "prompt":
-			if cmd.Message == "" {
-				return tui.Response{OK: false, Error: "command requires a message"}
-			}
-			if !isAlive() {
-				return tui.Response{OK: false, Error: "subprocess is no longer alive"}
-			}
-			// Forward as "prompt" so RPC handles slash commands correctly.
-			// Use a deadline so the write does not block forever when the
-			// subprocess dies between the liveness check and the write.
-			if err := sendRPCCommandWithTimeout(stdinWriter, "prompt", cmd.Message, 10*time.Second); err != nil {
-				return tui.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
-			}
-			return tui.Response{OK: true}
+	sp, err := startServeProcess(binPath, cfg, idFile.Name())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to start serve process: %v\n", err)
+		os.Exit(1)
+	}
+	sp.meta, err = waitForRunMeta(idFile.Name(), sp, 60*time.Second)
+	if err != nil {
+		sp.stop()
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 
-		case "abort":
-			if err := proc.Signal(syscall.SIGTERM); err != nil {
-				return tui.Response{OK: false, Error: fmt.Sprintf("abort failed: %v", err)}
-			}
-			return tui.Response{OK: true}
+	// Attach the TUI to the agent over ACP.
+	client, sid, err := rpc.DialACP(tui.SocketPath("", sp.meta.ID))
+	if err != nil {
+		sp.stop()
+		sp.wait()
+		fmt.Fprintf(os.Stderr, "error: cannot attach to agent: %v\n", err)
+		os.Exit(1)
+	}
 
+	// Send the initial prompt, if any.
+	if *inputFlag != "" {
+		if err := client.PromptAsync(sid, *inputFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
+		}
+	}
+
+	// Launch the TUI. It owns the client connection (closes it on exit).
+	model := newRunModel(sp.meta, client, sid)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	go model.consumeACP(client.Updates(), p)
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	}
+
+	// TUI exited — stop the serve process and wait for it to exit.
+	sp.stop()
+	sp.wait()
+
+	// Report the final status (written by the serve process on exit).
+	if m, err := tui.LoadRunMeta(tui.RunMetaPath("", sp.meta.ID)); err == nil && m.Status == tui.StatusFailed {
+		os.Exit(1)
+	}
+}
+
+// waitForRunMeta polls the id file written by the serve process, then loads
+// the run meta. It fails fast if the serve process exits during startup.
+func waitForRunMeta(idFile string, sp *serveProcess, timeout time.Duration) (*tui.RunMeta, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-sp.exited:
+			return nil, fmt.Errorf("serve process exited during startup (see %s)", serveErrorLogHint)
 		default:
-			return tui.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
 		}
+		data, err := os.ReadFile(idFile)
+		if err == nil {
+			id := strings.TrimSpace(string(data))
+			if id != "" {
+				meta, err := tui.LoadRunMeta(tui.RunMetaPath("", id))
+				if err == nil {
+					return meta, nil
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
+	return nil, fmt.Errorf("timed out waiting for serve process to start (see %s)", serveErrorLogHint)
+}
+
+// serveErrorLogHint points users at where serve startup errors are logged.
+var serveErrorLogHint = "~/.ai/runs/<id>/error.log"
+
+// startServeProcess spawns a detached `ai serve` subprocess in its own
+// process group.
+func startServeProcess(binPath string, cfg serveConfig, idFile string) (*serveProcess, error) {
+	args := []string{"serve", "--id-file", idFile}
+	if cfg.session != "" {
+		args = append(args, "--session", cfg.session)
+	}
+	if cfg.systemPrompt != "" {
+		args = append(args, "--system-prompt", cfg.systemPrompt)
+	}
+	if cfg.maxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(cfg.maxTurns))
+	}
+	if cfg.timeout > 0 {
+		args = append(args, "--timeout", cfg.timeout.String())
+	}
+	if cfg.http != "" {
+		args = append(args, "--http", cfg.http)
+	}
+	if cfg.name != "" {
+		args = append(args, "--name", cfg.name)
+	}
+	if cfg.role != "" {
+		args = append(args, "--role", cfg.role)
+	}
+	if cfg.model != "" {
+		args = append(args, "--model", cfg.model)
+	}
+
+	cmd := exec.Command(binPath, args...)
+	cmd.Stdout = nil // detached: keep the terminal clean
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	sp := &serveProcess{cmd: cmd, exited: make(chan struct{})}
+	go func() {
+		cmd.Wait()
+		close(sp.exited)
+	}()
+	return sp, nil
+}
+
+// serveProcess tracks the detached serve subprocess.
+type serveProcess struct {
+	cmd    *exec.Cmd
+	meta   *tui.RunMeta
+	exited chan struct{}
+}
+
+// stop signals the serve process to shut down (SIGTERM, then SIGKILL) and
+// waits for it to exit.
+func (sp *serveProcess) stop() {
+	if sp.cmd.Process == nil {
+		return
+	}
+	_ = sp.cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-sp.exited:
+	case <-time.After(5 * time.Second):
+		_ = sp.cmd.Process.Signal(syscall.SIGKILL)
+	}
+	<-sp.exited
+}
+
+// wait reaps the serve subprocess.
+func (sp *serveProcess) wait() {
+	<-sp.exited
 }
 
 // --- runModel: watchModel + user input ---
 
 // runModel extends the watch TUI with user input support.
 // It embeds watchModel for event rendering and adds a text input
-// for sending messages to the running agent via socket.
+// for sending messages to the agent via ACP.
 type runModel struct {
 	watchModel
-	sockPath    string
-	proc        *os.Process
-	stdinPipe   io.Writer
-	meta        *tui.RunMeta
-	metaPath    string
-	inputMode   bool // true when user is typing a message
-	inputBuf    *strings.Builder
-	broadcaster *tui.EventBroadcaster
+	meta      *tui.RunMeta
+	client    *rpc.ACPClient
+	sessionID string
+	inputMode bool // true when user is typing a message
+	inputBuf  *strings.Builder
 }
 
-func newRunModel(
-	broadcaster *tui.EventBroadcaster, runID, sockPath string,
-	proc *os.Process,
-	stdinPipe io.Writer,
-	meta *tui.RunMeta,
-	metaPath string,
-) runModel {
-	w := newWatchModelFromBroadcaster(broadcaster, runID)
+func newRunModel(meta *tui.RunMeta, client *rpc.ACPClient, sessionID string) runModel {
 	return runModel{
-		watchModel:  w,
-		sockPath:    sockPath,
-		proc:        proc,
-		stdinPipe:   stdinPipe,
-		meta:        meta,
-		metaPath:    metaPath,
-		inputBuf:    &strings.Builder{},
-		broadcaster: broadcaster,
+		watchModel: newWatchModelForACP("ai run", meta.ID),
+		meta:       meta,
+		client:     client,
+		sessionID:  sessionID,
+		inputBuf:   &strings.Builder{},
 	}
 }
 
-func (m runModel) Init() tea.Cmd {
-	return m.watchModel.Init()
-}
-
 func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		// q/ctrl+c always quit, even mid-input.
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.client.Close()
+			return m, tea.Quit
+		}
+
 		// Handle input mode: user is typing a message.
 		if m.inputMode {
 			switch msg.Type {
@@ -561,8 +552,12 @@ func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputBuf.Reset()
 				m.inputMode = false
 				if text != "" {
-					if err := m.sendMessage(text); err != nil {
+					if err := m.client.PromptAsync(m.sessionID, text); err != nil {
 						m.appendContent(errStyle.Render("ai: send failed: " + err.Error()))
+						m.syncIfDirty()
+					} else {
+						// The user text arrives via the server's
+						// user_message_chunk broadcast; no local echo needed.
 						m.syncIfDirty()
 					}
 				}
@@ -587,26 +582,20 @@ func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Normal mode: handle navigation and commands.
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "i", ":":
-			// Enter input mode.
+		// Normal mode: enter input mode.
+		if msg.String() == "i" || msg.String() == ":" {
 			m.inputMode = true
-			return m, nil
-		case "left", "h":
-			m.viewport.ScrollLeft(scrollStep)
-			return m, nil
-		case "right", "l":
-			m.viewport.ScrollRight(scrollStep)
 			return m, nil
 		}
 	}
 
-	// Delegate to watchModel for event processing.
+	// Delegate to watchModel for event processing and navigation.
+	// (Also closes the client when the ACP stream ends.)
 	w, cmd := m.watchModel.Update(msg)
 	m.watchModel = w.(watchModel)
+	if _, closed := msg.(acpStreamClosedMsg); closed {
+		m.client.Close()
+	}
 	return m, cmd
 }
 
@@ -631,25 +620,4 @@ func (m runModel) View() string {
 	}
 
 	return m.viewport.View() + "\n" + status
-}
-
-// sendMessage sends a user message to the agent via socket.
-func (m *runModel) sendMessage(text string) error {
-	conn, err := net.DialTimeout("unix", m.sockPath, 5*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect to socket: %w", err)
-	}
-	defer conn.Close()
-
-	cmd := tui.Command{Type: "prompt", Message: text}
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return fmt.Errorf("marshal command: %w", err)
-	}
-	data = append(data, '\n')
-
-	if _, err := conn.Write(data); err != nil {
-		return fmt.Errorf("write command: %w", err)
-	}
-	return nil
 }

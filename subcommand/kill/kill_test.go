@@ -1,11 +1,8 @@
 package kill
 
 import (
-	"encoding/json"
-	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
@@ -24,53 +21,6 @@ func TestProcessAlive(t *testing.T) {
 	if processAlive(999999999) {
 		t.Error("non-existent PID should not be alive")
 	}
-}
-
-func TestTrySocketAbortReadsLineDelimitedResponse(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("skipping on non-unix")
-	}
-
-	tmpDir, err := os.MkdirTemp("/tmp", "ai-killtest-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	sockPath := filepath.Join(tmpDir, "control.sock")
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatalf("listen unix socket: %v", err)
-	}
-	defer ln.Close()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-
-		buf := make([]byte, 1024)
-		_, _ = conn.Read(buf)
-
-		resp := tui.Response{OK: true}
-		data, _ := json.Marshal(resp)
-		data = append(data, '\n')
-
-		// Write response in two chunks to verify the client handles partial reads.
-		half := len(data) / 2
-		_, _ = conn.Write(data[:half])
-		time.Sleep(20 * time.Millisecond)
-		_, _ = conn.Write(data[half:])
-	}()
-
-	if ok := trySocketAbort(sockPath); !ok {
-		t.Fatal("expected trySocketAbort to return true")
-	}
-	<-done
 }
 
 func TestKillRunUpdatesMetaAndKillsProcess(t *testing.T) {

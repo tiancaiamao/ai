@@ -35,7 +35,6 @@ package rpc
 // mcpServers in session/new are accepted and ignored (logged).
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -50,6 +49,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/command"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 // acpProtocolVersion is the ACP major protocol version this agent implements.
@@ -121,6 +121,10 @@ type acpUpdate struct {
 	// so hosts like AionUi can render the invocation parameters.
 	RawInput map[string]any        `json:"rawInput,omitempty"`
 	Commands []acpAvailableCommand `json:"commands,omitempty"`
+	// Meta carries implementation-specific extension data for `_`-prefixed
+	// sessionUpdate values. Per ACP extensibility, custom data lives in _meta;
+	// standard ACP clients ignore it.
+	Meta any `json:"_meta,omitempty"`
 }
 
 // acpAvailableCommand is one entry of available_commands_update (spec:
@@ -150,8 +154,7 @@ type acpServer struct {
 	app    *rpcApp
 	ctx    context.Context
 	cancel context.CancelFunc
-	out    io.Writer
-	mu     sync.Mutex // serializes writes to out
+	conn   transport.Conn
 
 	sessionID string
 
@@ -160,10 +163,12 @@ type acpServer struct {
 	cancelled     bool            // set when the pending turn was cancelled
 }
 
-// RunACP runs the agent as an ACP server over stdin/stdout. Setup mirrors
-// RunRPC: same config, session, tools, compactor and agent; only the protocol
-// layer differs.
-func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+// RunACP runs the agent as an ACP server over the given transport conn. Setup
+// mirrors RunRPC: same config, session, tools, compactor and agent; only the
+// protocol layer differs. The conn may be a stdio channel (NewStdio) or a hub
+// multiplexing several unix-socket peers (NewHub); the ACP core is identical
+// either way.
+func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
@@ -186,9 +191,15 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	defer ag.Shutdown()
 
 	// --- ACP server ---
-	srv := &acpServer{app: app, out: output}
+	srv := &acpServer{app: app, conn: conn}
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	defer srv.cancel()
+	// Unblock the transport read on shutdown: canceling the ctx closes the conn,
+	// which yields io.EOF from ReadMessage so the run loop exits cleanly.
+	go func() {
+		<-srv.ctx.Done()
+		conn.Close()
+	}()
 
 	// Command registry: reuse the NDJSON Server purely for slash-command
 	// registration (handlePrompt dispatches /commands through it). Events go
@@ -217,6 +228,7 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	go func() {
 		<-agentAbortSignal
 		slog.Info("[ACP] External abort signal received, aborting agent")
+		srv.markCancelled()
 		ag.Abort()
 		srv.cancel()
 	}()
@@ -225,7 +237,7 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.startDebugServer()
 
 	slog.Info("ACP server started", "model", app.model.ID, "cwd", app.cwd)
-	runErr := srv.run(input)
+	runErr := srv.run()
 
 	slog.Info("ACP server stopped, waiting for cleanup...")
 	ag.Wait()
@@ -237,18 +249,20 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	return runErr
 }
 
-// run reads JSON-RPC messages from input until EOF or context cancellation.
-func (s *acpServer) run(input io.Reader) error {
-	cr := &contextReader{reader: input, ctx: s.ctx}
-	scanner := bufio.NewScanner(cr)
-	buf := make([]byte, 0, 4*1024*1024) // 4MB
-	scanner.Buffer(buf, 16*1024*1024)   // 16MB max
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+// run reads JSON-RPC messages from the transport until EOF or context
+// cancellation.
+func (s *acpServer) run() error {
+	for {
+		msg, err := s.conn.ReadMessage()
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 
 		var req acpRequest
-		if err := json.Unmarshal(line, &req); err != nil {
+		if err := json.Unmarshal(msg, &req); err != nil {
 			s.sendError(nil, acpErrInvalidRequest, fmt.Sprintf("failed to parse message: %v", err))
 			continue
 		}
@@ -258,10 +272,6 @@ func (s *acpServer) run(input io.Reader) error {
 		}
 		s.handleRequest(req)
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		return err
-	}
-	return nil
 }
 
 func (s *acpServer) handleRequest(req acpRequest) {
@@ -440,6 +450,7 @@ func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 			u := acpUpdate{
 				SessionUpdate: "tool_call_update",
 				ToolCallID:    msg.ToolCallID,
+				Title:         msg.ToolName,
 				Status:        status,
 			}
 			if text := msg.ExtractText(); text != "" {
@@ -527,6 +538,14 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	s.pendingPrompt = req.ID
 	s.cancelled = false
 	s.pendingMu.Unlock()
+
+	// Echo the prompt to every attached peer as user_message_chunk so live
+	// watchers (ai watch, TUI) see the user's text — the load-time replay is
+	// not visible to clients that were already attached.
+	s.sendUpdate(acpUpdate{
+		SessionUpdate: "user_message_chunk",
+		Content:       map[string]string{"type": "text", "text": message},
+	})
 
 	// Everything else stays raw free text: ACP prompts may legitimately start
 	// with '/' without being a command (a Go comment does too), so only an
@@ -709,6 +728,7 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 		u := acpUpdate{
 			SessionUpdate: "tool_call_update",
 			ToolCallID:    event.ToolCallID,
+			Title:         event.ToolName,
 			Status:        status,
 		}
 		if event.Result != nil {
@@ -726,14 +746,66 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 		}
 		s.sendUpdate(u)
 
+	case agent.EventCompactionStart, agent.EventCompactionEnd:
+		status := "start"
+		if event.Type == agent.EventCompactionEnd {
+			status = "end"
+		}
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_compaction",
+			Meta:          map[string]any{"status": status, "info": event.Compaction},
+		})
+
+	case agent.EventError:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_error",
+			Meta: map[string]any{
+				"error":      event.Error,
+				"errorStack": event.ErrorStack,
+			},
+		})
+
+	case agent.EventLLMRetry:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_llm_retry",
+			Meta:          event.LLMRetry,
+		})
+
+	case agent.EventLoopGuardTriggered:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_loop_guard",
+			Meta:          event.LoopGuard,
+		})
+
+	case agent.EventToolCallRecovery:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_tool_call_recovery",
+			Meta:          event.ToolCallRecovery,
+		})
+
 	case agent.EventAgentEnd:
-		// A turn completed: answer the pending session/prompt request.
+		// A turn completed: clear the pending prompt before publishing the
+		// _turn_end update. The serve mirror uses that update to mark the run
+		// idle; clearing first keeps session/load from seeing a stale in-flight
+		// prompt after ls reports idle.
 		s.pendingMu.Lock()
 		id := s.pendingPrompt
 		cancelled := s.cancelled
 		s.pendingPrompt = nil
 		s.cancelled = false
 		s.pendingMu.Unlock()
+
+		// ACP extension: universal turn-end signal. Emitted before the prompt
+		// result so every client observes it before the response arrives.
+		// Consumers: `ai watch` / `ai send --wait` exit detection, `ai ls`
+		// idle detection (via the mirrored events.jsonl), TUI status.
+		meta := map[string]any{"success": event.Error == ""}
+		if event.Error != "" {
+			meta["error"] = event.Error
+		}
+		s.sendUpdate(acpUpdate{SessionUpdate: "_turn_end", Meta: meta})
+
+		// A turn completed: answer the pending session/prompt request.
 		if len(id) > 0 {
 			stopReason := acpStopEndTurn
 			if cancelled {
@@ -741,6 +813,7 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 			}
 			s.sendResult(id, map[string]string{"stopReason": stopReason})
 		}
+
 	}
 }
 
@@ -771,9 +844,9 @@ func (s *acpServer) writeMessage(msg any) {
 		slog.Error("[ACP] failed to marshal message", "error", err)
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, _ = s.out.Write(append(data, '\n'))
+	if err := s.conn.WriteMessage(data); err != nil {
+		slog.Error("[ACP] failed to write message", "error", err)
+	}
 }
 
 // buildACPMessage flattens ACP prompt content blocks into the text message

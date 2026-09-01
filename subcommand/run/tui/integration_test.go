@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
-	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,81 +75,6 @@ func TestRunDirectoryLifecycle(t *testing.T) {
 
 // TestSocketCommunication tests the full socket round-trip:
 // create server -> start -> send command -> receive response -> stop.
-func TestSocketCommunication(t *testing.T) {
-	tmpDir := t.TempDir()
-	sockPath := filepath.Join(tmpDir, "control.sock")
-
-	received := make(chan Command, 1)
-
-	handler := func(cmd Command) Response {
-		received <- cmd
-		switch cmd.Type {
-		case "steer":
-			if cmd.Message == "" {
-				return Response{OK: false, Error: "empty message"}
-			}
-			return Response{OK: true, Data: map[string]string{"echo": cmd.Message}}
-		case "abort":
-			return Response{OK: true}
-		default:
-			return Response{OK: false, Error: fmt.Sprintf("unknown: %s", cmd.Type)}
-		}
-	}
-
-	srv := NewSocketServer(sockPath, handler)
-	if err := srv.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer srv.Stop()
-
-	// Give the server a moment to start listening.
-	time.Sleep(50 * time.Millisecond)
-
-	// Connect and send a steer command.
-	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	cmd := Command{Type: "steer", Message: "hello world"}
-	data, _ := json.Marshal(cmd)
-	conn.Write(append(data, '\n'))
-
-	// Read response.
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("Read response: %v", err)
-	}
-
-	var resp Response
-	raw := strings.TrimRight(string(buf[:n]), "\n")
-	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
-		t.Fatalf("Unmarshal response: %v (raw: %q)", err, raw)
-	}
-
-	if !resp.OK {
-		t.Errorf("Response not OK: %s", resp.Error)
-	}
-
-	// Verify command was received.
-	select {
-	case got := <-received:
-		if got.Type != "steer" {
-			t.Errorf("Command type = %s, want steer", got.Type)
-		}
-		if got.Message != "hello world" {
-			t.Errorf("Command message = %s, want 'hello world'", got.Message)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for command")
-	}
-}
-
-// TestEventParsingPipeline tests that events written to events.jsonl
-// can be correctly parsed by the conv parser.
 func TestEventParsingPipeline(t *testing.T) {
 	tmpDir := t.TempDir()
 	eventsPath := filepath.Join(tmpDir, "events.jsonl")

@@ -12,6 +12,7 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 // runACPSmoke starts RunACP with the given NDJSON lines, returns all
@@ -51,7 +52,7 @@ func runACPSmoke(t *testing.T, tmpDir string, lines []string) []map[string]any {
 		respCh <- results
 	}()
 
-	_ = RunACP(tmpDir, "", reader, outWriter, "", 0, 5*time.Second, "", "", "acp-smoke")
+	_ = RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, 5*time.Second, "", "", "acp-smoke")
 	outWriter.Close()
 
 	return <-respCh
@@ -300,6 +301,10 @@ func TestACPSessionLoad(t *testing.T) {
 	if status, _ := toolCall["status"].(string); status != "pending" {
 		t.Errorf("tool_call: expected pending, got %v", status)
 	}
+	if title, _ := toolCall["title"].(string); title != "bash" {
+		t.Errorf("tool_call: expected title bash, got %v", toolCall["title"])
+	}
+
 	// Replayed tool calls must carry the persisted arguments as rawInput.
 	rawInput, _ := toolCall["rawInput"].(map[string]any)
 	if cmd, _ := rawInput["command"].(string); cmd != "ls" {
@@ -311,6 +316,10 @@ func TestACPSessionLoad(t *testing.T) {
 	if status, _ := toolUpd["status"].(string); status != "completed" {
 		t.Errorf("tool_call_update: expected completed, got %v", toolUpd)
 	}
+	if title, _ := toolUpd["title"].(string); title != "bash" {
+		t.Errorf("tool_call_update: expected title bash, got %v", toolUpd["title"])
+	}
+
 	content, _ := toolUpd["content"].([]any)
 	if len(content) == 0 {
 		t.Errorf("tool_call_update: expected result content, got %v", toolUpd)
@@ -449,7 +458,7 @@ func runACPSmokeSession(t *testing.T, tmpDir string, additionalLines func(sessio
 		writer.Close()
 	}()
 
-	_ = RunACP(tmpDir, "", reader, outWriter, "", 0, 5*time.Second, "", "", "acp-smoke")
+	_ = RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, 5*time.Second, "", "", "acp-smoke")
 	outWriter.Close()
 
 	return <-respCh

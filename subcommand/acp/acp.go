@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/transport"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 )
 
@@ -44,7 +45,7 @@ func ACPSubcommand() {
 
 	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
 	// during initialization (see logger.NewLogger).
-	if err := rpc.RunACP(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, ""); err != nil {
+	if err := rpc.RunACP(transport.NewStdio(os.Stdin, os.Stdout), *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

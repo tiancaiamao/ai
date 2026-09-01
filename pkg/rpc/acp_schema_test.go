@@ -18,6 +18,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 //go:embed testdata/acp_schema_v1.json
@@ -86,7 +87,7 @@ func TestACPSchemaNotifications(t *testing.T) {
 	compiler := newACPSchemaCompiler(t)
 
 	var buf bytes.Buffer
-	srv := &acpServer{out: &buf, sessionID: "sess-test"}
+	srv := &acpServer{conn: transport.NewStdio(strings.NewReader(""), &buf), sessionID: "sess-test"}
 
 	// agent_message_chunk
 	srv.emit(agent.NewMessageUpdateEvent(
@@ -152,6 +153,15 @@ func TestACPSchemaNotifications(t *testing.T) {
 	}
 	if cmd, _ := rawInput["command"].(string); cmd != "ls" {
 		t.Errorf("tool_call: expected rawInput command \"ls\", got %v", rawInput)
+	}
+
+	var endMsg map[string]any
+	if err := json.Unmarshal(lines[3], &endMsg); err != nil {
+		t.Fatalf("notification 3 not valid JSON: %v", err)
+	}
+	endUpd := endMsg["params"].(map[string]any)["update"].(map[string]any)
+	if title, _ := endUpd["title"].(string); title != "bash" {
+		t.Errorf("tool_call_update: expected title bash, got %v", endUpd["title"])
 	}
 }
 

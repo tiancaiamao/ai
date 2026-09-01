@@ -541,11 +541,10 @@ func normalizeSessionID(id string) string {
 	if id == "" {
 		return ""
 	}
-	base := filepath.Base(id)
-	if strings.HasSuffix(base, ".jsonl") {
-		return strings.TrimSuffix(base, ".jsonl")
-	}
-	return base
+	// Preserve the ".jsonl" suffix: session directories created from an
+	// explicit path (e.g. -session <dir>/s.jsonl) keep it in their name, so
+	// the ID must match the directory exactly (see sessionIDFromDirPath).
+	return filepath.Base(id)
 }
 
 // GetSessionsDir returns the sessions directory path.

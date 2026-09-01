@@ -23,12 +23,12 @@ go test -tags e2e ./pkg/e2e/ -run TestE2E_RealTask -v
 ```
 
 By default the suite connects to the first `ollama/*` model from
-`~/.ai/models.json` (prefers `laguna`). Endpoint/model/key can be overridden:
+`~/.ai/models.json` (prefers `qwen`). Endpoint/model/key can be overridden:
 
 | Env | Purpose |
 |-----|---------|
 | `E2E_BASE_URL` | Endpoint base URL (e.g. `http://localhost:11434`) |
-| `E2E_MODEL` | Model ID (e.g. `ollama/laguna`) |
+| `E2E_MODEL` | Model ID (e.g. `ollama/qwen`) |
 | `E2E_API_KEY` | API key for the endpoint |
 
 Tests **skip** when no endpoint is reachable or no model is configured,

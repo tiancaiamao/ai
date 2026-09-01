@@ -40,7 +40,7 @@ coverage: test
 # Check that pkg/ coverage meets the 80% threshold.
 # Used by CI to gate merges on coverage regressions.
 # Run `make test` first to generate coverage.out.
-COVERAGE_THRESHOLD := 80
+COVERAGE_THRESHOLD := 82
 coverage-check:
 	@test -f coverage.out || { echo "ERROR: coverage.out not found. Run 'make test' first."; exit 1; }
 	@head -1 coverage.out > /tmp/pkg-cov.out
