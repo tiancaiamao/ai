@@ -49,10 +49,30 @@ func (t *BashTool) Name() string {
 	return "bash"
 }
 
-var agentLaunchPattern = regexp.MustCompile(`(?:^|[;&|()\n]\s*)(?:env\s+[^;&|()\n]*\s+)?(?:[[:alnum:]_./-]+/)?ai[[:space:]]+(?:run|serve|rpc|acp)(?:[[:space:]]|$)|["']\s*(?:env\s+[^;&|()\n]*\s+)?(?:[[:alnum:]_./-]+/)?ai[[:space:]]+(?:run|serve|rpc|acp)(?:[[:space:]]|$)`)
+const (
+	// shellAssignment matches an environment assignment at the beginning of a
+	// shell command, including quoted values that may contain whitespace.
+	shellAssignment = `(?:[[:alpha:]_][[:alnum:]_]*=(?:"[^"]*"|'[^']*'|[^;&|()[:space:]]*)[[:space:]]+)*`
+	// envLauncher accepts env options, their arguments, and NAME=value
+	// assignments, but not an arbitrary command word such as `echo`.
+	envLauncher = `env(?:(?:[[:space:]]+(?:--|-[[:alnum:]][[:alnum:]-]*|--[[:alnum:]-]+)(?:[[:space:]]+[[:alpha:]_][[:alnum:]_]*)?)|(?:[[:space:]]+[[:alpha:]_][[:alnum:]_]*=(?:"[^"]*"|'[^']*'|[^;&|()[:space:]]*)))*[[:space:]]+`
+	// shellLauncher matches commands commonly used to wrap an executable while
+	// preserving the command boundary. Options are allowed, but positional
+	// arguments are not, so `nohup echo ai serve` is not misclassified.
+	shellLauncher = `(?:(?:` + envLauncher + `|(?:command|nohup|setsid)(?:[[:space:]]+(?:--|--[[:alnum:]-]+|-[[:alnum:]][[:alnum:]-]*))*[[:space:]]+))*`
+	agentCommand  = `(?:[[:alnum:]_./-]+/)?ai[[:space:]]+(?:run|serve|rpc|acp)(?:[[:space:]]|$)`
+)
+
+var (
+	agentLaunchPattern = regexp.MustCompile(`(?:^|[;&|()\n][[:space:]]*)` + shellAssignment + shellLauncher + agentCommand)
+	// Commands passed as strings to tmux or a shell wrapper are commonly
+	// quoted. Restrict this to known string-executing wrappers at a command
+	// boundary so ordinary commands such as `echo 'ai serve'` are not blocked.
+	quotedAgentLaunchPattern = regexp.MustCompile(`(?:^|[;&|()\n][[:space:]]*)(?:tmux|(?:[[:alnum:]_./-]+/)?(?:sh|bash|zsh|dash|fish))[^;&|()\n]*["'][[:space:]]*` + shellAssignment + shellLauncher + agentCommand)
+)
 
 func (t *BashTool) isSubagentLaunch(command string) bool {
-	return t.subagentDepth > 0 && agentLaunchPattern.MatchString(command)
+	return t.subagentDepth > 0 && (agentLaunchPattern.MatchString(command) || quotedAgentLaunchPattern.MatchString(command))
 }
 
 func processSubagentDepth() int {

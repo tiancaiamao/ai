@@ -20,8 +20,18 @@ func TestBashToolBlocksNestedAgentLaunches(t *testing.T) {
 	for _, command := range []string{
 		"ai serve --role reviewer",
 		"/Users/genius/go/bin/ai run",
-		"env -u AI_SUBAGENT_DEPTH ai serve",
+		"AI_SUBAGENT_DEPTH=0 ai serve",
+		"env --unset AI_SUBAGENT_DEPTH ai serve",
+		"env -- AI_SUBAGENT_DEPTH=0 ai serve",
+		"command ai serve",
+		"nohup ai serve",
+		"setsid ai serve",
+		"nohup -- ai serve",
+		"command -- ai serve",
 		"tmux new-session -d 'ai serve --role reviewer'",
+		"tmux new-session -d 'AI_SUBAGENT_DEPTH=0 ai serve --role reviewer'",
+		"sh -c 'AI_SUBAGENT_DEPTH=0 ai serve --role reviewer'",
+		"bash -c 'nohup ai serve --role reviewer'",
 	} {
 		blocks, err := tool.Execute(ctx, map[string]any{"command": command})
 		if err != nil {
@@ -51,8 +61,10 @@ func TestBashToolDoesNotTreatOrdinaryCommandsAsAgentLaunches(t *testing.T) {
 	for _, command := range []string{
 		"echo ai serve",
 		"grep 'ai serve' file.txt",
+		"echo 'ai serve'",
 		"ai send run",
 		"echo /tmp/ai serve-not-a-command",
+		"env echo ai serve",
 	} {
 		if tool.isSubagentLaunch(command) {
 			t.Fatalf("ordinary command was classified as launch: %q", command)
