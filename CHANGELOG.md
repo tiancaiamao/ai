@@ -18,13 +18,16 @@ capability requirements belong to the model entry, not to specific provider
 names. Declaring the requirement in the model config keeps behavior stable
 across renames and lets other gateways opt in without code changes.
 
-## Runtime Guard Against Nested Subagents (2026-08)
+## Role-Bound Subagent Skills (2026-08)
 
-**Problem**: A subagent could invoke `ai run` or `ai serve` again, allowing unbounded recursive delegation despite prompt and skill guidance.
+**What changed**: The `review` and `explore` skills now distinguish between a
+parent agent that delegates work and the corresponding `reviewer` or
+`explorer` subagent that performs the work. Those subagent prompts explicitly
+prohibit invoking the same skill or creating another subagent.
 
-**What changed**: `ai run` and `ai serve` now propagate an internal subagent-depth marker to their RPC child. A depth-one subagent is rejected before a new run directory or subprocess is created, while the top-level RPC agent remains able to create one level of subagents.
-
-**Why**: Enforcing the one-level delegation invariant at the process launcher prevents recursive spawning at runtime instead of relying on model behavior.
+**Why**: Prevent recursive delegation at the prompt boundary for the two
+skills that create subagents, without relying on a shell environment marker
+that can be unset or rewritten.
 
 ## Model-Scoped Proxy Routing (2026-08)
 
