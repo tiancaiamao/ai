@@ -456,6 +456,7 @@ func updateRuntimeMetaSnapshot(
 	currentWorkdir string,
 	startupPath string,
 	runID string,
+	role string,
 ) string {
 	if agentCtx == nil {
 		return ""
@@ -481,11 +482,16 @@ func updateRuntimeMetaSnapshot(
 	if runID != "" {
 		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
 	}
+	var roleLine string
+	if strings.TrimSpace(role) != "" {
+		roleLine = fmt.Sprintf("\n  role: %s", runtimeYAMLString(role))
+	}
 	snapshot := fmt.Sprintf(`<agent:runtime_state/>
-%s
+%s%s
   current_workdir: %s
   startup_path: %s`,
 		runIDLine,
+		roleLine,
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
 	)
