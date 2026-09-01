@@ -116,6 +116,18 @@ func StreamLLM(
 			reqBody[k] = v
 		}
 
+		// Some gateways (e.g. Codex Responses Lite) require reasoning.context
+		// on every request; the value is declared per-model in models.json
+		// ("reasoningContext"), not inferred from the provider name.
+		if model.ReasoningContext != "" {
+			reasoning, ok := reqBody["reasoning"].(map[string]any)
+			if !ok {
+				reasoning = make(map[string]any)
+				reqBody["reasoning"] = reasoning
+			}
+			reasoning["context"] = model.ReasoningContext
+		}
+
 		jsonBody, err := json.Marshal(reqBody)
 		if err != nil {
 			stream.Push(LLMErrorEvent{Error: err})

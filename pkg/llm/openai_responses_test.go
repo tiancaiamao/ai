@@ -498,6 +498,25 @@ func TestStreamOpenAIResponses_NoDoubleAccumulation(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIResponsesRequest_ReasoningContext(t *testing.T) {
+	// Configured reasoningContext must appear on the Responses body even when
+	// the model does not declare reasoning effort controls.
+	req := buildOpenAIResponsesRequest(Model{ReasoningContext: "all_turns"}, LLMContext{})
+	reasoning, ok := req["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing reasoning param, got %#v", req["reasoning"])
+	}
+	if reasoning["context"] != "all_turns" {
+		t.Errorf("reasoning.context = %v, want all_turns", reasoning["context"])
+	}
+
+	// Without the capability, no reasoning param is emitted.
+	req = buildOpenAIResponsesRequest(Model{}, LLMContext{})
+	if _, ok := req["reasoning"]; ok {
+		t.Errorf("unexpected reasoning param: %v", req["reasoning"])
+	}
+}
+
 func TestBuildOpenAIResponsesRequest_ReasoningEffort(t *testing.T) {
 	cases := []struct {
 		level string

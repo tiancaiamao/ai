@@ -59,7 +59,7 @@ func codexRequestBody(model Model, ctx LLMContext) map[string]any {
 		"tool_choice":         "auto",
 		"parallel_tool_calls": true,
 		"text":                map[string]any{"verbosity": "low"},
-		"reasoning":           map[string]any{"effort": "high", "summary": "auto"},
+		"reasoning":           map[string]any{"effort": "high", "summary": "auto", "context": "all_turns"},
 		"include":             []string{"reasoning.encrypted_content"},
 	}
 	if tools := codexTools(ctx.Tools); len(tools) > 0 {

@@ -123,6 +123,9 @@ func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
 	if len(spec.ReasoningEfforts) > 0 {
 		model.ReasoningEfforts = spec.ReasoningEfforts
 	}
+	if model.ReasoningContext == "" && spec.ReasoningContext != "" {
+		model.ReasoningContext = spec.ReasoningContext
+	}
 	if spec.SupportsVision {
 		model.SupportsVision = true
 	}
