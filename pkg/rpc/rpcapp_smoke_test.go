@@ -155,6 +155,10 @@ func TestRPCAppModelSwitch(t *testing.T) {
 	}
 	t.Setenv("AI_MODELS_PATH", modelsPath)
 
+	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"model":{"id":"glm-original","provider":"zai","baseUrl":"https://api.z.ai/api/coding/paas/v4","api":"openai-completions"}}`), 0644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
 	cmds := []string{
 		`{"type":"model","message":"zai/glm-4.5-air"}`,
 		`{"type":"model"}`,
@@ -165,6 +169,22 @@ func TestRPCAppModelSwitch(t *testing.T) {
 	}
 	for _, resp := range responses {
 		assertCmdSuccess(t, resp, "model switch")
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	var savedConfig map[string]any
+	if err := json.Unmarshal(configData, &savedConfig); err != nil {
+		t.Fatalf("parse config.json: %v", err)
+	}
+	modelConfig, ok := savedConfig["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected model config, got %v", savedConfig)
+	}
+	if got, _ := modelConfig["id"].(string); got != "glm-original" {
+		t.Errorf("model selection persisted to config.json: got id %q", got)
 	}
 }
 
