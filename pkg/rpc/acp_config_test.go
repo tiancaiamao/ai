@@ -177,4 +177,20 @@ func TestACPSetConfigAliases(t *testing.T) {
 			t.Errorf("request %v: expected error code %d, got %v", tc.id, acpErrInvalidParams, errObj["code"])
 		}
 	}
+
+	configData, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	var savedConfig map[string]any
+	if err := json.Unmarshal(configData, &savedConfig); err != nil {
+		t.Fatalf("parse config.json: %v", err)
+	}
+	modelConfig, ok := savedConfig["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected model config, got %v", savedConfig)
+	}
+	if got, _ := modelConfig["id"].(string); got != strings.TrimPrefix(initial, "zai/") {
+		t.Errorf("ACP model selection persisted to config.json: got id %q", got)
+	}
 }

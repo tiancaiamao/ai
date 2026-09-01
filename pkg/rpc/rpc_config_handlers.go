@@ -112,13 +112,6 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 	}
 	app.apiKey = newAPIKey
 
-	app.cfg.Model.ID = spec.ID
-	app.cfg.Model.Provider = spec.Provider
-	app.cfg.Model.BaseURL = spec.BaseURL
-	app.cfg.Model.API = spec.API
-	app.cfg.Model.Proxy = spec.Proxy
-	app.cfg.Model.MaxTokens = spec.MaxTokens
-
 	app.ag.SetModel(app.model)
 	app.ag.SetAPIKey(app.apiKey)
 
@@ -129,10 +122,6 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 	app.sessionComp.Update(app.compactor)
 	app.ag.SetCompactor(app.sessionComp)
 	app.ag.SetContextWindow(spec.ContextWindow)
-
-	if err := config.SaveConfig(app.cfg, app.configPath); err != nil {
-		slog.Info("Failed to save config:", "value", err)
-	}
 
 	info := modelInfoFromSpec(spec)
 	app.stateMu.Lock()
