@@ -15,29 +15,37 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		MessagesInHistory: 18,
 	}
 
-	snapshot := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
+	snapshot := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "", "")
 	if snapshot == "" {
 		t.Fatal("expected non-empty snapshot")
+	}
+	if containsString(snapshot, "role:") {
+		t.Fatalf("expected empty role to be omitted, got: %s", snapshot)
 	}
 	if !containsString(snapshot, "current_workdir:") {
 		t.Fatalf("expected current_workdir in snapshot, got: %s", snapshot)
 	}
-	// action_hint field has been removed
 
-	snapshot2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
+	roleCtx := agentctx.NewAgentContext("sys")
+	snapshotWithRole := updateRuntimeMetaSnapshot(roleCtx, meta, 3, "/tmp/worktree", "/tmp/root", "run-1", "reviewer")
+	if !containsString(snapshotWithRole, `role: "reviewer"`) {
+		t.Fatalf("expected role in runtime state, got: %s", snapshotWithRole)
+	}
+
+	snapshot2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "", "")
 	if snapshot2 != snapshot {
 		t.Fatal("expected snapshot to stay stable before refresh")
 	}
 
-	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
+	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "", "")
 
-	snapshot4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
+	snapshot4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "", "")
 	if snapshot4 == "" {
 		t.Fatal("expected non-empty snapshot after heartbeat refresh")
 	}
 
 	meta.TokensPercent = 61.0
-	snapshot5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
+	snapshot5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "", "")
 	if !containsString(snapshot5, "current_workdir:") {
 		t.Fatalf("expected current_workdir after band-change refresh, got: %s", snapshot5)
 	}
@@ -55,7 +63,7 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 		MessagesInHistory: 10,
 	}
 
-	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
+	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "", "")
 	// Note: LastReminderTurn is now set when reminder is actually shown (in streamAssistantResponse)
 	// not in updateRuntimeMetaSnapshot which is telemetry-only
 }
