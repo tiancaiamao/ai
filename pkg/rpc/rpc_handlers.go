@@ -169,6 +169,7 @@ func (app *rpcApp) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error
 	loopCfg.GetWorkingDir = app.ws.GetCWD
 	loopCfg.GetStartupPath = app.ws.GetInitialCWD
 	loopCfg.RunID = app.runID
+	loopCfg.Role = app.role
 	loopCfg.AgentContextPrefix = app.agentContextPrefix
 	loopCfg.GetSessionDir = func() string {
 		if app.sess != nil {

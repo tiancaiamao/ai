@@ -103,6 +103,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 		ContextWindow:  128000,
 		GetWorkingDir:  func() string { return "/tmp/worktree-a" },
 		GetStartupPath: func() string { return "/tmp/project-root" },
+		Role:           "reviewer",
 	}
 
 	stream := newTestAgentEventStream()
@@ -142,6 +143,9 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 					}
 					if !strings.Contains(runtimeContent, `startup_path: "/tmp/project-root"`) {
 						t.Fatalf("expected runtime_state to include startup_path, got: %q", runtimeContent)
+					}
+					if !strings.Contains(runtimeContent, `role: "reviewer"`) {
+						t.Fatalf("expected runtime_state to include role, got: %q", runtimeContent)
 					}
 				}
 			}
