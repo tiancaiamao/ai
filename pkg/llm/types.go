@@ -23,6 +23,10 @@ type Model struct {
 	// means no restriction; requested levels outside the list are clamped to
 	// the nearest supported value.
 	ReasoningEfforts []string `json:"-"`
+	// ReasoningContext, when set, is sent as reasoning.context on every
+	// request (from models.json "reasoningContext", e.g. "all_turns"). Some
+	// gateways (e.g. Codex Responses Lite) reject requests without it.
+	ReasoningContext string `json:"-"`
 }
 
 // LLMContext represents the context for an LLM request.
