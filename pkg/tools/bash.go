@@ -28,63 +28,23 @@ const exitGracePeriod = 250 * time.Millisecond
 
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
-	workspace     *Workspace
-	timeout       time.Duration
-	execTimeout   time.Duration
-	subagentDepth int
+	workspace   *Workspace
+	timeout     time.Duration
+	execTimeout time.Duration
 }
 
 // NewBashTool creates a new Bash tool with dynamic workspace support.
 func NewBashTool(ws *Workspace) *BashTool {
 	return &BashTool{
-		workspace:     ws,
-		timeout:       120 * time.Second, // Default 120s for overall timeout
-		execTimeout:   120 * time.Second, // Default 120s for individual commands (LLM can override)
-		subagentDepth: processSubagentDepth(),
+		workspace:   ws,
+		timeout:     120 * time.Second, // Default 120s for overall timeout
+		execTimeout: 120 * time.Second, // Default 120s for individual commands (LLM can override)
 	}
 }
 
 // Name returns the tool name.
 func (t *BashTool) Name() string {
 	return "bash"
-}
-
-const (
-	// shellAssignment matches an environment assignment at the beginning of a
-	// shell command, including quoted values that may contain whitespace.
-	shellAssignment = `(?:[[:alpha:]_][[:alnum:]_]*=(?:"[^"]*"|'[^']*'|[^;&|()[:space:]]*)[[:space:]]+)*`
-	// envLauncher accepts env options, their arguments, and NAME=value
-	// assignments, but not an arbitrary command word such as `echo`.
-	envLauncher = `env(?:(?:[[:space:]]+(?:--|-[[:alnum:]][[:alnum:]-]*|--[[:alnum:]-]+)(?:[[:space:]]+[[:alpha:]_][[:alnum:]_]*)?)|(?:[[:space:]]+[[:alpha:]_][[:alnum:]_]*=(?:"[^"]*"|'[^']*'|[^;&|()[:space:]]*)))*[[:space:]]+`
-	// shellLauncher matches commands commonly used to wrap an executable while
-	// preserving the command boundary. Options are allowed, but positional
-	// arguments are not, so `nohup echo ai serve` is not misclassified.
-	shellLauncher = `(?:(?:` + envLauncher + `|(?:command|nohup|setsid)(?:[[:space:]]+(?:--|--[[:alnum:]-]+|-[[:alnum:]][[:alnum:]-]*))*[[:space:]]+))*`
-	agentCommand  = `(?:[[:alnum:]_./-]+/)?ai[[:space:]]+(?:run|serve|rpc|acp)(?:[[:space:]]|$)`
-)
-
-var (
-	agentLaunchPattern = regexp.MustCompile(`(?:^|[;&|()\n][[:space:]]*)` + shellAssignment + shellLauncher + agentCommand)
-	// Commands passed as strings to tmux or a shell wrapper are commonly
-	// quoted. Restrict this to known string-executing wrappers at a command
-	// boundary so ordinary commands such as `echo 'ai serve'` are not blocked.
-	quotedAgentLaunchPattern = regexp.MustCompile(`(?:^|[;&|()\n][[:space:]]*)(?:tmux|(?:[[:alnum:]_./-]+/)?(?:sh|bash|zsh|dash|fish))[^;&|()\n]*["'][[:space:]]*` + shellAssignment + shellLauncher + agentCommand)
-)
-
-func (t *BashTool) isSubagentLaunch(command string) bool {
-	return t.subagentDepth > 0 && (agentLaunchPattern.MatchString(command) || quotedAgentLaunchPattern.MatchString(command))
-}
-
-func processSubagentDepth() int {
-	value, ok := os.LookupEnv("AI_SUBAGENT_DEPTH")
-	if !ok {
-		return 0
-	}
-	depth, err := strconv.Atoi(value)
-	if err != nil || depth < 0 {
-		return 1
-	}
-	return depth
 }
 
 // Description returns the tool description.
@@ -144,19 +104,6 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil, fmt.Errorf("invalid command argument: command cannot be empty")
-	}
-
-	// Block commands that would create another ai agent from a subagent. The
-	// process-local depth remains effective even if the shell command tries to
-	// unset the inherited environment marker.
-
-	if t.isSubagentLaunch(command) {
-		return []agentctx.ContentBlock{
-			agentctx.TextContent{
-				Type: "text",
-				Text: "⛔ Blocked: subagents cannot launch another ai agent.",
-			},
-		}, nil
 	}
 
 	// Block dangerous tmux commands that can destroy the entire tmux server.
