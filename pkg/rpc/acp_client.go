@@ -107,11 +107,15 @@ func (c *ACPClient) Close() error {
 
 // Initialize performs the ACP handshake.
 func (c *ACPClient) Initialize() error {
+	return c.initializeWithTimeout(acpHandshakeTimeout)
+}
+
+func (c *ACPClient) initializeWithTimeout(timeout time.Duration) error {
 	var raw json.RawMessage
-	if err := c.request("initialize", map[string]any{
+	if err := c.requestWithTimeout("initialize", map[string]any{
 		"protocolVersion":    acpProtocolVersion,
 		"clientCapabilities": map[string]any{},
-	}, &raw); err != nil {
+	}, &raw, timeout); err != nil {
 		return err
 	}
 	return nil
@@ -196,6 +200,8 @@ func DialACP(sockPath string) (*ACPClient, string, error) {
 	return c, sid, nil
 }
 
+const acpHandshakeTimeout = 5 * time.Second
+
 // --- internals ---
 
 type acpClientResponse struct {
@@ -208,6 +214,10 @@ type acpClientResponse struct {
 
 // request sends a request and blocks until the response arrives.
 func (c *ACPClient) request(method string, params any, result *json.RawMessage) error {
+	return c.requestWithTimeout(method, params, result, 0)
+}
+
+func (c *ACPClient) requestWithTimeout(method string, params any, result *json.RawMessage, timeout time.Duration) error {
 	id := atomic.AddInt64(&c.nextID, 1)
 
 	body, err := c.encodeRequest(id, method, params)
@@ -227,7 +237,22 @@ func (c *ACPClient) request(method string, params any, result *json.RawMessage) 
 		return err
 	}
 
-	raw, ok := <-ch
+	var raw json.RawMessage
+	var ok bool
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case raw, ok = <-ch:
+		case <-timer.C:
+			c.mu.Lock()
+			delete(c.pending, id)
+			c.mu.Unlock()
+			return fmt.Errorf("timed out waiting for %s response", method)
+		}
+	} else {
+		raw, ok = <-ch
+	}
 	if !ok {
 		return fmt.Errorf("connection closed while waiting for %s", method)
 	}

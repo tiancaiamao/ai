@@ -11,6 +11,27 @@ import (
 	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
+func TestACPClientInitializeTimesOut(t *testing.T) {
+	server, clientConn := net.Pipe()
+	defer server.Close()
+	client := NewACPClient(transport.NewNetConn(clientConn))
+	defer client.Close()
+
+	go func() {
+		serverConn := transport.NewNetConn(server)
+		_, _ = serverConn.ReadMessage()
+	}()
+
+	start := time.Now()
+	err := client.initializeWithTimeout(20 * time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out waiting for initialize response") {
+		t.Fatalf("initialize error = %v, want timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("initialize timeout took too long: %v", elapsed)
+	}
+}
+
 func TestACPClientLoadSessionSignalsReplayCompletionAfterUpdates(t *testing.T) {
 	input := bytes.NewBufferString(
 		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}` + "\n" +

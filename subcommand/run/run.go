@@ -239,9 +239,15 @@ func startServeApp(cfg serveConfig) *serveApp {
 	// In-process ACP server. Runs until the hub is closed (see Close) or it
 	// errors out.
 	go func() {
-		if err := rpc.RunACP(hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id); err != nil {
+		err := rpc.RunACP(hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id)
+		if err != nil {
 			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
 		}
+		// RunACP may fail before it starts consuming the hub (for example,
+		// during agent setup). Close the listener and all accepted clients so
+		// callers cannot observe a live socket with no ACP server behind it.
+		_ = hub.Close()
+		_ = socket.Close()
 		sp.finish(tui.StatusFailed)
 	}()
 
