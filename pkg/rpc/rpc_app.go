@@ -99,6 +99,10 @@ type rpcApp struct {
 	// Agent event sink supplied by the active protocol adapter.
 	emitEvent func(agent.AgentEvent)
 
+	// Protocol-specific event sink. This is used by handlers that emit events
+	// outside the agent loop (for example, detached manual compaction).
+	emitAgentEvent func(agent.AgentEvent)
+
 	// --- Mutable state protected by stateMu ---
 	stateMu               sync.Mutex
 	isStreaming           bool

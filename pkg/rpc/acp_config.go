@@ -144,7 +144,7 @@ func (s *acpServer) handleSetConfig(req acpRequest) {
 		return
 	}
 	// Single source of truth for switching: the same path /set_model uses
-	// (spec validation, compactor rebuild, config persistence).
+	// (spec validation, compactor rebuild, and runtime-only state update).
 	if _, err := s.app.handleModelSet(string(args)); err != nil {
 		s.sendError(req.ID, acpErrInvalidParams, fmt.Sprintf("set model %s/%s: %v", provider, modelID, err))
 		return
