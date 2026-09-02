@@ -3,6 +3,28 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## `config.json` Model Section Is a Reference into `models.json` (2026-09)
+
+**What changed**: At startup the model is now resolved via `config.ResolveModel`:
+when `config.json`'s `model.provider` + `model.id` match an entry in
+`models.json`, the spec is authoritative and the config's own `baseUrl`, `api`,
+`proxy`, and `maxTokens` are ignored (a warning is logged). Only models absent
+from `models.json` keep using their config-declared endpoint fields (custom
+endpoints). Previously `ApplyModelLimitsFromSpec` only filled zero-valued
+fields, so a stale `baseUrl`/`api` in `config.json` silently overrode the
+matching `models.json` entry.
+
+**Why**: The same model had two sources of truth with the non-obvious one
+(config.json) winning. This caused a real outage: a hand-edited `config.json`
+left `glm-5.3-flash` (provider `zai`) pointing at the ChatGPT codex backend
+with `api: openai-codex-responses`, and the Z.AI API key was sent as a Bearer
+token to a server that could not parse it — every request failed with
+`401: Could not parse your authentication token`, classified as non-retryable.
+With reference semantics the mixed state is structurally impossible: a
+reference adopts the full definition, or an unmatched model declares its own
+complete one. This also aligns the startup path with the runtime model-switch
+handler and `--model` override, which already copied the full spec.
+
 ## ACP-Only Public Control Surface (2026-08)
 
 **What changed**: Retired the public `ai rpc` command and its flat command/event

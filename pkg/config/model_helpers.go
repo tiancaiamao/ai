@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -89,16 +90,71 @@ func FindModelSpec(specs []ModelSpec, provider, modelID string) (ModelSpec, bool
 	return ModelSpec{}, false
 }
 
-// ResolveActiveModelSpec finds the matching spec from models.json, falling back to config.
-func ResolveActiveModelSpec(cfg *Config) (ModelSpec, error) {
+// ResolveActiveModelSpec finds the matching spec from models.json, falling
+// back to config. The second return value reports whether a models.json
+// entry matched cfg.Model; when false (or err != nil) the returned spec was
+// built from cfg.Model itself.
+func ResolveActiveModelSpec(cfg *Config) (ModelSpec, bool, error) {
 	specs, modelsPath, err := LoadModelSpecsFromConfig(cfg)
 	if err != nil {
-		return ModelSpecFromConfig(cfg), fmt.Errorf("load models from %s: %w", modelsPath, err)
+		return ModelSpecFromConfig(cfg), false, fmt.Errorf("load models from %s: %w", modelsPath, err)
 	}
 	if spec, ok := FindModelSpec(specs, cfg.Model.Provider, cfg.Model.ID); ok {
-		return spec, nil
+		return spec, true, nil
 	}
-	return ModelSpecFromConfig(cfg), nil
+	return ModelSpecFromConfig(cfg), false, nil
+}
+
+// ResolveModel resolves the LLM model for a run together with its active
+// spec.
+//
+// config.json references a model by provider+ID; models.json owns the model
+// facts (baseUrl, api, proxy, maxTokens, context window, ...). When the
+// referenced provider+ID matches a models.json entry, the spec is
+// authoritative: stale endpoint fields in config.json are ignored (a warning
+// is logged). Only when no entry matches do config.json's own endpoint
+// fields apply, which supports custom endpoints not registered in
+// models.json.
+func ResolveModel(cfg *Config) (llm.Model, ModelSpec, error) {
+	spec, matched, err := ResolveActiveModelSpec(cfg)
+	model := cfg.GetLLMModel()
+	if err != nil {
+		return model, spec, err
+	}
+	if matched {
+		model = applySpecEndpoints(model, cfg.Model, spec)
+	}
+	return ApplyModelLimitsFromSpec(model, spec), spec, nil
+}
+
+// applySpecEndpoints overwrites the model's endpoint fields with the spec's
+// values. Empty spec fields fall back to the config value so sparse
+// models.json entries (e.g. api omitted at both provider and model level)
+// keep working.
+func applySpecEndpoints(model llm.Model, mc ModelConfig, spec ModelSpec) llm.Model {
+	ignore := func(field, cfgVal string, specVal string) {
+		if cfgVal != "" && cfgVal != specVal {
+			slog.Warn("config.json model field ignored: models.json entry is authoritative",
+				"field", field, "config", cfgVal, "spec", specVal)
+		}
+	}
+	if spec.BaseURL != "" {
+		ignore("baseUrl", mc.BaseURL, spec.BaseURL)
+		model.BaseURL = spec.BaseURL
+	}
+	if spec.API != "" {
+		ignore("api", mc.API, spec.API)
+		model.API = spec.API
+	}
+	if spec.Proxy != "" {
+		ignore("proxy", mc.Proxy, spec.Proxy)
+		model.Proxy = spec.Proxy
+	}
+	if spec.MaxTokens > 0 {
+		ignore("maxTokens", strconv.Itoa(mc.MaxTokens), strconv.Itoa(spec.MaxTokens))
+		model.MaxTokens = spec.MaxTokens
+	}
+	return model
 }
 
 // ApplyModelLimitsFromSpec fills in zero-valued model fields from the spec,
