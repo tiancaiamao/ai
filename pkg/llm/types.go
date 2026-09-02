@@ -9,11 +9,12 @@ import (
 
 // Model represents an LLM model configuration.
 type Model struct {
-	ID             string `json:"id"`            // e.g., "gpt-4", "gpt-3.5-turbo"
-	Provider       string `json:"provider"`      // e.g., "zai", "openai"
-	BaseURL        string `json:"baseUrl"`       // e.g., "https://api.openai.com/v1"
-	API            string `json:"api"`           // e.g., "openai-completions"
-	ContextWindow  int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
+	ID             string `json:"id"`              // e.g., "gpt-4", "gpt-3.5-turbo"
+	Provider       string `json:"provider"`        // e.g., "zai", "openai"
+	BaseURL        string `json:"baseUrl"`         // e.g., "https://api.openai.com/v1"
+	API            string `json:"api"`             // e.g., "openai-completions"
+	Proxy          string `json:"proxy,omitempty"` // Optional model request proxy
+	ContextWindow  int    `json:"contextWindow"`   // e.g., 128000, 0 means unknown
 	MaxTokens      int    `json:"maxTokens,omitempty"`
 	Reasoning      bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
 	SupportsVision bool   `json:"-"`                   // model supports image input (from models.json "input")
@@ -22,6 +23,10 @@ type Model struct {
 	// means no restriction; requested levels outside the list are clamped to
 	// the nearest supported value.
 	ReasoningEfforts []string `json:"-"`
+	// ReasoningContext, when set, is sent as reasoning.context on every
+	// request (from models.json "reasoningContext", e.g. "all_turns"). Some
+	// gateways (e.g. Codex Responses Lite) reject requests without it.
+	ReasoningContext string `json:"-"`
 }
 
 // LLMContext represents the context for an LLM request.

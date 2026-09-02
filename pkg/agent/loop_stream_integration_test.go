@@ -103,6 +103,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 		ContextWindow:  128000,
 		GetWorkingDir:  func() string { return "/tmp/worktree-a" },
 		GetStartupPath: func() string { return "/tmp/project-root" },
+		Role:           "reviewer",
 	}
 
 	stream := newTestAgentEventStream()
@@ -142,6 +143,9 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 					}
 					if !strings.Contains(runtimeContent, `startup_path: "/tmp/project-root"`) {
 						t.Fatalf("expected runtime_state to include startup_path, got: %q", runtimeContent)
+					}
+					if !strings.Contains(runtimeContent, `role: "reviewer"`) {
+						t.Fatalf("expected runtime_state to include role, got: %q", runtimeContent)
 					}
 				}
 			}
@@ -421,5 +425,127 @@ func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *t
 	}
 	if !strings.Contains(toolMsg, "Please resend the SAME tool call with COMPLETE arguments") {
 		t.Fatalf("expected clear retry guidance for LLM, got: %s", toolMsg)
+	}
+}
+
+func TestStreamAssistantResponse_ContextCanceledMidStreamSalvagesPartial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"现在是 \"}}]}\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"16:11\"}}]}\n\n")
+		flusher.Flush()
+		// Stay open until the client context is canceled, then exit.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("what time is it"))
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey: "test-key",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := newTestAgentEventStream()
+
+	done := make(chan *agentctx.AgentMessage, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		msg, err := streamAssistantResponse(ctx, agentCtx, config, stream)
+		errCh <- err
+		done <- msg
+	}()
+
+	// Give the stream time to receive both deltas, then cancel mid-stream.
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	var msg *agentctx.AgentMessage
+	select {
+	case msg = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("streamAssistantResponse did not return after context cancel")
+	}
+	streamErr := <-errCh
+	if streamErr != nil {
+		t.Fatalf("expected salvaged partial message, got error: %v", streamErr)
+	}
+	if msg == nil {
+		t.Fatal("expected non-nil salvaged message")
+	}
+	if got := msg.ExtractText(); got != "现在是 16:11" {
+		t.Fatalf("expected partial text '现在是 16:11', got %q", got)
+	}
+	if msg.StopReason != "aborted" {
+		t.Fatalf("expected StopReason=aborted, got %q", msg.StopReason)
+	}
+
+	// message_end event must have been pushed so the rpc layer persists it.
+	endSeen := false
+	it := stream.Iterator(context.Background())
+drain:
+	for {
+		select {
+		case res, ok := <-it:
+			if !ok || res.Done {
+				break drain
+			}
+			if res.Value.Type == EventMessageEnd && res.Value.Message != nil && res.Value.Message.StopReason == "aborted" {
+				endSeen = true
+			}
+		case <-time.After(200 * time.Millisecond):
+			break drain
+		}
+	}
+	if !endSeen {
+		t.Fatal("expected message_end event for salvaged aborted message")
+	}
+}
+
+func TestStreamAssistantResponse_TruncationWithoutCancelNotAborted(t *testing.T) {
+	// Clean EOF without a finish_reason is synthesized as StopReason "stop"
+	// by the LLM client. Without a context cancel this must NOT be treated
+	// as an abort.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hi"))
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey: "test-key",
+	}
+
+	stream := newTestAgentEventStream()
+	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("streamAssistantResponse returned error: %v", err)
+	}
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.StopReason == "aborted" {
+		t.Fatal("expected non-aborted stop reason for clean EOF without cancel, got aborted")
+	}
+	if got := msg.ExtractText(); got != "partial" {
+		t.Fatalf("expected text 'partial', got %q", got)
 	}
 }

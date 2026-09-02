@@ -51,7 +51,7 @@ func (t *BashTool) Name() string {
 func (t *BashTool) Description() string {
 	return `Execute bash commands in the current working directory.
 
-Best for quick commands (<2 minutes). For long-running tasks (builds, large test suites, servers), use the /tmux skill instead.
+Best for quick commands (<2 minutes). For long-running tasks (builds, large tests, servers), use the /tmux skill instead.
 
 Timeout behavior:
   • Default: 120 seconds
@@ -107,6 +107,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	// Block dangerous tmux commands that can destroy the entire tmux server.
+
 	// The agent itself runs inside tmux, so kill-server kills the agent too.
 	if isDangerousTmuxKill(command) {
 		return []agentctx.ContentBlock{

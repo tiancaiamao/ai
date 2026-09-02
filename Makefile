@@ -37,14 +37,14 @@ clean:
 coverage: test
 	go tool cover -html=coverage.out -o coverage.html
 
-# Check that pkg/ coverage meets the 80% threshold.
+# Check that pkg/ coverage meets the 82% threshold.
 # Used by CI to gate merges on coverage regressions.
 # Run `make test` first to generate coverage.out.
-COVERAGE_THRESHOLD := 80
+COVERAGE_THRESHOLD := 82
 coverage-check:
 	@test -f coverage.out || { echo "ERROR: coverage.out not found. Run 'make test' first."; exit 1; }
 	@head -1 coverage.out > /tmp/pkg-cov.out
-				@grep '/pkg/' coverage.out | grep -v '/pkg/rpc/' >> /tmp/pkg-cov.out
+	@grep '/pkg/' coverage.out | grep -v '/pkg/app/' >> /tmp/pkg-cov.out
 	@pct=$$(go tool cover -func=/tmp/pkg-cov.out | tail -1 | awk '{print $$NF}' | tr -d '%'); \
 	rm -f /tmp/pkg-cov.out; \
 	echo "pkg/ coverage: $$pct% (threshold: $(COVERAGE_THRESHOLD)%)"; \

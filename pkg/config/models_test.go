@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
 func TestLoadModelSpecs(t *testing.T) {
@@ -49,6 +51,57 @@ func TestLoadModelSpecs(t *testing.T) {
 	}
 	if !spec.Reasoning {
 		t.Errorf("reasoning = false, want true")
+	}
+}
+
+func TestLoadModelSpecsReasoningContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "any-gateway": {
+      "models": [
+        { "id": "gpt-5.6-luna", "reasoningContext": "all_turns" },
+        { "id": "plain" }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs error: %v", err)
+	}
+	byID := map[string]ModelSpec{}
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+	if got := byID["gpt-5.6-luna"].ReasoningContext; got != "all_turns" {
+		t.Errorf("ReasoningContext = %q, want all_turns", got)
+	}
+	if got := byID["plain"].ReasoningContext; got != "" {
+		t.Errorf("ReasoningContext = %q, want empty", got)
+	}
+}
+
+func TestApplyModelLimitsFromSpec_ReasoningContext(t *testing.T) {
+	got := ApplyModelLimitsFromSpec(
+		llm.Model{ID: "gpt-5.6-luna", Provider: "whatever"},
+		ModelSpec{ReasoningContext: "all_turns"},
+	)
+	if got.ReasoningContext != "all_turns" {
+		t.Errorf("ReasoningContext = %q, want all_turns", got.ReasoningContext)
+	}
+	// Explicit model value wins over the spec.
+	got = ApplyModelLimitsFromSpec(
+		llm.Model{ReasoningContext: "current_turn"},
+		ModelSpec{ReasoningContext: "all_turns"},
+	)
+	if got.ReasoningContext != "current_turn" {
+		t.Errorf("ReasoningContext = %q, want current_turn (model value must win)", got.ReasoningContext)
 	}
 }
 
@@ -126,6 +179,40 @@ func TestLoadModelSpecsOverrides(t *testing.T) {
 	}
 	if spec.API != "anthropic-messages" {
 		t.Errorf("api = %q, want %q", spec.API, "anthropic-messages")
+	}
+}
+
+func TestLoadModelSpecsInheritsProviderProxy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "openai-codex": {
+      "proxy": "socks5://127.0.0.1:1180",
+      "models": [
+        { "id": "gpt-5.6-luna" },
+        { "id": "gpt-5.6-sol" }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs: %v", err)
+	}
+	byID := map[string]ModelSpec{}
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+	if got := byID["gpt-5.6-luna"].Proxy; got != "socks5://127.0.0.1:1180" {
+		t.Errorf("provider proxy = %q", got)
+	}
+	if got := byID["gpt-5.6-sol"].Proxy; got != "socks5://127.0.0.1:1180" {
+		t.Errorf("second model proxy = %q", got)
 	}
 }
 

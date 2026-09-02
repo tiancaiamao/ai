@@ -1,231 +1,105 @@
-# RPC Protocol Reference
+# ACP Protocol Reference
 
-The `ai` agent communicates via a newline-delimited JSON protocol over stdin/stdout. This is the primary interface for TUI clients, editor plugins, and external tools.
+The `ai` agent exposes the [Agent Client Protocol](https://agentclientprotocol.com/) as its only public programmatic protocol. ACP uses JSON-RPC 2.0 messages framed as newline-delimited JSON (NDJSON).
 
-## Transport
+## Transports
 
-- **Input**: stdin (client → agent)
-- **Output**: stdout (agent → client)
-- **Encoding**: One JSON object per line (NDJSON)
-- **Framing**: Newline (`\n`) delimited
-- **Direction**: Bidirectional, asynchronous
+The same ACP protocol is available over two transports:
 
-When running via `ai rpc`, the agent reads commands from stdin and writes responses/events to stdout. When running via `ai serve`, the same protocol is available over a Unix domain socket at `~/.ai/runs/<id>/control.sock`.
+- **stdio**: `ai acp` reads from stdin and writes to stdout. This is intended for editor and external ACP clients.
+- **Unix socket**: `ai serve` listens at `~/.ai/runs/<id>/control.sock`. `ai run`, `ai watch`, and `ai send` connect to this socket as ACP clients.
 
-## Message Types
+Transport framing is one JSON-RPC message per line. ACP message handling lives
+in `pkg/protocol`, application lifecycle and runtime capabilities live in
+`pkg/app`, and transport implementations live in `pkg/transport`.
 
-### Commands (Client → Agent)
 
-Every command has an `id` field for correlation with responses.
+## Methods
 
-```json
-{
-  "id": "cmd-001",
-  "type": "<command-type>",
-  "message": "optional text body",
-  "data": {}
-}
-```
+The implemented ACP surface is intentionally minimal:
 
-#### Command Types
+| Method | Direction | Description |
+|---|---|---|
+| `initialize` | request | Negotiate ACP protocol version and capabilities. |
+| `session/new` | request | Establish the process's active session and advertise slash commands. |
+| `session/load` | request | Load a persisted session and replay its history as `session/update` notifications. |
+| `session/prompt` | request | Submit a text prompt and wait for its `stopReason`. |
+| `session/cancel` | notification | Cancel the active turn. |
+| `session/set_config_option` | request | Switch the active model; aliases are also accepted. |
+| `session/update` | notification | Server-to-client stream of session updates. |
 
-The actual protocol commands registered by the RPC server (`pkg/rpc`):
+Unsupported ACP methods, including `fs/*`, `terminal/*`, and MCP transports, return JSON-RPC method-not-found. `mcpServers` in `session/new` is accepted and ignored.
 
-| Type | Constant | Description | Data Field |
-|------|----------|-------------|------------|
-| `prompt` | `CommandPrompt` | Send a user message | `PromptRequest` |
-
-> **Note:** All other operations (state queries, settings, session management, model switching, etc.) are handled as **slash commands** sent through the `prompt` channel (e.g., `/model gpt-4`, `/compact`, `/help`). See `pkg/command` for the slash command registry.
-
-#### PromptRequest
+## Session prompt
 
 ```json
 {
-  "id": "cmd-001",
-  "type": "prompt",
-  "data": {
-    "message": "Fix the bug in auth.go",
-    "streamingBehavior": "full",
-    "images": [
-      {"type": "image", "data": "<base64-encoded>"}
-    ]
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "session/prompt",
+  "params": {
+    "sessionId": "session-id",
+    "prompt": [{"type": "text", "text": "Fix the bug in auth.go"}]
   }
 }
 ```
 
-- `message` (required): The user's text prompt
-- `streamingBehavior`: Controls streaming granularity (`"full"`, `"minimal"`)
-- `images`: Optional base64-encoded images for multimodal models
-
-### Responses (Agent → Client)
-
-Responses correlate to a specific command via the `id` field.
+The response contains a stop reason, for example:
 
 ```json
-{
-  "id": "cmd-001",
-  "type": "response",
-  "command": "prompt",
-  "success": true,
-  "data": {},
-  "error": ""
-}
+{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}
 ```
 
-| Field | Description |
-|-------|-------------|
-| `id` | Matches the command `id` |
-| `type` | Always `"response"` |
-| `command` | The original command type |
-| `success` | `true` if the command succeeded |
-| `data` | Response payload (structure depends on command) |
-| `error` | Error message if `success` is `false` |
+The supported stop reasons are `end_turn` and `cancelled`.
 
-### Events (Agent → Client)
+## Session updates
 
-Events are unsolicited messages emitted during processing. They have no `id` field.
+Updates are JSON-RPC notifications with this envelope:
 
 ```json
 {
-  "type": "agent_event",
-  "data": {
-    "type": "text_delta",
-    "eventAt": 1705312345678901234,
-    "message": {
-      "role": "assistant",
-      "content": [{"type": "text", "text": "Hello"}]
-    }
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "session-id",
+    "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Hello"}}
   }
 }
 ```
 
-#### Event Envelope Types
+Standard update values currently emitted include:
 
-Events are emitted via `server.EmitEvent()` as plain JSON objects. The `type` field discriminates the event kind:
+| `sessionUpdate` | Description |
+|---|---|
+| `user_message_chunk` | User prompt or replayed user message. |
+| `agent_message_chunk` | Streaming assistant text. |
+| `agent_thought_chunk` | Streaming assistant reasoning text. |
+| `tool_call` | Tool execution started. |
+| `tool_call_update` | Tool execution completed or failed. |
+| `available_commands_update` | Available slash commands. |
+| `config_option_update` | Updated model/configuration catalog. |
+| `usage_update` | Context token usage. |
 
-| Type | Source | Description |
-|------|--------|-------------|
-| `server_start` | `rpc_app.go` | Agent initialized with model and tool list |
-| `session_switch` | `rpc_session_handlers.go` | Active session changed |
-| Agent event types | `pkg/agent/event.go` | All agent lifecycle/stream events (see below) |
+The implementation also emits `_`-prefixed extensions for diagnostics:
+`_compaction`, `_error`, `_llm_retry`, `_loop_guard`, `_tool_call_recovery`,
+and `_turn_end`. Extension payloads are carried in `_meta`; standard ACP
+clients may ignore them.
 
-Agent events are emitted directly (not nested under an envelope). Each has a `type` discriminator from `pkg/agent/event.go`:
+### Custom update payloads
 
-| Event Type | Constant | Description |
-|------------|----------|-------------|
-| `agent_start` | `EventAgentStart` | Agent run started |
-| `agent_end` | `EventAgentEnd` | Agent run completed |
-| `turn_start` | `EventTurnStart` | New LLM turn begins |
-| `turn_end` | `EventTurnEnd` | LLM turn completed |
-| `message_start` | `EventMessageStart` | Message construction begins |
-| `message_end` | `EventMessageEnd` | Message construction completed |
-| `message_update` | `EventMessageUpdate` | Full message snapshot |
-| `text_delta` | `EventTextDelta` | Streaming text chunk |
-| `thinking_delta` | `EventThinkingDelta` | Reasoning/thinking content chunk |
-| `tool_call_delta` | `EventToolCallDelta` | Partial tool call (name + arguments) |
-| `tool_execution_start` | `EventToolExecutionStart` | Tool execution begins |
-| `tool_execution_end` | `EventToolExecutionEnd` | Tool execution completed |
-| `compaction_start` | `EventCompactionStart` | Context compaction started |
-| `compaction_end` | `EventCompactionEnd` | Context compaction completed |
-| `loop_guard_triggered` | `EventLoopGuardTriggered` | Tool-loop protection activated |
-| `tool_call_recovery` | `EventToolCallRecovery` | Malformed tool call auto-recovered |
-| `error` | `EventError` | Error during processing |
-| `llm_retry` | `EventLLMRetry` | LLM API call retry |
+The five diagnostic updates carry the corresponding agent event data in
+`_meta`. `_compaction` additionally includes `status` (`start` or `end`).
+`_turn_end` carries the completed turn metadata used by local clients to know
+when a live prompt has finished.
 
-#### Tool Execution Events
+## Session recovery
 
-```json
-{
-  "type": "tool_execution_start",
-  "eventAt": 1705312345678901234,
-  "toolCallId": "call_abc123",
-  "toolName": "bash",
-  "args": {"command": "ls -la"}
-}
-```
+`session/load` uses the ACP session ID as the persisted session ID, restores the session, and replays its history before returning. This supports attaching to a running agent and recovering after a serve process restart without a separate attach protocol.
 
-```json
-{
-  "type": "tool_execution_end",
-  "eventAt": 1705312345678901234,
-  "toolCallId": "call_abc123",
-  "toolName": "bash",
-  "result": {
-    "role": "tool",
-    "content": [{"type": "text", "text": "file1.txt\nfile2.txt"}]
-  },
-  "isError": false
-}
-```
+## Slash commands
 
-## Workflow State
+Operational commands such as `/model`, `/compact`, `/help`, `/resume`, and `/fork` are sent as text through `session/prompt`. See `pkg/command` for the registry.
 
-> **Note:** The `WorkflowState` and `WorkflowTask` types are defined in `pkg/rpc/types.go`. They were used by a workflow engine that has been removed from the codebase. The types remain in the RPC schema for backward compatibility but are no longer actively used.
+## Error handling
 
-### Workflow Phases
-
-| Phase | Description |
-|-------|-------------|
-| `init` | Workflow initialized, tasks loaded |
-| `worker` | Tasks being executed |
-| `completed` | All tasks done |
-| `error` | Workflow failed |
-
-### Task States
-
-| State | Description |
-|-------|-------------|
-| `pending` | Not yet started |
-| `in_progress` | Currently executing |
-| `done` | Completed successfully |
-| `failed` | Execution failed |
-
-## Typical Session Flow
-
-```
-Client                              Agent
-  │                                   │
-  │─── prompt ──────────────────────→ │
-  │←── response {success: true} ─────│
-  │←── agent_event {agent_start} ────│
-  │←── agent_event {turn_start} ─────│
-  │←── agent_event {text_delta} ─────│
-  │←── agent_event {text_delta} ─────│
-  │←── agent_event {tool_call_delta} │
-  │←── agent_event {tool_execution_start} ─│
-  │←── agent_event {tool_execution_end} ───│
-  │←── agent_event {turn_end} ───────│
-  │←── agent_event {turn_start} ─────│
-  │←── agent_event {text_delta} ─────│
-  │←── agent_event {turn_end} ───────│
-  │←── agent_event {agent_end} ──────│
-  │                                   │
-  │─── abort ───────────────────────→ │  (optional, cancels mid-stream)
-  │←── response {success: true} ─────│
-```
-
-## Unix Domain Socket Protocol
-
-When using `ai serve` + `ai watch`, the socket server uses a similar JSON protocol:
-
-```json
-{"type": "send", "message": "Fix the bug"}
-{"type": "abort"}
-{"type": "stream", "from_seq": 0}
-{"type": "status"}
-```
-
-Response:
-
-```json
-{"ok": true, "data": {}}
-```
-
-The `stream` command establishes a long-lived connection that replays events from `from_seq` and then streams new events in real-time.
-
-## Error Handling
-
-- Commands that fail return `{"success": false, "error": "description"}`
-- Unknown command types receive an error response
-- Event stream errors are emitted as `agent_event` with type `error`
-- LLM errors trigger retry events (`llm_retry`) before final failure
+Errors use standard JSON-RPC error responses. Streaming failures and diagnostics are exposed through the `_error` ACP session update.

@@ -41,8 +41,11 @@ type LoopConfig struct {
 	// GetSessionDir returns the session directory for checkpoint management.
 	GetSessionDir func() string
 	// RunID is the run ID assigned by the parent ai serve process.
-	// Empty when running standalone (ai --mode rpc without ai serve).
-	RunID      string
+	// Empty when running standalone (ai acp without ai serve).
+	RunID string
+	// Role is the agent role selected at startup (for example, reviewer).
+	// Empty when running with the embedded default role.
+	Role       string
 	Executor   ToolExecutor // agentctx.Tool executor with concurrency control
 	ToolOutput ToolOutputLimits
 	Compactor  agentctx.Compactor // Context compression

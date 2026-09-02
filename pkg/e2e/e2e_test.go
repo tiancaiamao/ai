@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tiancaiamao/ai/pkg/protocol"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 // --- Instrumented build + coverage plumbing (TestMain) ---
@@ -99,20 +101,89 @@ func reportCoverage(tmp string) {
 	if len(lines) >= 2 {
 		total = lines[len(lines)-2]
 	}
-	fmt.Fprintf(os.Stderr, "\n=== E2E coverage (whole app via `ai rpc` subprocess) ===\n%s\nprofile: %s\n", total, profile)
+	fmt.Fprintf(os.Stderr, "\n=== E2E coverage (whole app via `ai acp` subprocess) ===\n%s\nprofile: %s\n", total, profile)
 }
 
 // --- Black-box subprocess driver ---
 
-type rpcServer struct {
+type acpServer struct {
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
-	log       *logReader
-	stderrMu  sync.Mutex
+	client    *protocol.ACPClient
+	sessionID string
+	log       *acpLog
 	stderrBuf *syncBuffer
 	stop      chan struct{}
 	once      sync.Once
 }
+
+type acpLog struct {
+	client  *protocol.ACPClient
+	mu      sync.Mutex
+	history []protocol.ACPUpdate
+	done    chan struct{}
+}
+
+func newACPLog(client *protocol.ACPClient) *acpLog {
+	l := &acpLog{client: client, done: make(chan struct{})}
+	go func() {
+		defer close(l.done)
+		for update := range client.Updates() {
+			l.mu.Lock()
+			l.history = append(l.history, update)
+			l.mu.Unlock()
+		}
+	}()
+	return l
+}
+
+func (l *acpLog) waitUpdate(t *testing.T, predicate func(protocol.ACPUpdate) bool, timeout time.Duration) protocol.ACPUpdate {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		for i, update := range l.history {
+			if predicate(update) {
+				l.history = append(l.history[:i], l.history[i+1:]...)
+				l.mu.Unlock()
+				return update
+			}
+		}
+		l.mu.Unlock()
+		select {
+		case <-l.done:
+			t.Fatalf("ACP stream closed while waiting for update")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	t.Fatalf("timed out waiting for ACP update")
+	return protocol.ACPUpdate{}
+}
+
+func (l *acpLog) waitEvent(typ, pick, want string, timeout time.Duration) string {
+	update := l.waitUpdate(nil, func(u protocol.ACPUpdate) bool {
+		if typ == "agent_end" {
+			return u.SessionUpdate == "_turn_end"
+		}
+		if typ == "compaction_end" {
+			meta, _ := u.Meta.(map[string]any)
+			status, _ := meta["status"].(string)
+			return u.SessionUpdate == "_compaction" && status == "end"
+		}
+		return u.SessionUpdate == typ
+	}, timeout)
+	data, _ := json.Marshal(update)
+	return string(data)
+}
+
+func (l *acpLog) History() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	data, _ := json.Marshal(l.history)
+	return string(data)
+}
+
+func (l *acpLog) DebugState() string { return "ACP update log" }
 
 type syncBuffer struct {
 	mu  sync.Mutex
@@ -131,25 +202,26 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// startRPCServer launches `ai rpc` as a subprocess with an isolated HOME.
-// workDir is the subprocess cwd ("" → fresh temp dir).
-func startRPCServer(t *testing.T, m e2eModel, workDir string, flags ...string) *rpcServer {
+// startACPServer launches `ai acp` as a subprocess with an isolated HOME.
+// The subprocess speaks ACP over stdio; the driver uses the same ACP client as
+// production callers.
+func startACPServer(t *testing.T, m e2eModel, workDir string, flags ...string) *acpServer {
 	t.Helper()
 	home := t.TempDir()
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatalf("write isolated models.json: %v", err)
 	}
-	return startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, flags...)
+	return startACPServerHome(t, home, m.provider+"/"+m.id, workDir, flags...)
 }
 
-// startRPCServerHome is like startRPCServer but lets the caller seed an
+// startACPServerHome is like startACPServer but lets the caller seed an
 // isolated HOME directory first (roles, agent.yaml, sessions, ...).
-func startRPCServerHome(t *testing.T, home, defaultPath, workDir string, flags ...string) *rpcServer {
+func startACPServerHome(t *testing.T, home, defaultPath, workDir string, flags ...string) *acpServer {
 	t.Helper()
 	if workDir == "" {
 		workDir = t.TempDir()
 	}
-	args := []string{"rpc"}
+	args := []string{"acp"}
 	args = append(args, flags...)
 	args = append(args, "-model", defaultPath)
 
@@ -164,42 +236,31 @@ func startRPCServerHome(t *testing.T, home, defaultPath, workDir string, flags .
 
 	stderrBuf := &syncBuffer{}
 	cmd.Stderr = stderrBuf
-
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
 	}
-	var stdout io.Reader
-	if v := os.Getenv("E2E_WIRE_LOG"); v != "" {
-		f, ferr := os.Create(v)
-		if ferr != nil {
-			t.Fatalf("wire log: %v", ferr)
-		}
-		t.Cleanup(func() { f.Close() })
-		stdout = io.TeeReader(mustStdout(cmd), f)
-	} else {
-		stdout = mustStdout(cmd)
-	}
+	stdout := mustStdout(cmd)
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start ai rpc: %v", err)
+		t.Fatalf("start ai acp: %v", err)
 	}
 
-	rs := &rpcServer{
-		cmd:       cmd,
-		stdin:     stdin,
-		log:       newLogReader(stdout, t),
-		stderrBuf: stderrBuf,
-		stop:      make(chan struct{}),
+	client := protocol.NewACPClient(transport.NewStdio(stdout, stdin))
+	if err := client.Initialize(); err != nil {
+		t.Fatalf("ACP initialize: %v\nstderr:\n%s", err, stderrBuf.String())
+	}
+	sessionID, err := client.NewSession()
+	if err != nil {
+		client.Close()
+		t.Fatalf("ACP session/new: %v\nstderr:\n%s", err, stderrBuf.String())
+	}
+
+	rs := &acpServer{
+		cmd: cmd, stdin: stdin, client: client, sessionID: sessionID,
+		log: newACPLog(client), stderrBuf: stderrBuf, stop: make(chan struct{}),
 	}
 	go rs.run()
 	t.Cleanup(rs.kill)
-
-	if rs.log.waitEvent("server_start", "", "", 30*time.Second) == "" {
-		if rs.cmd.ProcessState != nil {
-			t.Fatalf("ai rpc exited early: %v\nstderr:\n%s", rs.cmd.ProcessState, stderrBuf.String())
-		}
-		t.Fatalf("no server_start event. stderr:\n%s", stderrBuf.String())
-	}
 	return rs
 }
 
@@ -212,294 +273,163 @@ func mustStdout(cmd *exec.Cmd) io.Reader {
 }
 
 // run reaps the subprocess and closes the stop channel.
-func (rs *rpcServer) run() {
+func (rs *acpServer) run() {
 	rs.cmd.Wait()
 	close(rs.stop)
 }
 
-// kill closes stdin (graceful EOF shutdown) and, if the process lingers,
-// force-kills it.
-func (rs *rpcServer) kill() {
+// kill closes the ACP client (graceful EOF shutdown) and, if the process
+// lingers, force-kills it.
+func (rs *acpServer) kill() {
 	rs.once.Do(func() {
-		rs.stdin.Close()
+		_ = rs.client.Close()
 		select {
 		case <-rs.stop:
 		case <-time.After(8 * time.Second):
-			rs.cmd.Process.Kill()
+			_ = rs.cmd.Process.Kill()
 			<-rs.stop
 		}
 	})
 }
 
-// logReader relays subprocess stdout lines to the test log and provides
-// line-based event waiting. It decouples the subprocess from the test so a
-// slow test assertion never blocks the subprocess.
-type logReader struct {
-	t       *testing.T
-	mu      sync.Mutex
-	buf     *bufio.Reader
-	pending []string
-	history []string
-	done    chan struct{}
-}
-
-func newLogReader(r io.Reader, t *testing.T) *logReader {
-	lr := &logReader{
-		t:    t,
-		buf:  bufio.NewReaderSize(r, 4*1024*1024),
-		done: make(chan struct{}),
-	}
-	go lr.run()
-	return lr
-}
-
-func (lr *logReader) run() {
-	for {
-		line, err := lr.buf.ReadString('\n')
-		if line != "" {
-			lr.mu.Lock()
-			lr.pending = append(lr.pending, line)
-			lr.history = append(lr.history, line)
-			lr.mu.Unlock()
-		}
-		if err != nil {
-			close(lr.done)
-			return
-		}
+func (rs *acpServer) promptAsync(t *testing.T, msg string) {
+	t.Helper()
+	if err := rs.client.PromptAsync(rs.sessionID, msg); err != nil {
+		t.Fatalf("prompt %q failed: %v", msg, err)
 	}
 }
 
-// waitEvent waits until a parsed JSON line has type == typ (typ "" matches any)
-// and, when pick != "", ev[pick] == want. It returns the matched line or "" on
-// timeout / EOF. Unmatched lines are preserved for later calls (an event can
-// share a drain batch with the line we match on, and discarding it would lose
-// the event forever).
-func (lr *logReader) waitEvent(typ, pick, want string, timeout time.Duration) string {
-	match := func(ev map[string]any) bool {
-		if typ != "" && ev["type"] != typ {
-			return false
-		}
-		if pick == "" {
-			return true
-		}
-		v, _ := ev[pick].(string)
-		return v == want
+func (rs *acpServer) waitUpdate(t *testing.T, kind string, timeout time.Duration) protocol.ACPUpdate {
+	t.Helper()
+	return rs.log.waitUpdate(t, func(update protocol.ACPUpdate) bool {
+		return kind == "" || update.SessionUpdate == kind
+	}, timeout)
+}
+
+func (rs *acpServer) waitRequestError(t *testing.T, method string, timeout time.Duration) protocol.ACPUpdateError {
+	t.Helper()
+	update := rs.log.waitUpdate(t, func(update protocol.ACPUpdate) bool {
+		return update.SessionUpdate == protocol.ACPUpdateRequestError
+	}, timeout)
+	errInfo, ok := update.Meta.(protocol.ACPUpdateError)
+	if !ok {
+		t.Fatalf("ACP request error has unexpected meta: %#v", update.Meta)
 	}
-	deadline := time.Now().Add(timeout)
-	for {
-		found, keep := lr.scan(match)
-		lr.putBack(keep)
-		if found != "" {
-			return found
-		}
-		if time.Now().After(deadline) || lr.closed() {
-			found, keep := lr.scan(match)
-			lr.putBack(keep)
-			if found != "" {
-				return found
-			}
-			return ""
-		}
-		select {
-		case <-time.After(50 * time.Millisecond):
-		case <-lr.done:
-		case <-lr.t.Context().Done():
-			return ""
-		}
+	if method != "" && errInfo.Method != method {
+		t.Fatalf("ACP request error method = %q, want %q", errInfo.Method, method)
 	}
+	return errInfo
 }
 
-// scan drains all pending lines, returning the first match and every
-// unmatched line (to be put back by the caller).
-func (lr *logReader) scan(match func(map[string]any) bool) (found string, keep []string) {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	lines := lr.pending
-	lr.pending = nil
-	for _, line := range lines {
-		if found == "" {
-			var ev map[string]any
-			if err := json.Unmarshal([]byte(line), &ev); err == nil && match(ev) {
-				found = line
-				continue
-			}
-		}
-		keep = append(keep, line)
+func updateMetaMap(t *testing.T, update protocol.ACPUpdate) map[string]any {
+	t.Helper()
+	meta, ok := update.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("ACP update %q has unexpected meta: %#v", update.SessionUpdate, update.Meta)
 	}
-	return found, keep
+	return meta
 }
 
-// putBack returns unmatched lines to the front of pending, preserving order
-// relative to any lines that arrived while they were drained.
-func (lr *logReader) putBack(lines []string) {
-	if len(lines) == 0 {
-		return
-	}
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	lr.pending = append(lines, lr.pending...)
-}
-
-// History returns every line the subprocess has emitted so far.
-func (lr *logReader) History() string {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	return strings.Join(lr.history, "\n")
-}
-
-// DebugState returns a diagnostic snapshot: whether the reader has seen EOF
-// and how many lines are still unconsumed in pending.
-func (lr *logReader) DebugState() string {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	return fmt.Sprintf("closed=%v pending=%d lastNWait=%d", lr.closedLocked(), len(lr.pending), len(lr.history))
-}
-
-func (lr *logReader) closedLocked() bool {
-	select {
-	case <-lr.done:
-		return true
-	default:
-		return false
-	}
-}
-
-func (lr *logReader) closed() bool {
-	select {
-	case <-lr.done:
-		return true
-	default:
-		return false
-	}
-}
-
-// send writes a raw line to the subprocess stdin.
-func (rs *rpcServer) send(t *testing.T, raw string) {
+// send writes a raw ACP message to the subprocess stdin. It is retained for
+// protocol-level tests; normal requests should use the typed ACP client.
+func (rs *acpServer) send(t *testing.T, raw string) {
 	t.Helper()
 	if _, err := fmt.Fprintf(rs.stdin, "%s\n", raw); err != nil {
 		t.Fatalf("write stdin: %v", err)
 	}
 }
 
-// rpcAck sends {"type":typ,"message":msg} and asserts the synchronous success
-// response. Returns the response data map when present.
-func (rs *rpcServer) rpcAck(t *testing.T, typ, msg string) map[string]any {
+func (rs *acpServer) command(t *testing.T, name, args string) map[string]any {
 	t.Helper()
-	rs.send(t, typedJSON(typ, msg))
-	resp := rs.log.waitEvent("response", "command", typ, 60*time.Second)
-	if resp == "" {
-		t.Fatalf("no response for type %q. stderr:\n%s", typ, rs.logTail())
+	text := "/" + name
+	if args != "" {
+		text += " " + args
 	}
-	var r struct {
-		Success bool            `json:"success"`
-		Error   string          `json:"error"`
-		Data    json.RawMessage `json:"data"`
+	raw, err := rs.client.PromptResult(rs.sessionID, text)
+	if err != nil {
+		t.Fatalf("command %q failed: %v", name, err)
 	}
-	if err := json.Unmarshal([]byte(resp), &r); err != nil {
-		t.Fatalf("parse response for %q: %v\n%s", typ, err, resp)
+	return commandResult(t, name, raw)
+}
+
+func commandResult(t *testing.T, name string, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var result struct {
+		Meta struct {
+			CommandResult json.RawMessage `json:"commandResult"`
+		} `json:"_meta"`
 	}
-	if !r.Success {
-		t.Fatalf("command %q failed: %s", typ, r.Error)
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("parse command %q result: %v", name, err)
 	}
-	if len(r.Data) > 0 {
-		var m map[string]any
-		if err := json.Unmarshal(r.Data, &m); err == nil {
-			return m
+	if len(result.Meta.CommandResult) == 0 || string(result.Meta.CommandResult) == "null" {
+		return nil
+	}
+	var data map[string]any
+	if err := json.Unmarshal(result.Meta.CommandResult, &data); err == nil {
+		return data
+	}
+	var text string
+	if err := json.Unmarshal(result.Meta.CommandResult, &text); err == nil {
+		if text == "" {
+			return nil
 		}
+		return map[string]any{"text": text}
 	}
+	t.Fatalf("parse command %q data: %s", name, result.Meta.CommandResult)
 	return nil
 }
 
-// rpcAckWithData sends a command and validates the response data using the provided validator.
-// Unlike rpcAck, this ensures the data field is actually checked.
-func (rs *rpcServer) rpcAckWithData(t *testing.T, typ, msg string, validate func(map[string]any)) {
+// commandAck sends a slash command through ACP and returns its result.
+func (rs *acpServer) commandAck(t *testing.T, typ, msg string) map[string]any {
 	t.Helper()
-	rs.send(t, typedJSON(typ, msg))
-	resp := rs.log.waitEvent("response", "command", typ, 60*time.Second)
-	if resp == "" {
-		t.Fatalf("no response for type %q. stderr:\n%s", typ, rs.logTail())
-	}
-	var r struct {
-		Success bool            `json:"success"`
-		Error   string          `json:"error"`
-		Data    json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(resp), &r); err != nil {
-		t.Fatalf("parse response for %q: %v\n%s", typ, err, resp)
-	}
-	if !r.Success {
-		t.Fatalf("command %q failed: %s", typ, r.Error)
-	}
-	if len(r.Data) == 0 {
-		t.Fatalf("command %q returned empty data field", typ)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(r.Data, &m); err != nil {
-		t.Fatalf("unmarshal data for %q: %v\n%s", typ, err, string(r.Data))
-	}
-	validate(m)
+	return rs.command(t, typ, msg)
 }
 
-// rpcErr sends {"type":typ,"message":msg} and asserts it fails with an error
-// containing wantErr.
-func (rs *rpcServer) rpcErr(t *testing.T, typ, msg, wantErr string) {
+func (rs *acpServer) commandWithData(t *testing.T, typ, msg string, validate func(map[string]any)) {
 	t.Helper()
-	rs.send(t, typedJSON(typ, msg))
-	resp := rs.log.waitEvent("response", "command", typ, 60*time.Second)
-	if resp == "" {
-		t.Fatalf("no response for type %q (expected error %q). stderr:\n%s", typ, wantErr, rs.logTail())
+	data := rs.command(t, typ, msg)
+	if data == nil {
+		t.Fatalf("command %q returned empty data", typ)
 	}
-	var r struct {
-		Success bool   `json:"success"`
-		Error   string `json:"error"`
+	validate(data)
+}
+
+func (rs *acpServer) commandErr(t *testing.T, typ, msg, wantErr string) {
+	t.Helper()
+	text := "/" + typ
+	if msg != "" {
+		text += " " + msg
 	}
-	if err := json.Unmarshal([]byte(resp), &r); err != nil {
-		t.Fatalf("parse response for %q: %v", typ, err)
-	}
-	if r.Success {
-		t.Fatalf("command %q unexpectedly succeeded (wanted error %q)", typ, wantErr)
-	}
-	if !strings.Contains(r.Error, wantErr) {
-		t.Fatalf("command %q error %q does not contain %q", typ, r.Error, wantErr)
+	if _, err := rs.client.PromptResult(rs.sessionID, text); err == nil || (wantErr != "" && !strings.Contains(err.Error(), wantErr)) {
+		t.Fatalf("command %q error %v does not contain %q", typ, err, wantErr)
 	}
 }
 
-// promptAndWait sends a user prompt and blocks until agent_end, returning the
-// assistant's final text.
-func (rs *rpcServer) promptAndWait(t *testing.T, msg string) string {
+// promptAndWait sends a user prompt and blocks until the turn completes,
+// returning the assistant's persisted final text. The ACP log is the sole
+// consumer of session/update notifications.
+func (rs *acpServer) promptAndWait(t *testing.T, msg string) string {
 	t.Helper()
-	rs.send(t, typedJSON("prompt", msg))
-	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs.logTail())
+	if err := rs.client.PromptAsync(rs.sessionID, msg); err != nil {
+		t.Fatalf("prompt %q failed: %v", msg, err)
 	}
-	if ev := rs.log.waitEvent("agent_end", "", "", 10*time.Minute); ev == "" {
-		t.Fatalf("no agent_end after prompt %q. stderr:\n%s", msg, rs.logTail())
-	} else {
-		t.Logf("agent_end: %s", ev)
-	}
+	rs.waitUpdate(t, "_turn_end", 10*time.Minute)
 	return rs.lastAssistantText(t)
 }
 
-func (rs *rpcServer) lastAssistantText(t *testing.T) string {
+func (rs *acpServer) lastAssistantText(t *testing.T) string {
 	t.Helper()
-	rs.send(t, `{"type":"get_last_assistant_text"}`)
-	resp := rs.log.waitEvent("response", "command", "get_last_assistant_text", 30*time.Second)
-	if resp == "" {
+	data := rs.command(t, "get_last_assistant_text", "")
+	if data == nil {
 		return ""
 	}
-	var r struct {
-		Data struct {
-			Text string `json:"text"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(resp), &r); err != nil {
-		return ""
-	}
-	return r.Data.Text
+	text, _ := data["text"].(string)
+	return text
 }
 
 // logTail returns the accumulated subprocess stderr.
-func (rs *rpcServer) logTail() string {
+func (rs *acpServer) logTail() string {
 	return rs.stderrBuf.String()
 }
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/auth"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -35,7 +36,7 @@ func StreamLLM(
 	}
 
 	// Route to OpenAI Responses API if requested
-	if model.API == "openai-responses" {
+	if model.API == "openai-responses" || model.API == "openai-codex-responses" {
 		return StreamOpenAIResponses(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
@@ -115,6 +116,18 @@ func StreamLLM(
 			reqBody[k] = v
 		}
 
+		// Some gateways (e.g. Codex Responses Lite) require reasoning.context
+		// on every request; the value is declared per-model in models.json
+		// ("reasoningContext"), not inferred from the provider name.
+		if model.ReasoningContext != "" {
+			reasoning, ok := reqBody["reasoning"].(map[string]any)
+			if !ok {
+				reasoning = make(map[string]any)
+				reqBody["reasoning"] = reasoning
+			}
+			reasoning["context"] = model.ReasoningContext
+		}
+
 		jsonBody, err := json.Marshal(reqBody)
 		if err != nil {
 			stream.Push(LLMErrorEvent{Error: err})
@@ -144,7 +157,11 @@ func StreamLLM(
 		// Execute request — derive total timeout from context deadline so the
 		// HTTP client enforces a hard ceiling even when SetReadDeadline is
 		// refreshed per-chunk (which can otherwise bypass the context deadline).
-		client := &http.Client{}
+		client, err := auth.NewHTTPClient(model.Proxy)
+		if err != nil {
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
+			return
+		}
 		if deadline, ok := ctx.Deadline(); ok {
 			remaining := time.Until(deadline)
 			if remaining > 0 {

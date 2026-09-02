@@ -528,34 +528,35 @@ PYEOF
         die "Planner input has unfilled template placeholders: $(grep -o '{{[A-Z_]*}}' "${ARTIFACTS_DIR}/planner-input.md" | sort -u | tr '\n' ' ')"
     fi
 
-            # 6. Call Planner Agent via ai rpc, pipe through filter
+    # 6. Call Planner Agent via ACP, pipe through filter
     echo "  [6/7] Calling planner agent..."
     local PLANNER_START
     PLANNER_START=$(date +%s)
 
-    # Build JSON-RPC input: read planner-input.md and wrap as prompt message
-    python3 -c "
-import json, sys
-prompt = open('${ARTIFACTS_DIR}/planner-input.md').read()
-rpc_msg = json.dumps({'type': 'prompt', 'message': prompt})
-print(rpc_msg)
-" | "${AI_BIN}" --mode rpc \
-        --agent-config "${AGENT_CONFIG}" \
+    # Build ACP JSON-RPC input and resolve the process session ID.
+    set +e
+    python3 "${PROJECT_ROOT}/scripts/planner_acp.py" \
+        --ai-bin "${AI_BIN}" \
         --system-prompt "@${PROJECT_ROOT}/docs/planner-system-prompt.md" \
+        --agent-config "${AGENT_CONFIG}" \
+        --prompt-file "${ARTIFACTS_DIR}/planner-input.md" \
         2>"${ARTIFACTS_DIR}/planner-stderr.log" \
-                | python3 "${PROJECT_ROOT}/scripts/planner_rpc_filter.py" \
+        | python3 "${PROJECT_ROOT}/scripts/planner_acp_filter.py" \
         --iteration "${ITER}" \
         --manifest "${MANIFEST}" \
         --summary-output "${ARTIFACTS_DIR}/planner-summary.md" \
         --result-output "${ARTIFACTS_DIR}/planner-result.json"
-
-        local PLANNER_EXIT=${PIPESTATUS[1]}
+    local PIPE_STATUS=("${PIPESTATUS[@]}")
+    set -e
+    local PLANNER_EXIT=${PIPE_STATUS[0]}
+    local FILTER_EXIT=${PIPE_STATUS[1]}
     local PLANNER_END
     PLANNER_END=$(date +%s)
 
-    if [[ $PLANNER_EXIT -ne 0 ]]; then
-        die "Planner agent exited with code ${PLANNER_EXIT} (see ${ARTIFACTS_DIR}/planner-stderr.log)"
+    if [[ $PLANNER_EXIT -ne 0 || $FILTER_EXIT -ne 0 ]]; then
+        die "Planner ACP pipeline failed (planner=${PLANNER_EXIT}, filter=${FILTER_EXIT}; see ${ARTIFACTS_DIR}/planner-stderr.log)"
     fi
+
     echo "  [6/7] Planner completed in $((PLANNER_END - PLANNER_START))s"
 
     # Fail-loud: planner must produce a result file

@@ -18,12 +18,20 @@ type Model struct {
     API           string       `json:"api"`                      // "openai-completions" or "anthropic-messages"
     ContextWindow int          `json:"contextWindow"`            // Token limit (0 = unknown)
     MaxTokens     int          `json:"maxTokens,omitempty"`
-        Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+            Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
     SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
+    ReasoningEfforts []string  `json:"-"`                        // Supported reasoning_effort values (from models.json "reasoningEfforts")
+    ReasoningContext string    `json:"-"`                        // reasoning.context value required by the gateway (from models.json "reasoningContext")
 }
 ```
 
 `SupportsVision` is a runtime-derived field, not part of the JSON model config. It comes from `ModelSpec.SupportsVision`, which is `true` when the model's `input` types in `models.json` include `"image"` or `"vision"` (mirroring the "vision" check on `Model.input`).
+
+`ReasoningContext` is a gateway capability declared per-model in `models.json`
+(`"reasoningContext": "all_turns"`). When set, it is sent as `reasoning.context`
+on every request (both Chat Completions and Responses paths). Gateways that
+wrap requests in Codex Responses Lite reject requests without it. It is never
+inferred from the provider name — renaming a provider must not change behavior.
 
 ### LLMContext
 
@@ -120,7 +128,15 @@ func StreamLLM(
 
 Routes to the correct provider based on `model.API`:
 - `"anthropic-messages"` → `StreamAnthropic()`
+- `"openai-codex-responses"` → `StreamCodex()`
+- `"openai-responses"` → `StreamOpenAIResponses()`
 - All others → OpenAI-compatible SSE streaming
+
+Each model request uses `Model.Proxy` when configured. Requests through the
+existing OpenAI Responses path retain its environment-based proxy fallback
+when `Model.Proxy` is empty; other paths use a direct connection when unset.
+The standalone `ai login-codex` OAuth flow has separate environment-based
+proxy handling.
 
 Returns an `EventStream` that emits `LLMEvent` values. The stream ends with either `LLMDoneEvent` (success) or `LLMErrorEvent` (failure).
 

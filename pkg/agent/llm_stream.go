@@ -354,17 +354,67 @@ func streamAssistantResponse(
 			if firstTokenLatency > 0 {
 				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
+			// Context canceled mid-stream (e.g. user steer/abort): salvage the
+			// partial response instead of dropping it.
+			if aborted := buildAbortedMessage(ctx, partialMessage, config); aborted != nil {
+				stream.Push(NewMessageEndEvent(*aborted))
+				return aborted, nil
+			}
 			return nil, wrappedErr
 		}
 	}
 
 	// If the iterator exited without sending DoneEvent or ErrorEvent, the
-	// stream was truncated. Return an error so the retry logic can kick in.
+	// stream was truncated.
 	if partialMessage != nil && partialMessage.StopReason == "" {
+		// Context canceled mid-stream (e.g. user steer/abort): salvage the
+		// partial response instead of erroring out and dropping it.
+		if aborted := buildAbortedMessage(ctx, partialMessage, config); aborted != nil {
+			stream.Push(NewMessageEndEvent(*aborted))
+			return aborted, nil
+		}
+		// Genuine truncation: return an error so the retry logic can kick in.
 		return nil, fmt.Errorf("LLM stream ended without completion (no DoneEvent received)")
 	}
 
 	return partialMessage, nil
+}
+
+// buildAbortedMessage converts a partial streamed assistant message into a
+// persistable "aborted" message when the stream was cut short by context
+// cancellation (user steer/abort). It returns nil when the stream was not
+// canceled or the partial has no salvageable content.
+//
+// Incomplete ToolCallContent blocks are stripped: they were never executed,
+// and keeping them would leave dangling tool_calls without tool results.
+func buildAbortedMessage(
+	ctx context.Context,
+	partial *agentctx.AgentMessage,
+	config *LoopConfig,
+) *agentctx.AgentMessage {
+	if partial == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return nil
+	}
+	if partial.ExtractText() == "" && partial.ExtractThinking() == "" {
+		return nil
+	}
+
+	model := getEffectiveModel(config)
+	finalMessage := *partial
+
+	kept := make([]agentctx.ContentBlock, 0, len(finalMessage.Content))
+	for _, block := range finalMessage.Content {
+		if _, isToolCall := block.(agentctx.ToolCallContent); !isToolCall {
+			kept = append(kept, block)
+		}
+	}
+	finalMessage.Content = kept
+	finalMessage.StopReason = "aborted"
+	finalMessage.API = model.API
+	finalMessage.Provider = model.Provider
+	finalMessage.Model = model.ID
+	finalMessage.Timestamp = time.Now().UnixMilli()
+	return &finalMessage
 }
 
 // replaceThinkingBlocks swaps any thinking content blocks in content for a
@@ -406,6 +456,7 @@ func updateRuntimeMetaSnapshot(
 	currentWorkdir string,
 	startupPath string,
 	runID string,
+	role string,
 ) string {
 	if agentCtx == nil {
 		return ""
@@ -431,11 +482,16 @@ func updateRuntimeMetaSnapshot(
 	if runID != "" {
 		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
 	}
+	var roleLine string
+	if strings.TrimSpace(role) != "" {
+		roleLine = fmt.Sprintf("\n  role: %s", runtimeYAMLString(role))
+	}
 	snapshot := fmt.Sprintf(`<agent:runtime_state/>
-%s
+%s%s
   current_workdir: %s
   startup_path: %s`,
 		runIDLine,
+		roleLine,
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
 	)

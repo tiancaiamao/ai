@@ -29,7 +29,7 @@ func TestE2E_LLMDecideAsk(t *testing.T) {
 		t.Fatalf("write isolated models.json: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	rs.promptAndWait(t, `Use the bash tool once to run: head -c 8000 /dev/zero | tr '\0' 'x'. Then use the bash tool 15 more times, one command per call, in order: echo ok1, echo ok2, echo ok3, echo ok4, echo ok5, echo ok6, echo ok7, echo ok8, echo ok9, echo ok10, echo ok11, echo ok12, echo ok13, echo ok14, echo ok15. After all sixteen calls finish, reply with the single word ok.`)
 
 	// Traces flush on shutdown; close stdin and wait for exit before reading.

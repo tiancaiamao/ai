@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/tiancaiamao/ai/pkg/protocol"
 )
 
 func TestParseEvent_Empty(t *testing.T) {
@@ -117,6 +119,27 @@ func TestParseEvent_ToolExecutionStart_Legacy(t *testing.T) {
 	}
 	if !strings.Contains(evt.Detail, "command=ls -la") {
 		t.Fatalf("expected detail to contain command, got %q", evt.Detail)
+	}
+}
+
+func TestParseACPUpdate_ToolCallIncludesCommand(t *testing.T) {
+	evt := ParseACPUpdate(protocol.ACPUpdate{
+		SessionUpdate: "tool_call",
+		Title:         "bash",
+		Kind:          "execute",
+		RawInput:      map[string]any{"command": "printf hello"},
+	})
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if evt.Tool != "bash" {
+		t.Fatalf("expected tool 'bash', got %q", evt.Tool)
+	}
+	if !strings.Contains(evt.Detail, "command=printf hello") {
+		t.Fatalf("expected command detail, got %q", evt.Detail)
+	}
+	if !strings.Contains(evt.Text, "command=printf hello") {
+		t.Fatalf("expected command in rendered text, got %q", evt.Text)
 	}
 }
 

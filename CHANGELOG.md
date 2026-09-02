@@ -1,7 +1,66 @@
 # Changelog
 
 Architecture decisions, major feature evolution, and the "why" behind changes.
-Not a git log mirror — focus on what changed at the design level and why.
+Not a git log mirror — focus on what changed at the design level, not just what the commit did.
+
+## ACP-Only Public Control Surface (2026-08)
+
+**What changed**: Retired the public `ai rpc` command and its flat command/event
+protocol. `ai acp` is now the only public protocol entry point. Application
+lifecycle and runtime capabilities live in `pkg/app`; ACP request handling and
+client/server code live in `pkg/protocol`; and `pkg/transport` owns stdio and
+Unix-socket framing and connections. The planner and test helpers now use ACP,
+including explicit `--agent-config` support for the planner's existing tool,
+middleware, and model configuration semantics.
+
+**Why**: A single public protocol avoids maintaining parallel request and event
+models. Separating ACP handling from transport lets local TUI, daemon clients,
+and external ACP hosts share the same agent lifecycle and persistence behavior.
+
+
+
+
+
+
+## Model-Declared `reasoningContext` Capability (2026-08)
+
+**What changed**: Gateways that wrap requests in Codex Responses Lite (e.g. the
+`crs` provider) reject requests whose `reasoning.context` is not `all_turns`.
+This is now a per-model capability in `models.json`
+(`"reasoningContext": "all_turns"`) honored on both the Chat Completions and
+OpenAI Responses request paths. An earlier fix hard-coded it to the provider
+name (`Provider == "work"`), which broke the moment the provider was renamed in
+`models.json`.
+
+**Why**: The provider key is a user-defined routing label; protocol and
+capability requirements belong to the model entry, not to specific provider
+names. Declaring the requirement in the model config keeps behavior stable
+across renames and lets other gateways opt in without code changes.
+
+## Role-Bound Subagent Skills (2026-08)
+
+**What changed**: The `review` and `explore` skills now distinguish between a
+parent agent that delegates work and the corresponding `reviewer` or
+`explorer` subagent that performs the work. Those subagent prompts explicitly
+prohibit invoking the same skill or creating another subagent.
+
+**Why**: Prevent recursive delegation at the prompt boundary for the two
+skills that create subagents, without relying on a shell environment marker
+that can be unset or rewritten.
+
+## Model-Scoped Proxy Routing (2026-08)
+
+**What changed**: Added an optional provider-level `proxy` setting in
+`models.json`. Model API requests use that configured proxy. The existing OpenAI
+Responses path retains its environment-based proxy fallback when no model
+proxy is configured; other model paths otherwise make direct connections. The
+standalone `ai login-codex` OAuth flow continues to use standard proxy
+environment variables so authentication can be bootstrapped independently.
+
+**Why**: A global proxy environment affects tool subprocesses and unrelated
+network operations. Keeping proxy selection in the model provider config makes
+runtime routing explicit while preserving a convenient proxy mechanism for the
+interactive login flow.
 
 ## Edit Tool: Progressive Matching + Structural Sentinel (2026-08)
 

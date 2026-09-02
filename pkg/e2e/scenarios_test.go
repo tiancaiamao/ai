@@ -1,6 +1,6 @@
 //go:build e2e
 
-// E2E scenario tests: drive the instrumented `ai rpc` binary black-box and
+// E2E scenario tests: drive the instrumented `ai acp` binary black-box and
 // collect whole-app coverage.
 //
 // TestE2E_RealTask — realistic coding task with pre-seeded buggy code;
@@ -19,7 +19,6 @@
 package e2e
 
 import (
-	"bufio"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -31,6 +30,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tiancaiamao/ai/pkg/protocol"
 )
 
 // --- Model resolution + isolated models.json ---
@@ -45,7 +46,7 @@ type e2eModel struct {
 // E2E_MODEL overrides the model id) and skips when nothing is reachable.
 func requireEndpoint(t *testing.T) e2eModel {
 	t.Helper()
-	m := e2eModel{provider: "ollama", id: "laguna"}
+	m := e2eModel{provider: "ollama", id: "qwen"}
 	if v := os.Getenv("E2E_MODEL"); v != "" {
 		m.id = v
 	}
@@ -62,7 +63,7 @@ func requireEndpoint(t *testing.T) e2eModel {
 			} `json:"providers"`
 		}
 		if json.Unmarshal(data, &f) == nil {
-			for _, p := range []string{"ollama", "laguna"} {
+			for _, p := range []string{"ollama", "qwen"} {
 				if pc, ok := f.Providers[p]; ok && len(pc.Models) > 0 {
 					base := pc.Models[0].BaseURL
 					if base == "" {
@@ -165,7 +166,7 @@ func TestE2E_RealTask(t *testing.T) {
 	}
 
 	// --- Run the agent ---
-	rs := startRPCServer(t, m, workDir)
+	rs := startACPServer(t, m, workDir)
 	reply := rs.promptAndWait(t, "Read task.txt in the workspace and complete all tasks described in it. Verify each task's success criteria before moving on. When done, reply with the single word: ok")
 	if !strings.Contains(reply, "ok") {
 		t.Fatalf("agent did not reply ok, got: %q", reply)
@@ -246,81 +247,71 @@ func copyFile(src, dst string) error {
 
 func TestE2E_SlashCommands(t *testing.T) {
 	m := requireEndpoint(t)
-	rs := startRPCServer(t, m, "")
+	rs := startACPServer(t, m, "")
 
-	// ---- Phase 1: Protocol errors (fast, no model) ----
+	// Protocol-level malformed input is covered by ACP unit tests; this
+	// black-box suite focuses on the shared command and agent behavior.
 
-	// Malformed JSON.
-	rs.send(t, `{"type":`)
-	assertRawError(t, rs, "Failed to parse command")
+	// ---- Phase 1: Command validation errors (fast, no model) ----
 
-	// Unknown command type.
-	rs.rpcErr(t, "nope", "", "No nope handler registered")
-
-	// Prompt validation errors.
-	rs.rpcErr(t, "prompt", "", "empty prompt message")
-	rs.send(t, `{"type":"prompt","message":"x","data":{"images":["i"]}}`)
-	assertRawError(t, rs, "images are not supported")
-	rs.rpcErr(t, "prompt", "/definitely-not-a-command", "unknown command")
-
-	// ---- Phase 2: Simple introspection commands ----
+	rs.commandError(t, "set_model", "nonexistent-provider xyz", "model not found")
 	for _, cmd := range []string{"help", "skills", "context", "session", "messages",
 		"get_session_stats", "get_last_assistant_text", "get_tree", "get_trace_events"} {
-		rs.rpcAck(t, cmd, "")
+		rs.commandAck(t, cmd, "")
 	}
 
 	// ---- Phase 3: Model commands ----
-	rs.rpcAck(t, "model", "")
-	rs.rpcAck(t, "set_model", m.provider+" "+m.id)
-	rs.rpcErr(t, "set_model", "nonexistent-provider xyz", "model not found")
+	rs.commandAck(t, "model", "")
+	rs.commandAck(t, "set_model", m.provider+" "+m.id)
+	rs.commandError(t, "set_model", "nonexistent-provider xyz", "model not found")
 
 	// ---- Phase 4: /set matrix ----
-	rs.rpcAck(t, "set", "help")
-	rs.rpcAck(t, "set", "auto-retry on")
+	rs.commandAck(t, "set", "help")
+	rs.commandAck(t, "set", "auto-retry on")
 	for _, v := range []string{"on", "off"} {
-		rs.rpcAck(t, "set", "auto-compaction "+v)
+		rs.commandAck(t, "set", "auto-compaction "+v)
 	}
 	for _, v := range []string{"steer", "follow-up", "reject"} {
-		rs.rpcAck(t, "set", "busy-mode "+v)
+		rs.commandAck(t, "set", "busy-mode "+v)
 	}
-	rs.rpcErr(t, "set", "busy-mode bogus", "usage")
-	rs.rpcAck(t, "set", "follow-up-mode all")
-	rs.rpcErr(t, "set", "follow-up-mode bogus", "invalid follow-up mode")
+	rs.commandError(t, "set", "busy-mode bogus", "usage")
+	rs.commandAck(t, "set", "follow-up-mode all")
+	rs.commandError(t, "set", "follow-up-mode bogus", "invalid follow-up mode")
 	for _, v := range []string{"on", "off", "toggle"} {
-		rs.rpcAck(t, "set", "prefix-display "+v)
+		rs.commandAck(t, "set", "prefix-display "+v)
 	}
-	rs.rpcAck(t, "set", "thinking-display on")
-	rs.rpcAck(t, "set", "thinking-level minimal")
-	rs.rpcErr(t, "set", "thinking-level bogus", "invalid thinking level")
-	rs.rpcAck(t, "set", "tool-call-cutoff 50")
-	rs.rpcAck(t, "set", "tool-summary-automation fallback")
-	rs.rpcErr(t, "set", "tool-summary-automation bogus", "invalid")
-	rs.rpcAck(t, "set", "tools-display off")
-	rs.rpcAck(t, "set", "session-name e2e-session")
-	rs.rpcAck(t, "set", "trace-events on")
-	rs.rpcErr(t, "set", "not-a-setting 1", "unknown setting")
+	rs.commandAck(t, "set", "thinking-display on")
+	rs.commandAck(t, "set", "thinking-level minimal")
+	rs.commandError(t, "set", "thinking-level bogus", "invalid thinking level")
+	rs.commandAck(t, "set", "tool-call-cutoff 50")
+	rs.commandAck(t, "set", "tool-summary-automation fallback")
+	rs.commandError(t, "set", "tool-summary-automation bogus", "invalid")
+	rs.commandAck(t, "set", "tools-display off")
+	rs.commandAck(t, "set", "session-name e2e-session")
+	rs.commandAck(t, "set", "trace-events on")
+	rs.commandError(t, "set", "not-a-setting 1", "unknown setting")
 
 	// ---- Phase 5: Dedicated toggles / shows ----
 	for _, v := range []string{"off", "low", "medium", "high", "xhigh"} {
-		rs.rpcAck(t, "thinking", v)
+		rs.commandAck(t, "thinking", v)
 	}
-	rs.rpcErr(t, "thinking", "ultra", "invalid thinking level")
-	rs.rpcAck(t, "trace-events", "off")
-	rs.rpcAck(t, "toggle", "thinking")
-	rs.rpcAck(t, "toggle", "prefix")
-	rs.rpcAck(t, "toggle", "tools")
-	rs.rpcErr(t, "toggle", "bogus", "usage")
-	rs.rpcAck(t, "show", "")
-	rs.rpcAck(t, "show", "settings")
-	rs.rpcErr(t, "show", "bogus", "usage")
+	rs.commandError(t, "thinking", "ultra", "invalid thinking level")
+	rs.commandAck(t, "trace-events", "off")
+	rs.commandAck(t, "toggle", "thinking")
+	rs.commandAck(t, "toggle", "prefix")
+	rs.commandAck(t, "toggle", "tools")
+	rs.commandError(t, "toggle", "bogus", "usage")
+	rs.commandAck(t, "show", "")
+	rs.commandAck(t, "show", "settings")
+	rs.commandError(t, "show", "bogus", "usage")
 
 	// ---- Phase 6: Hidden backward-compatible forwarders ----
-	rs.rpcAck(t, "set_auto_compaction", "on")
-	rs.rpcAck(t, "set_thinking_level", "low")
-	rs.rpcAck(t, "set_trace_events", "off")
+	rs.commandAck(t, "set_auto_compaction", "on")
+	rs.commandAck(t, "set_thinking_level", "low")
+	rs.commandAck(t, "set_trace_events", "off")
 
 	// ---- Phase 7: Known unsupported command ----
-	rs.rpcErr(t, "export_html", "", "not supported")
+	rs.commandError(t, "export_html", "", "not supported")
 
 	// ---- Phase 8: Tool turns (build context) ----
 	rs.promptAndWait(t, `Use the write tool to create a file named notes.md in the current directory containing 40 lines about the Go programming language. After it finishes, reply with the single word ok.`)
@@ -329,24 +320,24 @@ func TestE2E_SlashCommands(t *testing.T) {
 	// ---- Phase 9: Session lifecycle (new / fork / rewind / resume) ----
 	// Do this BEFORE large prompts / compact: compact compresses the tree
 	// and invalidates entry IDs, so fork/rewind must run on a stable tree.
-	sess2 := rs.rpcAck(t, "new", "e2e-fork")
+	sess2 := rs.commandAck(t, "new", "e2e-fork")
 	if sess2["sessionId"] == "" {
 		t.Fatalf("new session returned no sessionId: %v", sess2)
 	}
-	rs.rpcAck(t, "session", "")
+	rs.commandAck(t, "session", "")
 
 	// Resume: list, by index, errors.
-	list := rs.rpcAck(t, "resume", "")
+	list := rs.commandAck(t, "resume", "")
 	if sessions, _ := list["sessions"].([]any); len(sessions) < 2 {
 		t.Fatalf("expected >= 2 sessions, got %d", len(sessions))
 	}
-	res0 := rs.rpcAck(t, "resume", "0")
+	res0 := rs.commandAck(t, "resume", "0")
 	t.Logf("resume 0 -> %v", res0)
-	rs.rpcErr(t, "resume", "99", "out of range")
-	rs.rpcErr(t, "resume", "zz-does-not-exist", "")
+	rs.commandError(t, "resume", "99", "out of range")
+	rs.commandError(t, "resume", "zz-does-not-exist", "")
 
 	// Fork / rewind on a real entry.
-	tree := rs.rpcAck(t, "get_tree", "")
+	tree := rs.commandAck(t, "get_tree", "")
 	var forkID string
 	if entries, ok := tree["entries"].([]any); ok {
 		for _, e := range entries {
@@ -360,11 +351,11 @@ func TestE2E_SlashCommands(t *testing.T) {
 	if forkID == "" {
 		t.Fatalf("no user entry in tree: %v", tree)
 	}
-	rs.rpcAck(t, "get_fork_messages", "ignored")
-	rs.rpcAck(t, "rewind", forkID)
-	rs.rpcAck(t, "rewind", "root")
-	rs.rpcAck(t, "fork", forkID)
-	rs.rpcAck(t, "get_tree", "")
+	rs.commandAck(t, "get_fork_messages", "ignored")
+	rs.commandAck(t, "rewind", forkID)
+	rs.commandAck(t, "rewind", "root")
+	rs.commandAck(t, "fork", forkID)
+	rs.commandAck(t, "get_tree", "")
 
 	// ---- Phase 10: Dense tool calls (push visible tool results past ToolCallCutoff=10)
 	//     so that /compact triggers compactToolResultsInRecent.
@@ -385,28 +376,27 @@ Use the read tool for each file.`)
 	}
 
 	// ---- Phase 12: /compact ----
-	rs.send(t, `{"type":"compact"}`)
-	compactResp := rs.log.waitEvent("response", "command", "compact", 5*time.Minute)
-	if compactResp == "" {
-		t.Fatalf("no compact response. stderr:\n%s", rs.logTail())
+	compactRaw, err := rs.client.PromptResult(rs.sessionID, "/compact")
+	if err != nil {
+		t.Fatalf("compact command failed: %v", err)
 	}
-	t.Logf("compact response: %s", compactResp)
-
-	// Verify compact actually reduced token count.
-	var cr struct {
-		Success bool `json:"success"`
-		Data    struct {
-			TokensBefore int `json:"tokensBefore"`
-			TokensAfter  int `json:"tokensAfter"`
-		} `json:"data"`
+	var compactResult struct {
+		Meta struct {
+			CommandResult struct {
+				TokensBefore int `json:"tokensBefore"`
+				TokensAfter  int `json:"tokensAfter"`
+			} `json:"commandResult"`
+		} `json:"_meta"`
 	}
-	if err := json.Unmarshal([]byte(compactResp), &cr); err == nil && cr.Success {
-		if cr.Data.TokensBefore > 0 && cr.Data.TokensAfter >= cr.Data.TokensBefore {
-			t.Fatalf("compact did not reduce tokens: before=%d after=%d",
-				cr.Data.TokensBefore, cr.Data.TokensAfter)
-		}
-		t.Logf("compact: %d → %d tokens", cr.Data.TokensBefore, cr.Data.TokensAfter)
+	if err := json.Unmarshal(compactRaw, &compactResult); err != nil {
+		t.Fatalf("parse compact result: %v", err)
 	}
+	before := compactResult.Meta.CommandResult.TokensBefore
+	after := compactResult.Meta.CommandResult.TokensAfter
+	if before > 0 && after >= before {
+		t.Fatalf("compact did not reduce tokens: before=%d after=%d", before, after)
+	}
+	t.Logf("compact: %d → %d tokens", before, after)
 
 	// ---- Phase 13: Final prompt to confirm session still works ----
 	reply := rs.promptAndWait(t, "Reply with exactly: slash-ok")
@@ -421,25 +411,16 @@ Use the read tool for each file.`)
 	}
 }
 
-// assertRawError waits for any error response and checks the message.
-func assertRawError(t *testing.T, rs *rpcServer, wantErr string) {
+func (rs *acpServer) commandError(t *testing.T, name, args, wantErr string) {
 	t.Helper()
-	resp := rs.log.waitEvent("response", "", "", 30*time.Second)
-	if resp == "" {
-		t.Fatalf("no error response (wanted %q)", wantErr)
+	text := "/" + name
+	if args != "" {
+		text += " " + args
 	}
-	var r struct {
-		Success bool   `json:"success"`
-		Error   string `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(resp), &r); err != nil {
-		t.Fatalf("parse error response: %v\n%s", err, resp)
-	}
-	if r.Success {
-		t.Fatalf("expected error response, got success: %s", resp)
-	}
-	if !strings.Contains(r.Error, wantErr) {
-		t.Fatalf("error %q does not contain %q", r.Error, wantErr)
+	if _, err := rs.client.PromptResult(rs.sessionID, text); err == nil {
+		t.Fatalf("command %q unexpectedly succeeded", name)
+	} else if wantErr != "" && !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("command %q error %q does not contain %q", name, err, wantErr)
 	}
 }
 
@@ -452,76 +433,28 @@ func TestE2E_CrashRecovery(t *testing.T) {
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatal(err)
 	}
-
 	sessPath := filepath.Join(workDir, "session.jsonl")
 
-	// Start agent, send a prompt to build some state.
-	env := append(os.Environ(),
-		"HOME="+home,
-		"GOCOVERDIR="+covDataDir,
-		"OLLAMA_API_KEY=e2e",
-		"AI_MODELS_PATH="+filepath.Join(home, ".ai", "models.json"),
-	)
-	cmd := exec.Command(binaryPath, "rpc",
-		"-model", m.provider+"/"+m.id,
-		"-session", sessPath,
-	)
-	cmd.Env = env
-	cmd.Dir = workDir
-	cmd.Stdout = nil // discard first run output
-
-	stdin, _ := cmd.StdinPipe()
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Send a prompt to create conversation state.
-	fmt.Fprintf(stdin, "%s\n", `{"type":"prompt","message":"What is 2+2? Reply with the single number only."}`)
-
-	// Give it time to process, then kill (simulate crash).
+	// Send a prompt, then terminate the process to simulate a crash.
+	rs1 := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	rs1.promptAsync(t, "What is 2+2? Reply with the single number only.")
 	time.Sleep(8 * time.Second)
-	cmd.Process.Kill()
-	cmd.Wait()
-
-	// Restart agent with same session — should recover.
-	cmd2 := exec.Command(binaryPath, "rpc",
-		"-model", m.provider+"/"+m.id,
-		"-session", sessPath,
-	)
-	cmd2.Env = env
-	cmd2.Dir = workDir
-
-	stdin2, _ := cmd2.StdinPipe()
-	stdout2, _ := cmd2.StdoutPipe()
-	if err := cmd2.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cmd2.Process.Kill()
-		cmd2.Wait()
-	}()
-
-	// Send another prompt — if recovery works, agent should respond.
-	fmt.Fprintf(stdin2, "%s\n", `{"type":"prompt","message":"Reply with exactly: recovered"}`)
-
-	// Read output looking for agent_end.
-	done := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stdout2)
-		for scanner.Scan() {
-			if strings.Contains(scanner.Text(), "agent_end") {
-				close(done)
-				return
-			}
-		}
-		close(done)
-	}()
-
+	_ = rs1.cmd.Process.Kill()
 	select {
-	case <-done:
-		t.Log("crash recovery: agent responded after restart")
+	case <-rs1.stop:
 	case <-time.After(30 * time.Second):
-		t.Log("crash recovery: timeout (non-fatal for coverage)")
+		t.Fatal("first process did not terminate after simulated crash")
+	}
+
+	// Restart with the same session and verify the recovered agent remains usable.
+	rs2 := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	reply := rs2.promptAndWait(t, "Reply with exactly: recovered")
+	if !strings.Contains(reply, "recovered") {
+		t.Fatalf("recovered prompt reply: %q", reply)
+	}
+	rs2.closeStdin()
+	if err := rs2.waitExit(30 * time.Second); err != nil {
+		t.Fatalf("recovered server did not exit: %v", err)
 	}
 }
 
@@ -534,122 +467,65 @@ func TestE2E_AutoCompaction(t *testing.T) {
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatal(err)
 	}
-
-	// Step 1: Create a session with many messages by running the agent briefly.
 	sessPath := filepath.Join(workDir, "session.jsonl")
-	env := append(os.Environ(),
-		"HOME="+home,
-		"GOCOVERDIR="+covDataDir,
-		"OLLAMA_API_KEY=e2e",
-		"AI_MODELS_PATH="+filepath.Join(home, ".ai", "models.json"),
-	)
 
-	// Run agent with auto-compaction on, send several prompts to build context.
-	cmd := exec.Command(binaryPath, "rpc",
-		"-model", m.provider+"/"+m.id,
-		"-session", sessPath,
-	)
-	cmd.Env = env
-	cmd.Dir = workDir
-
-	stdin, _ := cmd.StdinPipe()
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Send prompts to build up context. Each prompt + response adds tokens.
+	// Build context in a first ACP process, then terminate it.
+	rs1 := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
 	for i := 0; i < 5; i++ {
 		blob := strings.Repeat(fmt.Sprintf("Message %d: The quick brown fox jumps over the lazy dog. ", i), 200)
-		msg := fmt.Sprintf(`{"type":"prompt","message":"Acknowledge this text (%d/5) and reply with the single word: ack\n\n%s"}`, i+1, blob)
-		fmt.Fprintf(stdin, "%s\n", msg)
-		// Wait briefly for processing.
-		time.Sleep(3 * time.Second)
+		rs1.promptAndWait(t, fmt.Sprintf("Acknowledge this text (%d/5) and reply with the single word: ack\n\n%s", i+1, blob))
+	}
+	rs1.closeStdin()
+	if err := rs1.waitExit(30 * time.Second); err != nil {
+		t.Fatalf("first compaction seed server did not exit: %v", err)
 	}
 
-	// Kill to simulate end of session (not crash, just done).
-	cmd.Process.Kill()
-	cmd.Wait()
-
-	// Step 2: Resume the session with auto-compaction enabled.
-	// Send one more large prompt to push past threshold and trigger auto-compaction.
-	cmd2 := exec.Command(binaryPath, "rpc",
-		"-model", m.provider+"/"+m.id,
-		"-session", sessPath,
-	)
-	cmd2.Env = env
-	cmd2.Dir = workDir
-
-	stdin2, _ := cmd2.StdinPipe()
-	stdout2, _ := cmd2.StdoutPipe()
-	if err := cmd2.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cmd2.Process.Kill()
-		cmd2.Wait()
-	}()
-
-	// Enable auto-compaction and send a large prompt.
-	fmt.Fprintf(stdin2, `%s
-{"type":"set","message":"auto-compaction on"}`, "\n")
-	time.Sleep(1 * time.Second)
-
+	// Resume the same session and trigger auto-compaction with a large prompt.
+	rs2 := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	rs2.commandAck(t, "set", "auto-compaction on")
 	largeBlob := strings.Repeat("Auto-compaction trigger: the agent should decide whether to compact now. ", 500)
-	fmt.Fprint(stdin2, "\n"+`{"type":"prompt","message":"Read and acknowledge: `+largeBlob+` Reply with: compact-ok"}`+"\n")
-
-	// Watch for compaction events or agent_end.
-	compactionSeen := make(chan bool, 1)
-	go func() {
-		scanner := bufio.NewScanner(stdout2)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "compaction_start") || strings.Contains(line, `"command":"compact"`) {
-				compactionSeen <- true
-				return
-			}
-			if strings.Contains(line, "agent_end") {
-				compactionSeen <- false
-				return
-			}
-		}
-		compactionSeen <- false
-	}()
-
-	select {
-	case saw := <-compactionSeen:
-		if saw {
+	rs2.promptAsync(t, "Read and acknowledge: "+largeBlob+" Reply with: compact-ok")
+	// The ACP log is the sole consumer of session/update notifications.
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		update := rs2.log.waitUpdate(t, func(update protocol.ACPUpdate) bool {
+			return update.SessionUpdate == "_compaction"
+		}, time.Until(deadline))
+		meta := updateMetaMap(t, update)
+		if status, _ := meta["status"].(string); status == "end" {
 			t.Log("auto-compaction: triggered successfully")
-		} else {
-			t.Log("auto-compaction: agent_end without compaction (LLM decided not to compact)")
+			return
 		}
-	case <-time.After(3 * time.Minute):
-		t.Log("auto-compaction: timeout (non-fatal for coverage)")
 	}
+	t.Log("auto-compaction: timeout (non-fatal for coverage)")
 }
 
 // --- Streaming-time policies, abort and the timeout watchdog ---
 
 func TestE2E_BusyAndAbort(t *testing.T) {
 	m := requireEndpoint(t)
-	rs := startRPCServer(t, m, "")
+	rs := startACPServer(t, m, "")
+	rs.commandAck(t, "set", "busy-mode reject")
 
 	// A streaming prompt we can probe mid-flight.
-	rs.send(t, `{"type":"prompt","message":"Count from 1 to 30, listing every number."}`)
-	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs.logTail())
-	}
+	rs.promptAsync(t, "Count from 1 to 30, listing every number.")
 	time.Sleep(500 * time.Millisecond)
 
-	// Busy-mode policy: reject while streaming.
-	rs.send(t, `{"type":"prompt","message":"ignored","data":{"streamingBehavior":"reject"}}`)
-	assertRawError(t, rs, "rejected by busy-mode policy")
+	// Busy-mode policy: reject while streaming. ACP reports asynchronous
+	// request failures as a synthetic _request_error update.
+	if err := rs.client.PromptAsync(rs.sessionID, "ignored"); err != nil {
+		t.Fatalf("busy prompt: %v", err)
+	}
+	requestErr := rs.waitRequestError(t, "session/prompt", 30*time.Second)
+	if !strings.Contains(requestErr.Message, "rejected by busy-mode policy") {
+		t.Fatalf("busy prompt error = %q", requestErr.Message)
+	}
 
 	// Abort the stream.
-	rs.rpcAck(t, "abort", "")
-	if ev := rs.log.waitEvent("agent_end", "", "", 3*time.Minute); ev == "" {
-		t.Fatalf("no agent_end after abort. emitted lines:\n%s\nstate: %s",
-			rs.log.History(), rs.log.DebugState())
+	if err := rs.client.Cancel(rs.sessionID); err != nil {
+		t.Fatalf("cancel: %v", err)
 	}
+	rs.waitUpdate(t, "_turn_end", 3*time.Minute)
 
 	// Server must still be usable.
 	rs.promptAndWait(t, "Reply with exactly: ok")
@@ -661,40 +537,30 @@ func TestE2E_BusyAndAbort(t *testing.T) {
 }
 
 // TestE2E_SteerAndFollowUp exercises the /steer and /follow-up slash handlers
-// (pkg/rpc/rpc_help_handlers.go), which are only reachable while the agent is
+// pkg/app/rpc_help_handlers.go, which are only reachable while the agent is
+
 // streaming — a state no other e2e test enters with these command types.
 func TestE2E_SteerAndFollowUp(t *testing.T) {
 	m := requireEndpoint(t)
-	rs := startRPCServer(t, m, "")
+	rs := startACPServer(t, m, "")
 
 	// A streaming prompt we can probe mid-flight.
-	rs.send(t, `{"type":"prompt","message":"Count from 1 to 50, listing every number."}`)
-	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs.logTail())
-	}
+	rs.promptAsync(t, "Count from 1 to 50, listing every number.")
 	time.Sleep(500 * time.Millisecond)
 
 	// /follow-up while streaming: queued, processed by the loop after the current run.
-	rs.rpcAck(t, "follow-up", "After this run, reply with exactly: ok")
+	rs.commandAck(t, "follow-up", "After this run, reply with exactly: ok")
 
 	// /steer while streaming: cancels the current run and restarts with the new message.
-	rs.rpcAck(t, "steer", "Reply with exactly: steered")
+	rs.commandAck(t, "steer", "Reply with exactly: steered")
 
-	// The steered run finishes.
-	if ev := rs.log.waitEvent("agent_end", "", "", 3*time.Minute); ev == "" {
-		t.Fatalf("no agent_end after steer. emitted lines:\n%s\nstate: %s",
-			rs.log.History(), rs.log.DebugState())
-	}
-	// The loop then drains the queued follow-up, producing a second agent_end.
-	// Wait for it as well so the server exits cleanly on EOF.
-	if ev := rs.log.waitEvent("agent_end", "", "", 3*time.Minute); ev == "" {
-		t.Fatalf("no agent_end after follow-up. emitted lines:\n%s\nstate: %s",
-			rs.log.History(), rs.log.DebugState())
-	}
+	// The steered run and queued follow-up finish in order.
+	rs.waitUpdate(t, "_turn_end", 3*time.Minute)
+	rs.waitUpdate(t, "_turn_end", 3*time.Minute)
 
 	// Idle error branches of the slash handlers.
-	rs.rpcErr(t, "steer", "", "usage")
-	rs.rpcErr(t, "follow-up", "x", "agent is not busy")
+	rs.commandError(t, "steer", "", "usage")
+	rs.commandError(t, "follow-up", "x", "agent is not busy")
 
 	rs.closeStdin()
 	if err := rs.waitExit(15 * time.Second); err != nil {
@@ -704,13 +570,11 @@ func TestE2E_SteerAndFollowUp(t *testing.T) {
 
 func TestE2E_TimeoutWatchdog(t *testing.T) {
 	m := requireEndpoint(t)
-	rs := startRPCServer(t, m, "", "-timeout", "4s")
+	rs := startACPServer(t, m, "", "-timeout", "4s")
 
 	// Long task; the 4s watchdog aborts the agent and cancels the server.
-	rs.send(t, `{"type":"prompt","message":"Write a very long essay, at least 3000 words, about the history of computing."}`)
-	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack")
-	}
+	rs.promptAsync(t, "Write a very long essay, at least 3000 words, about the history of computing.")
+
 	if err := rs.waitExit(30 * time.Second); err != nil {
 		t.Fatalf("timeout watchdog did not terminate the server: %v", err)
 	}
@@ -734,7 +598,7 @@ func TestE2E_FlagsAndRoles(t *testing.T) {
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatal(err)
 	}
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, "", "-role", "e2e-role")
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, "", "-role", "e2e-role")
 	reply := rs.promptAndWait(t, "What is your role? Reply exactly: role-ok")
 	if !strings.Contains(reply, "role-ok") {
 		t.Fatalf("role system prompt not honored, reply: %q", reply)
@@ -747,31 +611,22 @@ func TestE2E_FlagsAndRoles(t *testing.T) {
 	if err := os.WriteFile(spFile, []byte("custom system prompt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sp := startRPCServer(t, m, "", "-system-prompt", "@"+spFile)
+	sp := startACPServer(t, m, "", "-system-prompt", "@"+spFile)
 	sp.closeStdin()
 	sp.waitExit(15 * time.Second)
 
 	// Debug HTTP server on an ephemeral port.
-	httpSrv := startRPCServer(t, m, "", "-http", "127.0.0.1:0")
+	httpSrv := startACPServer(t, m, "", "-http", "127.0.0.1:0")
 	httpSrv.closeStdin()
 	httpSrv.waitExit(15 * time.Second)
 
 	// Max turns: one turn then the agent stops.
-	turns := startRPCServer(t, m, "", "-max-turns", "1")
-	turns.send(t, `{"type":"prompt","message":"Reply with exactly: hi"}`)
-	if ack := turns.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack")
-	}
-	if ev := turns.log.waitEvent("agent_end", "", "", 3*time.Minute); ev == "" {
-		t.Fatalf("no agent_end with max-turns=1")
-	}
+	turns := startACPServer(t, m, "", "-max-turns", "1")
+	turns.promptAsync(t, "Reply with exactly: hi")
+	turns.waitUpdate(t, "_turn_end", 3*time.Minute)
+
 	turns.closeStdin()
 	turns.waitExit(15 * time.Second)
-
-	// Run ID threading.
-	rid := startRPCServer(t, m, "", "-runid", "e2e-run-abc")
-	rid.closeStdin()
-	rid.waitExit(15 * time.Second)
 
 	// Unknown role → startup failure with nonzero exit.
 	code := expectExit(t, m, "", "-role", "does-not-exist-role")
@@ -792,7 +647,7 @@ func expectExit(t *testing.T, m e2eModel, workDir string, flags ...string) int {
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binaryPath, append([]string{"rpc"}, append(flags, "-model", m.provider+"/"+m.id, "-session", filepath.Join(t.TempDir(), "s.jsonl"))...)...)
+	cmd := exec.Command(binaryPath, append([]string{"acp"}, append(flags, "-model", m.provider+"/"+m.id, "-session", filepath.Join(t.TempDir(), "s.jsonl"))...)...)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), "HOME="+home, "OLLAMA_API_KEY=e2e", "AI_MODELS_PATH="+filepath.Join(home, ".ai", "models.json"))
 	stdin, _ := cmd.StdinPipe()
@@ -810,7 +665,7 @@ func expectExitNoKey(t *testing.T, m e2eModel, workDir string) int {
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binaryPath, "rpc", "-model", m.provider+"/"+m.id, "-session", filepath.Join(t.TempDir(), "s.jsonl"))
+	cmd := exec.Command(binaryPath, "acp", "-model", m.provider+"/"+m.id, "-session", filepath.Join(t.TempDir(), "s.jsonl"))
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), "HOME="+home, "AI_MODELS_PATH="+filepath.Join(home, ".ai", "models.json"))
 	stdin, _ := cmd.StdinPipe()
@@ -954,9 +809,11 @@ func testSubcommandsWithID(t *testing.T, env []string, id string) {
 		t.Fatalf("ai ls failed: %v\n%s", err, out)
 	}
 
-	// ai ls --json: the run must appear as running.
+	// ai ls --json: the run must be listed while the serve process is alive.
+	// Status is "running" while the initial prompt is in flight, "idle" once
+	// it completed — either proves the process is still up.
 	out, err = runCmd("ls", "--json")
-	if err != nil || !strings.Contains(out, "running") {
+	if err != nil || !(strings.Contains(out, `"status": "running"`) || strings.Contains(out, `"status": "idle"`)) {
 		t.Fatalf("ai ls --json failed: %v\n%s", err, out)
 	}
 
@@ -966,8 +823,25 @@ func testSubcommandsWithID(t *testing.T, env []string, id string) {
 		t.Fatalf("ai ls --all --json failed: %v\n%s", err, out)
 	}
 
-	// ai watch --follow (raw): must contain "agent_end" marker.
-	if out, err := runCmd("watch", "--id", id, "--follow", "--timeout", "90s"); err != nil || !strings.Contains(out, "agent_end") {
+	// Wait for the serve to finish its initial prompt (status "idle"). The
+	// watch assertions below rely on session/load replaying the completed
+	// turn; with a slow model the turn can still be in flight here, and
+	// session/load is rejected while a prompt is pending.
+	idle := false
+	for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); {
+		out, err = runCmd("ls", "--all", "--json")
+		if err == nil && strings.Contains(out, id) && strings.Contains(out, `"status": "idle"`) {
+			idle = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !idle {
+		t.Fatalf("serve %s never reached idle status:\n%s", id, out)
+	}
+
+	// ai watch --follow (raw): must replay the persisted assistant text.
+	if out, err := runCmd("watch", "--id", id, "--follow", "--timeout", "90s"); err != nil || !strings.Contains(out, `"sessionUpdate":"agent_message_chunk"`) || !strings.Contains(out, "pong") {
 		t.Fatalf("ai watch --follow (raw) failed: %v\n%s", err, out)
 	}
 
@@ -1008,11 +882,11 @@ func testSubcommandsWithID(t *testing.T, env []string, id string) {
 
 // --- helpers for clean shutdown ---
 
-func (rs *rpcServer) closeStdin() {
+func (rs *acpServer) closeStdin() {
 	rs.stdin.Close()
 }
 
-func (rs *rpcServer) waitExit(timeout time.Duration) error {
+func (rs *acpServer) waitExit(timeout time.Duration) error {
 	select {
 	case <-rs.stop:
 		return nil

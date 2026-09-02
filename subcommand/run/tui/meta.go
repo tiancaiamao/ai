@@ -23,10 +23,10 @@ const (
 	StatusKilled  = "killed"
 )
 
-// RunMeta holds metadata for a single run (an ai rpc subprocess invocation).
+// RunMeta holds metadata for a single serve process.
 type RunMeta struct {
 	ID           string `json:"id"`             // 6-char hex ID
-	PID          int    `json:"pid"`            // process ID of the ai rpc subprocess
+	PID          int    `json:"pid"`            // Process ID
 	CWD          string `json:"cwd"`            // working directory where ai run was invoked
 	Status       string `json:"status"`         // running, done, failed, killed
 	StartedAt    int64  `json:"started_at"`     // unix timestamp

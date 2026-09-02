@@ -16,8 +16,10 @@ type ModelSpec struct {
 	Provider         string
 	BaseURL          string
 	API              string
+	Proxy            string
 	Reasoning        bool
 	ReasoningEfforts []string // supported reasoning_effort values; empty = unrestricted
+	ReasoningContext string   // reasoning.context value required by the gateway (e.g. "all_turns"); empty = not required
 	Input            []string
 	ContextWindow    int
 	MaxTokens        int
@@ -31,6 +33,7 @@ type modelsFile struct {
 type providerConfig struct {
 	BaseURL string        `json:"baseUrl,omitempty"`
 	API     string        `json:"api,omitempty"`
+	Proxy   string        `json:"proxy,omitempty"`
 	Models  []modelConfig `json:"models,omitempty"`
 }
 
@@ -41,6 +44,7 @@ type modelConfig struct {
 	API              string   `json:"api,omitempty"`
 	Reasoning        bool     `json:"reasoning,omitempty"`
 	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+	ReasoningContext string   `json:"reasoningContext,omitempty"`
 	Input            []string `json:"input,omitempty"`
 	ContextWindow    int      `json:"contextWindow,omitempty"`
 	MaxTokens        int      `json:"maxTokens,omitempty"`
@@ -84,6 +88,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 		provider = strings.TrimSpace(provider)
 		baseURL := strings.TrimSpace(pcfg.BaseURL)
 		api := strings.TrimSpace(pcfg.API)
+		proxy := strings.TrimSpace(pcfg.Proxy)
 		if provider == "" {
 			continue
 		}
@@ -98,8 +103,10 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				Provider:         provider,
 				BaseURL:          firstNonEmpty(model.BaseURL, baseURL),
 				API:              firstNonEmpty(model.API, api),
+				Proxy:            proxy,
 				Reasoning:        model.Reasoning,
 				ReasoningEfforts: model.ReasoningEfforts,
+				ReasoningContext: model.ReasoningContext,
 				Input:            model.Input,
 				ContextWindow:    model.ContextWindow,
 				MaxTokens:        model.MaxTokens,

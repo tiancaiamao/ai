@@ -8,14 +8,13 @@ import (
 	"github.com/tiancaiamao/ai/subcommand/kill"
 	"github.com/tiancaiamao/ai/subcommand/ls"
 	"github.com/tiancaiamao/ai/subcommand/models"
-	rpcsubcommand "github.com/tiancaiamao/ai/subcommand/rpc"
 	"github.com/tiancaiamao/ai/subcommand/run"
 	"github.com/tiancaiamao/ai/subcommand/send"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		rpcsubcommand.PrintUsage()
+		printUsage()
 		os.Exit(1)
 	}
 
@@ -25,12 +24,10 @@ func main() {
 
 	switch subcmd {
 	case "-h", "--help", "help":
-		rpcsubcommand.PrintUsage()
+		printUsage()
 		os.Exit(0)
 	case "models":
 		models.ModelsSubcommand()
-	case "rpc":
-		rpcsubcommand.RPCSubcommand()
 	case "acp":
 		acp.ACPSubcommand()
 	case "run":
@@ -45,9 +42,11 @@ func main() {
 		send.SendSubcommand()
 	case "kill":
 		kill.KillSubcommand()
+	case "login-codex":
+		loginCodexSubcommand()
 	default:
 		fmt.Fprintf(os.Stderr, "ai: unknown command %q\n\n", subcmd)
-		rpcsubcommand.PrintUsage()
+		printUsage()
 		os.Exit(1)
 	}
 }

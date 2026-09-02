@@ -681,8 +681,8 @@ func TestNormalizeSessionID(t *testing.T) {
 	if got := normalizeSessionID("  abc  "); got != "abc" {
 		t.Errorf("expected 'abc', got %q", got)
 	}
-	if got := normalizeSessionID("/path/to/abc.jsonl"); got != "abc" {
-		t.Errorf("expected 'abc', got %q", got)
+	if got := normalizeSessionID("/path/to/abc.jsonl"); got != "abc.jsonl" {
+		t.Errorf("expected 'abc.jsonl', got %q", got)
 	}
 	if got := normalizeSessionID("/path/to/abc"); got != "abc" {
 		t.Errorf("expected 'abc', got %q", got)

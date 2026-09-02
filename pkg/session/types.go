@@ -8,7 +8,8 @@ type SessionFileSummary struct {
 }
 
 // TreeEntry represents a tree-structured session entry for internal use.
-// Note: This is the internal session type. The RPC type is in pkg/rpc.
+// Note: This is the internal session type. The protocol type is in pkg/protocol.
+
 type TreeEntry struct {
 	EntryID   string  `json:"entryId"`
 	ParentID  *string `json:"parentId,omitempty"`

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -338,6 +339,71 @@ func TestParseRetryAfterHeader(t *testing.T) {
 	}
 	if got := parseRetryAfterHeader("invalid"); got != 0 {
 		t.Fatalf("expected 0 from invalid header, got %v", got)
+	}
+}
+
+func TestStreamLLMAddsConfiguredReasoningContext(t *testing.T) {
+	// The gateway requirement is declared per-model ("reasoningContext" in
+	// models.json), NOT inferred from the provider name — renaming the
+	// provider must not change behavior.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		reasoning, ok := body["reasoning"].(map[string]any)
+		if !ok || reasoning["context"] != "all_turns" {
+			t.Fatalf("reasoning = %#v, want context all_turns", body["reasoning"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	stream := StreamLLM(context.Background(), Model{
+		ID:               "gpt-5.6-luna",
+		Provider:         "renamed-provider",
+		BaseURL:          server.URL,
+		API:              "",
+		ReasoningContext: "all_turns",
+	}, LLMContext{Messages: []LLMMessage{{Role: "user", Content: "hello"}}}, "test-key", 0)
+
+	for item := range stream.Iterator(context.Background()) {
+		if event, ok := item.Value.(LLMErrorEvent); ok {
+			t.Fatalf("unexpected error: %v", event.Error)
+		}
+	}
+}
+
+func TestStreamLLMOmitsReasoningContextByDefault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if reasoning, ok := body["reasoning"].(map[string]any); ok {
+			if _, has := reasoning["context"]; has {
+				t.Fatalf("reasoning.context = %v, want absent when ReasoningContext is not configured", reasoning["context"])
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	stream := StreamLLM(context.Background(), Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "",
+	}, LLMContext{Messages: []LLMMessage{{Role: "user", Content: "hello"}}}, "test-key", 0)
+
+	for item := range stream.Iterator(context.Background()) {
+		if event, ok := item.Value.(LLMErrorEvent); ok {
+			t.Fatalf("unexpected error: %v", event.Error)
+		}
 	}
 }
 

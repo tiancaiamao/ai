@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `ai` project is a Go-based AI coding agent with RPC-first design, optimized for editor integration and multi-agent orchestration. The system uses a subcommand-based CLI, code-driven task scheduling, and focused agent workers.
+The `ai` project is a Go-based AI coding agent with an ACP-first architecture, optimized for editor integration and multi-agent orchestration. The system uses a subcommand-based CLI, code-driven task scheduling, and focused agent workers.
 
 ## Architecture Philosophy
 
@@ -20,24 +20,27 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                    CLI / Editor / TUI Client                    │
-│  ai run (TUI)  |  ai serve + ai watch  |  ai rpc (stdin/stdout)│
+│  ai run (TUI)  |  ai serve + ai watch  |  ai acp (stdio)       │
 └──────────────────────────┬─────────────────────────────────────┘
-                           │ JSON-RPC over stdin/stdout
-                           │ Unix socket (run/serve)
+                           │ ACP over stdio / Unix socket
+                           │ JSON-RPC 2.0 + NDJSON framing
                            ▼
 ┌────────────────────────────────────────────────────────────────┐
 │               cmd/ai — CLI Entry Point                          │
 │                                                                 │
-│  main.go          — Flag parsing, calls app.RunRPC()         │
-│                   Subcommand dispatch (run/serve/rpc/ls/...)    │
+│  main.go          — Subcommand dispatch and process setup       │
 │                   via subcommand/ packages                      │
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼
 ┌────────────────────────────────────────────────────────────────┐
-│                pkg/rpc — RPC Server                             │
-│  server.go  — JSON-RPC read/write loop                          │
-│  types.go   — Shared RPC types (commands, responses, events)    │
+│               pkg/app — Application Runtime                    │
+│  lifecycle, agent/session setup, handlers, persistence         │
+│               pkg/protocol — ACP Layer                         │
+│  acp.go — server, session/update translation; client           │
+│               pkg/transport — Wire Transports                 │
+│  newline framing, stdio, Unix sockets, and dialing             │
+
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼
@@ -63,9 +66,9 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 │                                                                 │
 │  ┌──────────────────┐    ┌──────────────────────────────────┐  │
 │  │ Metrics          │    │ Tool Guards (tool_guard.go)        │  │
-│  │ (metrics.go)     │    │ - Max consecutive calls            │  │
-│  │ - Token rates    │    │ - Max calls per tool name          │  │
-│  │ - Turn tracking  │    │ - Malformed call recovery          │  │
+│  │ (metrics.go)     │    │ - Max consecutive calls           │  │
+│  │ - Token rates    │    │ - Max calls per tool name         │  │
+│  │ - Turn tracking  │    │ - Malformed call recovery         │  │
 │  └──────────────────┘    └──────────────────────────────────┘  │
 └──────────────────────────┬─────────────────────────────────────┘
                            │
@@ -95,7 +98,8 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 | `pkg/truncate` | Tool output truncation with head/tail preservation |
 | `pkg/modelselect` | Model selection and spec resolution |
 | `pkg/command` | Slash command registry |
-| `pkg/run` | Run metadata, socket server for `ai serve`/`ai run` |
+| `pkg/run` | Run metadata and Unix socket server for `ai serve`/`ai run` |
+| `pkg/transport` | Stdio and Unix-socket ACP transports |
 | `pkg/logger` | Structured logging with file rotation |
 | `pkg/version` | Version information |
 
@@ -107,22 +111,32 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 │  Multi-agent orchestration via skill-defined workflows          │
 │                                                                 │
 │  Skills define orchestration patterns using `ai` CLI:           │
-│  - spawn/kill sub-agents via ai serve/send/watch               │
-│  - steer/abort running agents                                   │
-│  - Bridge-per-agent: detached process with socket control      │
+│  - spawn/kill sub-agents via ai serve/send/watch                │
+│  - send prompts and cancel through ACP                          │
+│  - Bridge-per-agent: detached ACP server with socket control   │
 │                                                                 │
 │  Storage: .ag/ directory (CWD-scoped)                           │
-│  Backends: ai (json-rpc), codex (raw), pluggable via config     │
+│  Backends: ai (ACP), codex (raw), pluggable via config          │
 └────────────────────────────────────────────────────────────────┘
 ```
 
 ## Data Flow
 
-### Typical Turn (RPC mode)
+### Transport and protocol flow
+
+`pkg/app` owns application lifecycle, agent/session setup, persistence, and
+runtime capabilities. `pkg/protocol` implements ACP request handling and
+translates agent events into ACP updates. `pkg/transport` provides message
+framing, stdio and Unix-socket connections, and dialing. `ai acp` uses stdio;
+`ai serve` runs the same ACP server over a Unix socket. `ai run`, `ai watch`,
+and `ai send` are local ACP clients of that socket.
+
+
+### Typical Turn (ACP)
 
 ```
-1. Client sends: {"type":"prompt","message":"fix the bug"}
-2. RPC Server receives → Agent.Prompt()
+1. Client sends an ACP `session/prompt` request containing a text content block
+2. ACP server receives it → Agent.Prompt()
 3. Agent acquires lock → Appends user message to context
 4. Agent.RunLoop():
    a. Build system prompt (Builder: tools + skills + project context + telemetry)
@@ -169,30 +183,29 @@ Recovery: load messages from session JSONL (handles compaction snapshots) → re
 
 ## Key Design Decisions
 
-### Decision 1: RPC-First Architecture
+### Decision 1: ACP-First Architecture
 
-**Context:** How to integrate with editors and external tools.
+**Context:** How to integrate with editors, external tools, and local agent-control clients.
 
-**Decision:** JSON-RPC over stdin/stdout as the primary interface.
+**Decision:** Use ACP as the single public protocol, with stdio and Unix-socket transports.
 
 **Rationale:**
-- Universal integration (any language, any editor)
-- Clean process boundary (crash isolation)
-- Streaming support via event protocol
-- Subcommands (run/serve) build on top of rpc
+- Standard editor and agent integration
+- One request/update model for every frontend
+- Transport remains independent from protocol and kernel logic
+- Streaming support via ACP `session/update`
 
 ### Decision 2: Subcommand-Based CLI
 
 **Context:** How to expose different operational modes.
 
-**Decision:** Subcommands (`ai rpc`, `ai acp`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
+**Decision:** Subcommands (`ai acp`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
 
 **Rationale:**
 - Clearer semantics (each command does one thing)
 - Independent flag sets per subcommand
-- Subcommands fully replace the old `--mode` flag
-- `ai run` = subprocess rpc + TUI in one process
-- `ai serve` = daemon mode with socket control
+- `ai run` provides the interactive TUI
+- `ai serve` provides a background ACP server
 
 ### Decision 3: LLM-Driven Context Management
 
@@ -260,12 +273,10 @@ See [test-strategy.md](test-strategy.md) for detailed testing approach.
 ```
 ai/
 ├── cmd/ai/               # CLI entry point
-│   └── main.go           # Flag parsing → app.RunRPC()
-├── pkg/                  # RPC core logic only
+│   └── main.go           # Subcommand dispatch
+├── pkg/                  # Core packages
 │   ├── agent/            # Core agent loop, execution
 │   ├── agentconfig/      # Agent configuration types
-│   ├── cli/              # CLI subcommand entry points (run/serve/ls/send/kill/watch)
-│   ├── middlewares/      # RPC middleware
 │   ├── compact/          # LLM-driven compaction (LLMDecide mode)
 │   ├── command/          # Slash command registry
 │   ├── config/           # Configuration, auth, model specs
@@ -273,20 +284,26 @@ ai/
 │   ├── llm/              # LLM client (OpenAI-compatible)
 │   ├── logger/           # Structured logging
 │   ├── modelselect/      # Model selection logic
-│   ├── prompt/           # System prompt builder
-│   ├── rpc/              # RPC server, types, handlers (from pkg/app)
+│   ├── rpc/              # ACP server, client, types, and handlers
+│   ├── transport/        # Stdio and Unix-socket ACP transports
 │   ├── session/          # Session persistence (JSONL)
 │   ├── skill/            # Skill loading and formatting
 │   ├── testutil/         # Test utilities
-│   ├── tools/            # Tool implementations (bash, read, write, edit, grep, etc.)
+│   ├── tools/            # Tool implementations
 │   ├── traceevent/       # Perfetto-compatible tracing
 │   ├── truncate/         # Output truncation
-│   └── version/          # Version info
+│   └── version/           # Version info
 ├── subcommand/           # Subcommand implementations
-│   ├── helpers/          # Shared CLI utilities
-│   └── run/tui/          # TUI shared code (event renderer, socket, metadata)
-├── skills/               # Skill definitions (user-installed and project-level)
+│   ├── acp/              # ACP stdio entry point
+│   ├── helpers/           # Shared CLI utilities
+│   └── run/tui/           # TUI rendering and metadata
 ├── docs/                 # Documentation
-├── benchmark/            # E2E benchmark tasks
-└── tests/                # Integration test scripts
+└── roles/                # Built-in role configurations
 ```
+
+## Protocol and Transport Boundary
+
+ACP is the only public protocol. `pkg/protocol` implements ACP request
+handling and translates agent events into ACP updates; `pkg/app` supplies the
+application runtime; and `pkg/transport` supplies stdio and Unix-socket
+connections. The CLI and TUI use the same ACP methods regardless of transport.
