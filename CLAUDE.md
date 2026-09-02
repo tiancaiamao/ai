@@ -62,14 +62,15 @@ Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):
 | Package | Role |
 |---------|------|
 | `cmd/ai/` | Entry point. `main.go` parses flags and dispatches subcommands |
-| `pkg/app/` | RPC application — all handlers, setup, session writer (formerly `cmd/ai/rpc_*.go`) |
+| `pkg/app/` | Application lifecycle, agent/session setup, handlers, and runtime capabilities consumed by ACP |
+| `pkg/protocol/` | ACP server/client and protocol message handling |
+| `pkg/transport/` | Newline framing, stdio, Unix sockets, and dialing |
 | `pkg/agent/` | Agent loop, tool execution, hooks, streaming, checkpoint recovery |
 | `pkg/context/` | `AgentContext`, messages, `Tool` interface, `Compactor` interface |
 | `pkg/compact/` | LLM-driven compaction (LLMDecide mode) |
 | `pkg/session/` | JSONL session persistence, lazy loading, compaction snapshots |
 | `pkg/tools/` | Built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `change_workspace`, `find_skill`). Registered in `pkg/app/rpc_setup.go` |
 | `pkg/skill/` | Skill loading, parsing, formatting, progressive disclosure ranking |
-| `pkg/rpc/` | RPC types (`types.go`) |
 | `pkg/prompt/` | System prompt builder |
 | `pkg/config/` | Config, auth, model specs |
 | `pkg/agentconfig/` | `agent.yaml` loading (system prompt, memory, middleware, tool filtering) |
@@ -90,7 +91,7 @@ Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):
 
 ## Guardrails
 
-- Reuse `pkg/rpc/types.go` structs — don't duplicate types.
+- Reuse the shared protocol structs from `pkg/protocol`; don't duplicate types.
 - Keep compatible with `pkg/session/` persistence format.
 
 ## Runtime Notes

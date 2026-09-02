@@ -8,7 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	rpc "github.com/tiancaiamao/ai/pkg/rpc"
+	protocol "github.com/tiancaiamao/ai/pkg/protocol"
+	"github.com/tiancaiamao/ai/pkg/transport"
+
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
@@ -39,7 +41,7 @@ func KillSubcommand() {
 
 	// Graceful: cancel the in-flight turn via ACP. The serve process
 	// exits on its own after the turn ends and updates run.json.
-	if client, sid, err := rpc.DialACP(tui.SocketPath(baseDir, meta.ID)); err == nil {
+	if client, sid, err := connectACP(tui.SocketPath(baseDir, meta.ID)); err == nil {
 		_ = client.Cancel(sid)
 		client.Close()
 		// Cancel only aborts the current turn. SIGTERM is also required to
@@ -112,4 +114,12 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func connectACP(path string) (*protocol.ACPClient, string, error) {
+	conn, err := transport.DialUnix(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return protocol.ConnectACP(conn)
 }

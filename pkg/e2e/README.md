@@ -52,7 +52,8 @@ subprocess records coverage of the **whole application** to `GOCOVERDIR`
 total: (statements) 47.3%
 ```
 
-This covers `pkg/rpc`, `pkg/session`, `pkg/skill`, `cmd/ai`, etc. through
+This covers `pkg/protocol`, `pkg/app`, `pkg/session`, `pkg/skill`, `cmd/ai`, etc. through
+
 the same entry point a user invokes — something agent-level tests with a
 mock server cannot do.
 

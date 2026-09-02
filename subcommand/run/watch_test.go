@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	rpc "github.com/tiancaiamao/ai/pkg/rpc"
+	protocol "github.com/tiancaiamao/ai/pkg/protocol"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
@@ -133,16 +133,16 @@ func TestProcessEvent_LiveThinkingDelta_RendersImmediately(t *testing.T) {
 	}
 }
 
-func textChunk(t string) rpc.ACPUpdate {
-	return rpc.ACPUpdate{SessionUpdate: "agent_message_chunk", Content: map[string]any{"text": t}}
+func textChunk(t string) protocol.ACPUpdate {
+	return protocol.ACPUpdate{SessionUpdate: "agent_message_chunk", Content: map[string]any{"text": t}}
 }
 
-func turnEnd() rpc.ACPUpdate {
-	return rpc.ACPUpdate{SessionUpdate: "_turn_end", Meta: map[string]any{"success": true}}
+func turnEnd() protocol.ACPUpdate {
+	return protocol.ACPUpdate{SessionUpdate: "_turn_end", Meta: map[string]any{"success": true}}
 }
 
-func updateChan(us ...rpc.ACPUpdate) <-chan rpc.ACPUpdate {
-	ch := make(chan rpc.ACPUpdate, len(us))
+func updateChan(us ...protocol.ACPUpdate) <-chan protocol.ACPUpdate {
+	ch := make(chan protocol.ACPUpdate, len(us))
 	for _, u := range us {
 		ch <- u
 	}
@@ -252,8 +252,8 @@ func TestFollowWatchSummary_ExitsOnTurnEnd(t *testing.T) {
 }
 
 func TestFollowWatchSummaryUntilTurnEnd_IgnoresReplayCompletion(t *testing.T) {
-	updates := make(chan rpc.ACPUpdate, 3)
-	updates <- rpc.ACPUpdate{SessionUpdate: rpc.ACPUpdateSessionLoadEnd}
+	updates := make(chan protocol.ACPUpdate, 3)
+	updates <- protocol.ACPUpdate{SessionUpdate: protocol.ACPUpdateSessionLoadEnd}
 	updates <- textChunk("live")
 	updates <- turnEnd()
 	close(updates)
@@ -284,7 +284,7 @@ func TestFollowWatchSummaryUntilTurnEnd_IgnoresReplayCompletion(t *testing.T) {
 
 func TestFollowWatchSummary_ExitsOnReplayComplete(t *testing.T) {
 	// A successful session/load completes replay without sending _turn_end.
-	updates := updateChan(textChunk("replayed"), rpc.ACPUpdate{SessionUpdate: rpc.ACPUpdateSessionLoadEnd})
+	updates := updateChan(textChunk("replayed"), protocol.ACPUpdate{SessionUpdate: protocol.ACPUpdateSessionLoadEnd})
 
 	stdout, stderrBuf, restore := captureStd(t)
 	done := make(chan struct{})

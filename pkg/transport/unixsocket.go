@@ -3,7 +3,6 @@ package transport
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -74,7 +73,7 @@ type socketConn struct {
 
 // ReadMessage returns the next newline-delimited message, or an error (io.EOF
 // on close) when no more data is available.
-func (s *socketConn) ReadMessage() (json.RawMessage, error) {
+func (s *socketConn) ReadMessage() ([]byte, error) {
 	line, err := s.br.ReadBytes('\n')
 	if len(line) == 0 {
 		if err != nil {
@@ -85,13 +84,13 @@ func (s *socketConn) ReadMessage() (json.RawMessage, error) {
 	trimmed := bytes.TrimRight(line, "\r\n")
 	// Return the line even if empty so blank-line handling stays consistent
 	// with the stdio path (a blank line yields a parse error upstream).
-	msg := make(json.RawMessage, len(trimmed))
+	msg := make([]byte, len(trimmed))
 	copy(msg, trimmed)
 	return msg, nil
 }
 
 // WriteMessage writes msg followed by a newline, serialized across callers.
-func (s *socketConn) WriteMessage(msg json.RawMessage) error {
+func (s *socketConn) WriteMessage(msg []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.conn.Write(msg); err != nil {

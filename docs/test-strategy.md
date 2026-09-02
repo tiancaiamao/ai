@@ -45,7 +45,10 @@ Test individual functions and methods in isolation.
 | `pkg/llm` | `client_test.go` | LLM client |
 | `pkg/llm` | `errors_test.go` | Error classification |
 | `pkg/prompt` | `builder_test.go` | Prompt construction |
-| `pkg/rpc` | `acp_test.go` and related tests | ACP protocol server and client |
+| `pkg/protocol` | `acp_*_test.go` | ACP protocol server, client, and schema |
+| `pkg/e2e` | `acp_lifecycle_test.go` and related tests | ACP protocol and application integration |
+
+
 | `pkg/session` | `session_test.go` | Session CRUD |
 | `pkg/session` | `lazy_test.go` | Lazy loading |
 | `pkg/session` | `compaction_test.go` | Session compaction |

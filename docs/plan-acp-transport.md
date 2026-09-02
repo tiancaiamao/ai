@@ -1,15 +1,14 @@
 # Plan: Unify on ACP — protocol/transport separation, drop legacy RPC
 
 > Status: IMPLEMENTED. Phases 1–4 are complete on branch
-> `refactor/acp-transport-followup`. This document records the migration
+> `refactor/protocol-transport-separation`. This document records the migration
 > decisions, the resulting architecture, and the verification checklist.
 
 ## Goal
 
 Keep one code path for the agent kernel, expose it through ACP as the single
-public protocol, and separate protocol (ACP) from transport (stdio / Unix
-socket). Earlier protocol and socket-command paths are retired.
-
+public protocol, and separate protocol (ACP) from transport (stdio / Unix socket). Earlier protocol
+and socket-command paths are retired.
 
 Requirements:
 
@@ -28,10 +27,14 @@ needed.
 agent event emitter
         │
         ▼
-  pkg/rpc ACP kernel
+    pkg/app application runtime
+        │
+        ▼
+  pkg/protocol ACP layer
         │
         ▼
   pkg/transport
+
    ┌────┴──────────────┐
  stdio              Unix socket
  ai acp              ai serve
@@ -41,10 +44,12 @@ agent event emitter
                      └─────── ai run TUI
 ```
 
-`pkg/rpc` owns ACP request handling, session/application state, persistence,
-and translation of agent events into `session/update` notifications.
-`pkg/transport` owns stdio and Unix-socket framing and connection management.
-The agent kernel is shared by both transports.
+`pkg/app` owns application lifecycle, session/application state, persistence,
+and runtime capabilities. `pkg/protocol` owns ACP request handling and
+translation of agent events into `session/update` notifications.
+`pkg/transport` owns stdio and Unix-socket framing, connections, and dialing.
+The protocol layer depends only on its explicit `Runtime` and `Conn`
+interfaces.
 
 ## ACP event mapping
 
@@ -96,7 +101,8 @@ in `_meta`. Standard ACP clients may ignore these extensions.
 
 ### Phase 2 — Extract transports
 
-- [x] Define `transport.Conn`.
+- [x] Define the protocol `Conn` boundary.
+
 - [x] Implement stdio transport with unchanged framing behavior.
 - [x] Make the ACP server transport-independent.
 - [x] Implement concurrent Unix-socket transport and tests.
@@ -112,7 +118,7 @@ in `_meta`. Standard ACP clients may ignore these extensions.
 ### Phase 4 — Remove legacy RPC
 
 - [x] Remove the flat NDJSON event translator and legacy handlers.
-- [x] Remove the public `ai rpc` subcommand while retaining `pkg/rpc`.
+- [x] Remove the public `ai rpc` subcommand and legacy `pkg/rpc` package.
 - [x] Remove the custom socket command protocol.
 - [x] Update README and architecture documentation.
 - [x] Run the regression, build, and smoke-test checklist below.
@@ -139,5 +145,7 @@ make e2e
 
 - Code, comments, and documentation use English.
 - User-facing explanations use Chinese.
-- Keep `pkg/rpc` as the ACP kernel; do not rename it solely for protocol naming.
+- Keep ACP handling in `pkg/protocol`, application behavior in `pkg/app`, and
+  transport behavior in `pkg/transport`.
 - Do not commit directly to `main`.
+.

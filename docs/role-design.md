@@ -148,10 +148,11 @@ ai run
 | `cmd/ai/main.go` | 无变化 |
 | `subcommand/run/run.go` | 去掉 `--role` flag 定义（变成透传）；去掉 role→systemPrompt 解析逻辑；去掉 `prompt.TemplateForRole` 调用 |
 | `subcommand/acp/acp.go` | Add the `--role` flag and pass it to `RunACP` |
-| `pkg/rpc/acp.go` | Accept the role parameter in `RunACP` |
-| `pkg/rpc/rpc_setup.go` | `newRPCApp()` 根据 role 参数查找 `~/.ai/roles/<role>/agent.yaml`；skill-stats 路径随 role 变化 |
-| `pkg/rpc/rpc_app.go` | `createBaseContext()` 记录 role 到 session meta |
-| `pkg/rpc/rpc_helpers.go` | `buildSystemPrompt()` 逻辑调整（role config 优先级） |
+| `pkg/protocol/acp.go` | Accept the role parameter in `RunACP` |
+| `pkg/app/rpc_setup.go` | `newRPCApp()` 根据 role 参数查找 `~/.ai/roles/<role>/agent.yaml`；skill-stats 路径随 role 变化 |
+| `pkg/app/rpc_app.go` | `createBaseContext()` 记录 role 到 session meta |
+| `pkg/app/rpc_helpers.go` | `buildSystemPrompt()` 逻辑调整（role config 优先级） |
+
 | `pkg/session/manager.go` | `SessionMeta` 加 `Role` 字段；保存/恢复逻辑 |
 | `pkg/session/entries.go` | 无变化（role 不写 messages.jsonl） |
 | `pkg/prompt/builder.go` | 删除 `TemplateForRole()`；保留 `prompt.md` embed |

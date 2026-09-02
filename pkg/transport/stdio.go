@@ -3,7 +3,6 @@ package transport
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
 	"sync"
 )
@@ -32,10 +31,10 @@ func NewStdio(in io.Reader, out io.Writer) Conn {
 }
 
 // ReadMessage returns the next newline-delimited message, or io.EOF on close.
-func (c *stdioConn) ReadMessage() (json.RawMessage, error) {
+func (c *stdioConn) ReadMessage() ([]byte, error) {
 	if c.scanner.Scan() {
 		line := c.scanner.Bytes()
-		msg := make(json.RawMessage, len(line))
+		msg := make([]byte, len(line))
 		copy(msg, line)
 		return msg, nil
 	}
@@ -46,7 +45,7 @@ func (c *stdioConn) ReadMessage() (json.RawMessage, error) {
 }
 
 // WriteMessage writes msg followed by a newline, serialized across callers.
-func (c *stdioConn) WriteMessage(msg json.RawMessage) error {
+func (c *stdioConn) WriteMessage(msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, err := c.out.Write(msg); err != nil {

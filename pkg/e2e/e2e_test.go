@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/protocol"
 	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
@@ -109,7 +109,7 @@ func reportCoverage(tmp string) {
 type acpServer struct {
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
-	client    *rpc.ACPClient
+	client    *protocol.ACPClient
 	sessionID string
 	log       *acpLog
 	stderrBuf *syncBuffer
@@ -118,13 +118,13 @@ type acpServer struct {
 }
 
 type acpLog struct {
-	client  *rpc.ACPClient
+	client  *protocol.ACPClient
 	mu      sync.Mutex
-	history []rpc.ACPUpdate
+	history []protocol.ACPUpdate
 	done    chan struct{}
 }
 
-func newACPLog(client *rpc.ACPClient) *acpLog {
+func newACPLog(client *protocol.ACPClient) *acpLog {
 	l := &acpLog{client: client, done: make(chan struct{})}
 	go func() {
 		defer close(l.done)
@@ -137,7 +137,7 @@ func newACPLog(client *rpc.ACPClient) *acpLog {
 	return l
 }
 
-func (l *acpLog) waitUpdate(t *testing.T, predicate func(rpc.ACPUpdate) bool, timeout time.Duration) rpc.ACPUpdate {
+func (l *acpLog) waitUpdate(t *testing.T, predicate func(protocol.ACPUpdate) bool, timeout time.Duration) protocol.ACPUpdate {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -157,11 +157,11 @@ func (l *acpLog) waitUpdate(t *testing.T, predicate func(rpc.ACPUpdate) bool, ti
 		}
 	}
 	t.Fatalf("timed out waiting for ACP update")
-	return rpc.ACPUpdate{}
+	return protocol.ACPUpdate{}
 }
 
 func (l *acpLog) waitEvent(typ, pick, want string, timeout time.Duration) string {
-	update := l.waitUpdate(nil, func(u rpc.ACPUpdate) bool {
+	update := l.waitUpdate(nil, func(u protocol.ACPUpdate) bool {
 		if typ == "agent_end" {
 			return u.SessionUpdate == "_turn_end"
 		}
@@ -245,7 +245,7 @@ func startACPServerHome(t *testing.T, home, defaultPath, workDir string, flags .
 		t.Fatalf("start ai acp: %v", err)
 	}
 
-	client := rpc.NewACPClient(transport.NewStdio(stdout, stdin))
+	client := protocol.NewACPClient(transport.NewStdio(stdout, stdin))
 	if err := client.Initialize(); err != nil {
 		t.Fatalf("ACP initialize: %v\nstderr:\n%s", err, stderrBuf.String())
 	}
@@ -299,19 +299,19 @@ func (rs *acpServer) promptAsync(t *testing.T, msg string) {
 	}
 }
 
-func (rs *acpServer) waitUpdate(t *testing.T, kind string, timeout time.Duration) rpc.ACPUpdate {
+func (rs *acpServer) waitUpdate(t *testing.T, kind string, timeout time.Duration) protocol.ACPUpdate {
 	t.Helper()
-	return rs.log.waitUpdate(t, func(update rpc.ACPUpdate) bool {
+	return rs.log.waitUpdate(t, func(update protocol.ACPUpdate) bool {
 		return kind == "" || update.SessionUpdate == kind
 	}, timeout)
 }
 
-func (rs *acpServer) waitRequestError(t *testing.T, method string, timeout time.Duration) rpc.ACPUpdateError {
+func (rs *acpServer) waitRequestError(t *testing.T, method string, timeout time.Duration) protocol.ACPUpdateError {
 	t.Helper()
-	update := rs.log.waitUpdate(t, func(update rpc.ACPUpdate) bool {
-		return update.SessionUpdate == rpc.ACPUpdateRequestError
+	update := rs.log.waitUpdate(t, func(update protocol.ACPUpdate) bool {
+		return update.SessionUpdate == protocol.ACPUpdateRequestError
 	}, timeout)
-	errInfo, ok := update.Meta.(rpc.ACPUpdateError)
+	errInfo, ok := update.Meta.(protocol.ACPUpdateError)
 	if !ok {
 		t.Fatalf("ACP request error has unexpected meta: %#v", update.Meta)
 	}
@@ -321,7 +321,7 @@ func (rs *acpServer) waitRequestError(t *testing.T, method string, timeout time.
 	return errInfo
 }
 
-func updateMetaMap(t *testing.T, update rpc.ACPUpdate) map[string]any {
+func updateMetaMap(t *testing.T, update protocol.ACPUpdate) map[string]any {
 	t.Helper()
 	meta, ok := update.Meta.(map[string]any)
 	if !ok {
