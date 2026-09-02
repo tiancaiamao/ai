@@ -1,5 +1,7 @@
 # Plan: `history` 只读检索工具
 
+> **SUPERSEDED**: This plan has been implemented under a revised design. The authoritative design and current behavior live in [`docs/design-history-cli.md`](./design-history-cli.md). The rest of this document is kept for historical context only and may not reflect what was actually built.
+
 > 状态：设计待实现。目标读者：Coder agent。
 > 参考：Codex `ext/history-notes` 的 `history` 工具（PR #39827），但本实现是**本地、强一致、零网络**版本。
 

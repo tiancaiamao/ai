@@ -52,6 +52,32 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	// action_hint field has been removed
 }
 
+// TestUpdateRuntimeMetaSnapshotInjectsRunID verifies that the run ID assigned
+// by the serve registry appears in the model-visible runtime_state block, and
+// that it is omitted entirely when no run ID is set (interactive/local runs).
+func TestUpdateRuntimeMetaSnapshotInjectsRunID(t *testing.T) {
+	meta := ContextMeta{
+		TokensUsed:        1000,
+		TokensMax:         128000,
+		TokensPercent:     1.0,
+		MessagesInHistory: 2,
+	}
+
+	// Run with a run ID (subagent spawned via ai serve): line must be present.
+	runCtx := agentctx.NewAgentContext("sys")
+	snapshot := updateRuntimeMetaSnapshot(runCtx, meta, 3, "/tmp/wd", "/tmp/root", "cbbcf4", "coder")
+	if !containsString(snapshot, "run_id: cbbcf4") {
+		t.Fatalf("expected run_id line in runtime state, got: %s", snapshot)
+	}
+
+	// Run without a run ID (interactive): no run_id line at all.
+	localCtx := agentctx.NewAgentContext("sys")
+	snapshot = updateRuntimeMetaSnapshot(localCtx, meta, 3, "/tmp/wd", "/tmp/root", "", "coder")
+	if containsString(snapshot, "run_id:") {
+		t.Fatalf("expected run_id to be omitted when empty, got: %s", snapshot)
+	}
+}
+
 func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	// Note: ContextMgmtState removed in backport - CurrentTurn no longer tracked separately
