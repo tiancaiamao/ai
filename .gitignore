@@ -1,42 +1,33 @@
-bin/*
-.worktrees/
-
-coverage.out
-/ai
-
-# Benchmark temp
-__pycache__/
-*.pyc
-benchmark/results/progress.json
 
 # Auto-generated role stats
-**/skill-stats.json
-benchmark/tasks/*/setup/
-benchmark/tasks/*/*/setup/
-
-# Symphony workspace files (never commit these)
-WORKPAD.md
-WORKFLOW.md
-.ag/
-docs/refactor/
-coverage_new.out
-
-# Binary outputs
-cmd/ai/ai
-
-# Coverage
-cover.out
-
 # Benchmark results
-benchmark/results/result_*.json
-
-
+# Benchmark temp
+# Binary outputs
+# Coverage
 # Evolve artifacts (large benchmark data)
-results/
-agent/benchmarks/evolve/iteration-*.json
-agent/benchmarks/evolve/iter-*-artifacts/traces/
-agent/benchmarks/evolve/iter-*-artifacts/agent-snapshot/
-
 # Evolve iteration-*.json files contain full agent traces (100-500MB each).
+# Symphony workspace files (never commit these)
 # Too large for git. The structured summaries live in iter-*-artifacts/.
+**/skill-stats.json
+*.pyc
+.ag/
+.pge/
+.worktrees/
+/ai
+WORKFLOW.md
+WORKPAD.md
+__pycache__/
+agent/benchmarks/evolve/iter-*-artifacts/agent-snapshot/
+agent/benchmarks/evolve/iter-*-artifacts/traces/
 agent/benchmarks/evolve/iteration-*.json
+benchmark/results/progress.json
+benchmark/results/result_*.json
+benchmark/tasks/*/*/setup/
+benchmark/tasks/*/setup/
+bin/*
+cmd/ai/ai
+cover.out
+coverage.out
+coverage_new.out
+docs/refactor/
+results/

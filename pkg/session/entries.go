@@ -120,9 +120,9 @@ func timestampToMillis(ts string) int64 {
 	return parsed.UnixMilli()
 }
 
-func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry, sessionDir string) []agentctx.AgentMessage {
+func pathToLeaf(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry) []*SessionEntry {
 	if len(entries) == 0 {
-		return []agentctx.AgentMessage{}
+		return nil
 	}
 
 	var leaf *SessionEntry
@@ -131,9 +131,8 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 	} else {
 		leaf = entries[len(entries)-1]
 	}
-
 	if leaf == nil {
-		return []agentctx.AgentMessage{}
+		return nil
 	}
 
 	path := make([]*SessionEntry, 0)
@@ -148,6 +147,26 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 
 	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
 		path[i], path[j] = path[j], path[i]
+	}
+	return path
+}
+
+// resolveSnapshot loads the messages referenced by a compaction entry.
+func resolveSnapshot(entry *SessionEntry, sessionDir string) ([]agentctx.AgentMessage, error) {
+	if entry == nil || entry.SnapshotRef == "" || sessionDir == "" {
+		return nil, os.ErrNotExist
+	}
+	return loadSnapshotMessages(filepath.Join(sessionDir, entry.SnapshotRef))
+}
+
+func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry, sessionDir string) []agentctx.AgentMessage {
+	if len(entries) == 0 {
+		return []agentctx.AgentMessage{}
+	}
+
+	path := pathToLeaf(entries, leafID, byID)
+	if len(path) == 0 {
+		return []agentctx.AgentMessage{}
 	}
 
 	var compaction *SessionEntry
@@ -184,7 +203,7 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		// makes compaction entries simple pointers.
 		if compaction.SnapshotRef != "" && sessionDir != "" {
 			snapshotPath := filepath.Join(sessionDir, compaction.SnapshotRef)
-			if loaded, err := loadSnapshotMessages(snapshotPath); err == nil {
+			if loaded, err := resolveSnapshot(compaction, sessionDir); err == nil {
 				messages = append(messages, loaded...)
 			} else {
 				slog.Warn("[session] Failed to load compaction snapshot, falling back to summary only",
