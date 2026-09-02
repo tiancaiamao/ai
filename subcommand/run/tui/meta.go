@@ -25,15 +25,16 @@ const (
 
 // RunMeta holds metadata for a single serve process.
 type RunMeta struct {
-	ID           string `json:"id"`             // 6-char hex ID
-	PID          int    `json:"pid"`            // Process ID
-	CWD          string `json:"cwd"`            // working directory where ai run was invoked
-	Status       string `json:"status"`         // running, done, failed, killed
-	StartedAt    int64  `json:"started_at"`     // unix timestamp
-	FinishedAt   int64  `json:"finished_at"`    // unix timestamp, 0 if still running
-	Name         string `json:"name"`           // optional human-readable name
-	ParentRun    string `json:"parent_run"`     // optional parent run ID for subagents
-	PidStartTime int64  `json:"pid_start_time"` // epoch seconds of process start (for PID reuse detection)
+	ID           string `json:"id"`                // 6-char hex ID
+	PID          int    `json:"pid"`               // Process ID
+	CWD          string `json:"cwd"`               // working directory where ai run was invoked
+	Status       string `json:"status"`            // running, done, failed, killed
+	StartedAt    int64  `json:"started_at"`        // unix timestamp
+	FinishedAt   int64  `json:"finished_at"`       // unix timestamp, 0 if still running
+	Name         string `json:"name"`              // optional human-readable name
+	ParentRun    string `json:"parent_run"`        // optional parent run ID for subagents
+	PidStartTime int64  `json:"pid_start_time"`    // epoch seconds of process start (for PID reuse detection)
+	Session      string `json:"session,omitempty"` // session UUID this run is currently attached to (empty for runs created before this field existed)
 }
 
 // GenerateID returns a 6-character lowercase hex string using crypto/rand (3 bytes).
@@ -71,6 +72,15 @@ func SocketPath(baseDir, id string) string {
 func FindRunningByCwd(baseDir, cwd string) ([]RunMeta, error) {
 	return findByFilter(baseDir, func(m *RunMeta) bool {
 		return m.CWD == cwd && IsRunning(m)
+	})
+}
+
+// FindAllByCwd scans all run directories under baseDir/runs/, loads their
+// run.json, and returns those matching cwd regardless of status. Unlike
+// FindRunningByCwd it also includes finished runs (done/failed/killed).
+func FindAllByCwd(baseDir, cwd string) ([]RunMeta, error) {
+	return findByFilter(baseDir, func(m *RunMeta) bool {
+		return m.CWD == cwd
 	})
 }
 
@@ -296,6 +306,23 @@ func CreateRun(baseDir, cwd string, pid int) (*RunMeta, error) {
 		return nil, err
 	}
 	return meta, nil
+}
+
+// SetRunSession records the given session ID in a run's run.json. Called at
+// session creation and whenever the run switches sessions (e.g. /resume or
+// ACP session/load), so run-id based tools can resolve the session a run is
+// currently attached to.
+func SetRunSession(baseDir, runID, sessionID string) error {
+	path := RunMetaPath(baseDir, runID)
+	meta, err := LoadRunMeta(path)
+	if err != nil {
+		return fmt.Errorf("load run meta %s: %w", path, err)
+	}
+	meta.Session = sessionID
+	if err := SaveRunMeta(meta, path); err != nil {
+		return fmt.Errorf("save run meta %s: %w", path, err)
+	}
+	return nil
 }
 
 // PIDToString converts a PID to string (utility).

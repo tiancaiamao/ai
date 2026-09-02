@@ -14,6 +14,12 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+// runSessionUpdater records the active session in the parent run's run.json.
+// It is injected by the serve entrypoint (subcommand/run) via
+// SetRunSessionUpdater, because pkg/app cannot import subcommand/run/tui
+// directly (import cycle through the TUI renderer).
+var runSessionUpdater func(baseDir, runID, sessionID string) error
+
 // --- Session management handlers --@
 
 func (app *App) setSession(newSess *session.Session, newID, newName string) {
@@ -40,6 +46,32 @@ func (app *App) setSession(newSess *session.Session, newID, newName string) {
 	app.sessionID = newID
 	app.sessionName = newName
 	app.stateMu.Unlock()
+
+	// Keep run.json in sync with the active session so run-id addressing
+	// (e.g. `ai history --id <run>`) follows /resume-style switches.
+	app.updateRunSession(newID)
+}
+
+// updateRunSession records the active session in the run's run.json.
+// Best-effort: failures are logged and never affect the session switch.
+// No-op when the app runs without a parent serve run (empty run ID) or when
+// no updater has been registered (non-serve entrypoints).
+func (app *App) updateRunSession(sessionID string) {
+	if app.runID == "" || runSessionUpdater == nil {
+		return
+	}
+	if err := runSessionUpdater("", app.runID, sessionID); err != nil {
+		slog.Warn("failed to update run session",
+			"run", app.runID, "session", sessionID, "error", err)
+	}
+}
+
+// SetRunSessionUpdater registers the function used to record the active
+// session in the parent run's run.json. Called by the serve entrypoint,
+// which owns the run registry (pkg/app cannot import it without an import
+// cycle).
+func SetRunSessionUpdater(f func(baseDir, runID, sessionID string) error) {
+	runSessionUpdater = f
 }
 
 func (app *App) handleNewSession(args string) (any, error) {

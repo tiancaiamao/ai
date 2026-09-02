@@ -192,6 +192,9 @@ func startServeApp(cfg serveConfig) *serveApp {
 	if err != nil {
 		failServe(fmt.Sprintf("failed to create run meta: %v", err))
 	}
+	// Let pkg/app record the active session in run.json on session
+	// creation and /resume-style switches (session/load).
+	app.SetRunSessionUpdater(tui.SetRunSession)
 	id := meta.ID
 	runDir := tui.RunDir(baseDir, id)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {

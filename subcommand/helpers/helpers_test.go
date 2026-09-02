@@ -2,7 +2,10 @@ package helpers
 
 import (
 	"os"
+	"strings"
 	"testing"
+
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func TestParseSystemPrompt(t *testing.T) {
@@ -70,5 +73,134 @@ func TestParseSystemPrompt(t *testing.T) {
 	result, err = ParseSystemPrompt("@   " + tmpFile2)
 	if err != nil || result != "Content 2" {
 		t.Errorf("Expected 'Content 2', got %q", result)
+	}
+}
+
+// saveTestRun writes a run.json for the given id/status under baseDir.
+func saveTestRun(t *testing.T, baseDir, id, cwd, status string) {
+	t.Helper()
+	meta := &tui.RunMeta{
+		ID:     id,
+		PID:    os.Getpid(),
+		CWD:    cwd,
+		Status: status,
+	}
+	if err := tui.SaveRunMeta(meta, tui.RunMetaPath(baseDir, id)); err != nil {
+		t.Fatalf("SaveRunMeta %s: %v", id, err)
+	}
+}
+
+func TestResolveRunIDForHistory_AnyStatus(t *testing.T) {
+	baseDir := t.TempDir()
+	saveTestRun(t, baseDir, "aaa001", "/x", tui.StatusRunning)
+	saveTestRun(t, baseDir, "bbb002", "/x", tui.StatusDone)
+	saveTestRun(t, baseDir, "ccc003", "/x", tui.StatusFailed)
+	saveTestRun(t, baseDir, "ddd004", "/x", tui.StatusKilled)
+
+	for _, tc := range []struct{ id, wantStatus string }{
+		{"aaa001", tui.StatusRunning},
+		{"bbb002", tui.StatusDone},
+		{"ccc003", tui.StatusFailed},
+		{"ddd004", tui.StatusKilled},
+	} {
+		meta, err := ResolveRunIDForHistory(baseDir, tc.id)
+		if err != nil {
+			t.Fatalf("ResolveRunIDForHistory(%q): %v", tc.id, err)
+		}
+		if meta.ID != tc.id || meta.Status != tc.wantStatus {
+			t.Errorf("got run %s (status %s), want %s (status %s)", meta.ID, meta.Status, tc.id, tc.wantStatus)
+		}
+	}
+}
+
+func TestResolveRunIDForHistory_PrefixMatchingAnyStatus(t *testing.T) {
+	baseDir := t.TempDir()
+	saveTestRun(t, baseDir, "abc123", "/x", tui.StatusDone)
+
+	meta, err := ResolveRunIDForHistory(baseDir, "abc")
+	if err != nil {
+		t.Fatalf("prefix resolve: %v", err)
+	}
+	if meta.ID != "abc123" {
+		t.Errorf("got %s, want abc123", meta.ID)
+	}
+}
+
+func TestResolveRunIDForHistory_Errors(t *testing.T) {
+	baseDir := t.TempDir()
+	saveTestRun(t, baseDir, "abc123", "/x", tui.StatusDone)
+	saveTestRun(t, baseDir, "abc456", "/x", tui.StatusFailed)
+
+	// Nonexistent ID.
+	if _, err := ResolveRunIDForHistory(baseDir, "zzz999"); err == nil {
+		t.Error("expected error for nonexistent ID")
+	}
+	// Ambiguous prefix.
+	if _, err := ResolveRunIDForHistory(baseDir, "abc"); err == nil {
+		t.Error("expected error for ambiguous prefix")
+	}
+}
+
+func TestResolveRunIDForHistory_AutoSelectByCwd(t *testing.T) {
+	baseDir := t.TempDir()
+	dir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+	resolvedWd, err := os.Getwd() // macOS may resolve /var → /private/var
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No runs in cwd.
+	if _, err := ResolveRunIDForHistory(baseDir, ""); err == nil {
+		t.Error("expected error when no runs in cwd")
+	}
+
+	// Single finished run is auto-selected (unlike ResolveRunID).
+	saveTestRun(t, baseDir, "done001", resolvedWd, tui.StatusDone)
+	meta, err := ResolveRunIDForHistory(baseDir, "")
+	if err != nil {
+		t.Fatalf("auto-select single done run: %v", err)
+	}
+	if meta.ID != "done001" {
+		t.Errorf("got %s, want done001", meta.ID)
+	}
+
+	// Multiple runs in cwd → ambiguity error listing candidates.
+	saveTestRun(t, baseDir, "done002", resolvedWd, tui.StatusRunning)
+	_, err = ResolveRunIDForHistory(baseDir, "")
+	if err == nil {
+		t.Fatal("expected ambiguity error with multiple runs in cwd")
+	}
+	for _, id := range []string{"done001", "done002"} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("ambiguity error should list candidate %s: %v", id, err)
+		}
+	}
+}
+
+func TestResolveRunID_ExistingSemanticsUnchanged(t *testing.T) {
+	baseDir := t.TempDir()
+	saveTestRun(t, baseDir, "aaa001", "/x", tui.StatusRunning)
+	saveTestRun(t, baseDir, "bbb002", "/x", tui.StatusDone)
+
+	// Running run resolves.
+	meta, err := ResolveRunID(baseDir, "aaa001")
+	if err != nil || meta.ID != "aaa001" {
+		t.Fatalf("ResolveRunID running: meta=%+v err=%v", meta, err)
+	}
+	// Finished run must NOT resolve via exact match...
+	if _, err := ResolveRunID(baseDir, "bbb002"); err == nil {
+		t.Error("ResolveRunID should reject done runs (exact match)")
+	}
+	// ...nor via prefix match.
+	if _, err := ResolveRunID(baseDir, "bbb"); err == nil {
+		t.Error("ResolveRunID should reject done runs (prefix match)")
 	}
 }

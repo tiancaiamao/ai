@@ -251,6 +251,10 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 		runID:                 params.RunID,
 	}
 
+	// Record the initial session in run.json (serve/run init) so run-id
+	// addressing works from the very first prompt.
+	app.updateRunSession(sessionID)
+
 	// Always use LLM-decides compaction (unified context management).
 	decideCfg := compact.DefaultLLMDecideConfig(currentContextWindow)
 	compactorConfig.LLMDecide = &decideCfg
