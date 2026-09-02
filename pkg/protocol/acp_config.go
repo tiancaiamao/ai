@@ -105,8 +105,12 @@ func parseSetConfigParams(params json.RawMessage) (optionID, value string, ok bo
 		if !isMap {
 			continue
 		}
-		optionID, foundID = findStringKey(sub, idKeys)
-		value, foundVal = findStringKey(sub, valKeys)
+		if !foundID {
+			optionID, foundID = findStringKey(sub, idKeys)
+		}
+		if !foundVal {
+			value, foundVal = findStringKey(sub, valKeys)
+		}
 		if foundID && foundVal {
 			return optionID, value, true
 		}
