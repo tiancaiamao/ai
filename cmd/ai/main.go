@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/tiancaiamao/ai/subcommand/acp"
+	"github.com/tiancaiamao/ai/subcommand/history"
 	"github.com/tiancaiamao/ai/subcommand/kill"
 	"github.com/tiancaiamao/ai/subcommand/ls"
 	"github.com/tiancaiamao/ai/subcommand/models"
@@ -42,6 +43,8 @@ func main() {
 		send.SendSubcommand()
 	case "kill":
 		kill.KillSubcommand()
+	case "history":
+		history.HistorySubcommand()
 	case "login-codex":
 		loginCodexSubcommand()
 	default:
