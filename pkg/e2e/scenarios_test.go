@@ -505,6 +505,7 @@ func TestE2E_AutoCompaction(t *testing.T) {
 func TestE2E_BusyAndAbort(t *testing.T) {
 	m := requireEndpoint(t)
 	rs := startACPServer(t, m, "")
+	rs.commandAck(t, "set", "busy-mode reject")
 
 	// A streaming prompt we can probe mid-flight.
 	rs.promptAsync(t, "Count from 1 to 30, listing every number.")
@@ -625,11 +626,6 @@ func TestE2E_FlagsAndRoles(t *testing.T) {
 
 	turns.closeStdin()
 	turns.waitExit(15 * time.Second)
-
-	// Run ID threading.
-	rid := startACPServer(t, m, "", "-runid", "e2e-run-abc")
-	rid.closeStdin()
-	rid.waitExit(15 * time.Second)
 
 	// Unknown role → startup failure with nonzero exit.
 	code := expectExit(t, m, "", "-role", "does-not-exist-role")

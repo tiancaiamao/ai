@@ -375,12 +375,16 @@ func (app *rpcApp) handlePrompt(message string, raw bool, streamingBehavior stri
 	mode := app.steeringMode
 	followMode := app.followUpMode
 	pending := app.pendingSteer
+	busyMode := app.busyMode
 	app.stateMu.Unlock()
 
 	if streaming {
 		behavior := strings.TrimSpace(streamingBehavior)
 		if behavior == "" {
-			behavior = "steer"
+			behavior = busyMode
+			if behavior == "" {
+				behavior = "steer"
+			}
 		}
 		switch behavior {
 		case "steer":

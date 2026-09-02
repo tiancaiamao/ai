@@ -106,6 +106,14 @@ func TestExpandSkillCommands(t *testing.T) {
 	}
 }
 
+func TestHandlePromptUsesBusyMode(t *testing.T) {
+	app := &rpcApp{isStreaming: true, busyMode: "reject"}
+	_, err := app.handlePrompt("hello", true, "")
+	if err == nil || !strings.Contains(err.Error(), "rejected by busy-mode policy") {
+		t.Fatalf("busy mode reject was not applied: %v", err)
+	}
+}
+
 // --- slash handler error branches (no agent required) ---
 
 func TestHandleSteerSlashUsage(t *testing.T) {

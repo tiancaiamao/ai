@@ -366,10 +366,18 @@ func commandResult(t *testing.T, name string, raw json.RawMessage) map[string]an
 		return nil
 	}
 	var data map[string]any
-	if err := json.Unmarshal(result.Meta.CommandResult, &data); err != nil {
-		t.Fatalf("parse command %q data: %v", name, err)
+	if err := json.Unmarshal(result.Meta.CommandResult, &data); err == nil {
+		return data
 	}
-	return data
+	var text string
+	if err := json.Unmarshal(result.Meta.CommandResult, &text); err == nil {
+		if text == "" {
+			return nil
+		}
+		return map[string]any{"text": text}
+	}
+	t.Fatalf("parse command %q data: %s", name, result.Meta.CommandResult)
+	return nil
 }
 
 // commandAck sends a slash command through ACP and returns its result.
