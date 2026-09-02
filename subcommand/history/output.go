@@ -102,9 +102,15 @@ func formatSearchResult(result session.HistorySearchResult) string {
 }
 
 // formatSummary renders the trailing "total vs shown" line for text mode.
-func formatSummary(kind string, shown, total int) string {
-	if shown == total {
+// When totalKnown is false the total is a lower bound (the query layer
+// clamped the result set), so it is rendered with a "+" suffix (design §5
+// scenario 7: "100+") instead of masquerading as an exact count.
+func formatSummary(kind string, shown, total int, totalKnown bool) string {
+	if totalKnown && shown == total {
 		return fmt.Sprintf("%d %s(s)\n", total, kind)
 	}
-	return fmt.Sprintf("showing %d of %d %s(s)\n", shown, total, kind)
+	if totalKnown {
+		return fmt.Sprintf("showing %d of %d %s(s)\n", shown, total, kind)
+	}
+	return fmt.Sprintf("showing %d of %d+ %s(s)\n", shown, total, kind)
 }

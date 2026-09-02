@@ -199,7 +199,7 @@ Recovery: load messages from session JSONL (handles compaction snapshots) → re
 
 **Context:** How to expose different operational modes.
 
-**Decision:** Subcommands (`ai acp`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
+**Decision:** Subcommands (`ai acp`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`, `ai history`) instead of `--mode` flags.
 
 **Rationale:**
 - Clearer semantics (each command does one thing)
@@ -296,6 +296,7 @@ ai/
 ├── subcommand/           # Subcommand implementations
 │   ├── acp/              # ACP stdio entry point
 │   ├── helpers/           # Shared CLI utilities
+│   ├── history/           # Read-only session history CLI (windows/list/read/search)
 │   └── run/tui/           # TUI rendering and metadata
 ├── docs/                 # Documentation
 └── roles/                # Built-in role configurations

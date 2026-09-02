@@ -3,6 +3,26 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Read-Only Session History CLI: `ai history` (2026-08)
+
+**What changed**: Added a read-only query layer over persisted sessions and a
+new `ai history` subcommand (`windows` / `list` / `read` / `search`) for
+inspecting history across compaction boundaries. `pkg/session` gained bounded
+history queries (`ListWindows`, `ListItems`, `ReadItem`, `Search`) with hard
+output caps, and runs are now linked to their session via `RunMeta.Session` +
+`ResolveRunIDForHistory`, so `--id <run>` (or a unique prefix) addresses the
+session a run produced. Text output follows a navigation protocol (paging +
+totals + explicit truncation markers) and `--json` emits clean JSONL for
+piping. A session-history skill teaches the model to use the same commands for
+recovery ("what did we say before the compaction?") without a live window.
+
+**Why**: After compaction, earlier conversation content is invisible to both
+the user and the model, and there was no way to audit what an agent actually
+did in a past run. Exposing history as a separate read-only CLI keeps the
+write path untouched (compaction semantics unchanged) while giving humans and
+the model a budgeted, pipe-friendly window into prior generations. Run→session
+linking removes the need to know internal session directory paths.
+
 ## ACP-Only Public Control Surface (2026-08)
 
 **What changed**: Retired the public `ai rpc` command and its flat command/event

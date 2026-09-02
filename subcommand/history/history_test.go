@@ -3,6 +3,7 @@ package history
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,41 @@ func TestRunHistoryListTruncatesItemContent(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "…[truncated, 900 chars total]") {
 		t.Errorf("expected truncation marker in output, got %q", stdout)
+	}
+}
+
+func TestRunHistoryListClampedTotalShowsLowerBound(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sess")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	sess := session.NewSession(dir)
+	for i := 0; i < session.HistoryMaxLimit+5; i++ {
+		if _, err := sess.AppendMessage(agentctx.NewUserMessage(fmt.Sprintf("message %d", i))); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
+	// Default limit (20) with a full probe page: the summary must be a lower
+	// bound, not the shown count masquerading as a total.
+	stdout, stderr, code := runCapture("list", "--session", dir)
+	if code != 0 {
+		t.Fatalf("list failed: %s", stderr)
+	}
+	if !strings.Contains(stdout, "showing 20 of 100+ item(s)") {
+		t.Errorf("expected lower-bound summary, got %q", stdout)
+	}
+	if strings.Contains(stdout, "showing 20 of 20 item(s)") {
+		t.Error("full page must not be reported as an exact total")
+	}
+
+	// --limit above HistoryMaxLimit is clamped, so the page itself is full.
+	stdout, _, code = runCapture("list", "--session", dir, "--limit", "200")
+	if code != 0 {
+		t.Fatalf("list --limit 200 failed")
+	}
+	if !strings.Contains(stdout, "showing 100 of 100+ item(s)") {
+		t.Errorf("expected clamped lower-bound summary, got %q", stdout)
 	}
 }
 

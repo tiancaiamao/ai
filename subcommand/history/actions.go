@@ -58,7 +58,7 @@ func runWindows(args []string, stdout, stderr io.Writer) int {
 		out.emitRecord(formatWindow(win), win)
 	}
 	if !*jsonOutput {
-		out.emitRecord(formatSummary("window", len(windows), len(windows)), "")
+		out.emitRecord(formatSummary("window", len(windows), len(windows), true), "")
 	}
 	out.flush(stdout)
 	return 0
@@ -111,11 +111,9 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		out.emitRecord(formatItem(item), item)
 	}
 	if !*jsonOutput {
-		if totalKnown {
-			out.emitRecord(formatSummary("item", len(items), total), "")
-		} else {
-			out.emitRecord(formatSummary("item", len(items), len(items)), "")
-		}
+		// totalItemCount reports the total as unknown when the probe page was
+		// full; the summary is then a lower bound, not an exact count.
+		out.emitRecord(formatSummary("item", len(items), total, totalKnown), "")
 	}
 	out.flush(stdout)
 	return 0
@@ -283,7 +281,7 @@ func runSearch(args []string, stdout, stderr io.Writer) int {
 		out.emitRecord(formatSearchResult(result), result)
 	}
 	if !*jsonOutput {
-		out.emitRecord(formatSummary("match", len(response.Results), response.TotalCount), "")
+		out.emitRecord(formatSummary("match", len(response.Results), response.TotalCount, true), "")
 	}
 	out.flush(stdout)
 	return 0
