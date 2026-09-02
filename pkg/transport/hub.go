@@ -39,7 +39,7 @@ type Hub struct {
 // client's original id was.
 type route struct {
 	connIdx int
-	origID  json.RawMessage
+	origID  []byte
 	load    bool
 	aborted bool
 }
@@ -47,14 +47,14 @@ type route struct {
 type loadRoute struct {
 	uid     int64
 	connIdx int
-	updates []json.RawMessage
+	updates [][]byte
 	aborted bool
 }
 
 // inbound is one message read off a peer conn.
 type inbound struct {
 	connIdx int
-	msg     json.RawMessage
+	msg     []byte
 }
 
 // NewHub returns an empty hub ready to accept peers via AddConn.
@@ -123,7 +123,7 @@ func (h *Hub) readLoop(idx int, c Conn) {
 
 // ReadMessage implements Conn. It blocks until the next peer message is
 // available, returning io.EOF once the hub is closed.
-func (h *Hub) ReadMessage() (json.RawMessage, error) {
+func (h *Hub) ReadMessage() ([]byte, error) {
 	select {
 	case ib := <-h.incoming:
 		if uid, ok := requestID(ib.msg); ok && requestMethod(ib.msg) == "session/load" {
@@ -143,7 +143,7 @@ func (h *Hub) ReadMessage() (json.RawMessage, error) {
 // WriteMessage implements Conn. It classifies the server's outbound message and
 // routes it: responses back to their originating conn (original id restored),
 // notifications broadcast to all conns.
-func (h *Hub) WriteMessage(msg json.RawMessage) error {
+func (h *Hub) WriteMessage(msg []byte) error {
 	m, err := parseObject(msg)
 	if err != nil {
 		return err
@@ -167,7 +167,7 @@ func (h *Hub) WriteMessage(msg json.RawMessage) error {
 	}
 }
 
-func (h *Hub) routeUpdate(msg json.RawMessage) error {
+func (h *Hub) routeUpdate(msg []byte) error {
 	h.mu.Lock()
 	if h.activeLoad != nil {
 		if h.activeLoad.aborted {
@@ -175,7 +175,7 @@ func (h *Hub) routeUpdate(msg json.RawMessage) error {
 			return nil
 		}
 		if h.activeLoad.connIdx < len(h.conns) && h.conns[h.activeLoad.connIdx] != nil {
-			h.activeLoad.updates = append(h.activeLoad.updates, append(json.RawMessage(nil), msg...))
+			h.activeLoad.updates = append(h.activeLoad.updates, append([]byte(nil), msg...))
 			h.mu.Unlock()
 			return nil
 		}
@@ -191,7 +191,7 @@ func (h *Hub) routeUpdate(msg json.RawMessage) error {
 
 // routeResponse sends a server response to the conn that issued the matching
 // request, restoring the client's original id.
-func (h *Hub) routeResponse(msg json.RawMessage, id json.RawMessage) error {
+func (h *Hub) routeResponse(msg []byte, id []byte) error {
 	uid, err := int64ID(id)
 	if err != nil {
 		slog.Debug("[Hub] unroutable response id", "id", string(id), "error", err)
@@ -204,7 +204,7 @@ func (h *Hub) routeResponse(msg json.RawMessage, id json.RawMessage) error {
 		delete(h.routes, uid)
 	}
 	var c Conn
-	var replay []json.RawMessage
+	var replay [][]byte
 	var aborted bool
 	if ok && rt.load && h.activeLoad != nil && h.activeLoad.uid == uid {
 		replay = h.activeLoad.updates
@@ -245,7 +245,7 @@ func (h *Hub) routeResponse(msg json.RawMessage, id json.RawMessage) error {
 }
 
 // broadcast fans a notification out to every currently attached conn.
-func (h *Hub) broadcast(msg json.RawMessage) {
+func (h *Hub) broadcast(msg []byte) {
 	h.mu.Lock()
 	conns := make([]Conn, len(h.conns))
 	copy(conns, h.conns)
@@ -308,7 +308,7 @@ func (h *Hub) Close() error {
 // --- JSON helpers ---
 
 // parseObject decodes a JSON-RPC message into its raw fields.
-func parseObject(msg json.RawMessage) (map[string]json.RawMessage, error) {
+func parseObject(msg []byte) (map[string]json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(msg, &m); err != nil {
 		return nil, err
@@ -318,7 +318,7 @@ func parseObject(msg json.RawMessage) (map[string]json.RawMessage, error) {
 
 // extractRequestID returns the raw id and true if msg is a request (carries a
 // non-null id). Notifications (no id) return false.
-func extractRequestID(msg json.RawMessage) (json.RawMessage, bool) {
+func extractRequestID(msg []byte) ([]byte, bool) {
 	m, err := parseObject(msg)
 	if err != nil {
 		return nil, false
@@ -331,7 +331,7 @@ func extractRequestID(msg json.RawMessage) (json.RawMessage, bool) {
 }
 
 // requestID returns the hub-assigned numeric request id.
-func requestID(msg json.RawMessage) (int64, bool) {
+func requestID(msg []byte) (int64, bool) {
 	id, ok := extractRequestID(msg)
 	if !ok {
 		return 0, false
@@ -341,7 +341,7 @@ func requestID(msg json.RawMessage) (int64, bool) {
 }
 
 // requestMethod returns the JSON-RPC method, if present.
-func requestMethod(msg json.RawMessage) string {
+func requestMethod(msg []byte) string {
 	m, err := parseObject(msg)
 	if err != nil {
 		return ""
@@ -352,7 +352,7 @@ func requestMethod(msg json.RawMessage) string {
 }
 
 // int64ID parses a JSON number id.
-func int64ID(id json.RawMessage) (int64, error) {
+func int64ID(id []byte) (int64, error) {
 	var n int64
 	if err := json.Unmarshal(id, &n); err != nil {
 		return 0, err
@@ -360,21 +360,26 @@ func int64ID(id json.RawMessage) (int64, error) {
 	return n, nil
 }
 
-func responseHasError(msg json.RawMessage) bool {
+func responseHasError(msg []byte) bool {
 	m, err := parseObject(msg)
 	return err == nil && len(m["error"]) > 0 && string(m["error"]) != "null"
 }
 
 // rewriteID returns msg with its "id" field replaced by v, preserving all other
 // fields verbatim (as raw JSON).
-func rewriteID(msg json.RawMessage, v any) (json.RawMessage, error) {
+func rewriteID(msg []byte, v any) ([]byte, error) {
 	m, err := parseObject(msg)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
+	var raw json.RawMessage
+	if id, ok := v.([]byte); ok {
+		raw = append(json.RawMessage(nil), id...)
+	} else {
+		raw, err = json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
 	}
 	m["id"] = raw
 	return json.Marshal(m)

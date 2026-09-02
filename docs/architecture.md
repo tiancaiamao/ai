@@ -34,10 +34,13 @@ The `ai` project is a Go-based AI coding agent with an ACP-first architecture, o
                            │
                            ▼
 ┌────────────────────────────────────────────────────────────────┐
-│               pkg/rpc — ACP Kernel                              │
-│  acp.go           — ACP server and session/update translation   │
-│  acp_client.go    — ACP client used by local frontends          │
-│  types.go         — Shared kernel/application types             │
+│               pkg/app — Application Runtime                    │
+│  lifecycle, agent/session setup, handlers, persistence         │
+│               pkg/protocol — ACP Layer                         │
+│  acp.go — server, session/update translation; client           │
+│               pkg/transport — Wire Transports                 │
+│  newline framing, stdio, Unix sockets, and dialing             │
+
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼
@@ -121,7 +124,13 @@ The `ai` project is a Go-based AI coding agent with an ACP-first architecture, o
 
 ### Transport and protocol flow
 
-`pkg/rpc` owns ACP protocol handling and the agent/session application layer. `pkg/transport` provides message framing and connection multiplexing. `ai acp` uses stdio; `ai serve` runs the same ACP server over a Unix socket. `ai run`, `ai watch`, and `ai send` are local ACP clients of that socket.
+`pkg/app` owns application lifecycle, agent/session setup, persistence, and
+runtime capabilities. `pkg/protocol` implements ACP request handling and
+translates agent events into ACP updates. `pkg/transport` provides message
+framing, stdio and Unix-socket connections, and dialing. `ai acp` uses stdio;
+`ai serve` runs the same ACP server over a Unix socket. `ai run`, `ai watch`,
+and `ai send` are local ACP clients of that socket.
+
 
 ### Typical Turn (ACP)
 
@@ -294,4 +303,7 @@ ai/
 
 ## Protocol and Transport Boundary
 
-ACP is the only public protocol. `pkg/rpc` implements the ACP kernel and translates agent events into ACP updates; `pkg/transport` supplies stdio and Unix-socket connections. The CLI and TUI use the same ACP methods regardless of transport.
+ACP is the only public protocol. `pkg/protocol` implements ACP request
+handling and translates agent events into ACP updates; `pkg/app` supplies the
+application runtime; and `pkg/transport` supplies stdio and Unix-socket
+connections. The CLI and TUI use the same ACP methods regardless of transport.

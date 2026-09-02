@@ -9,7 +9,10 @@ The same ACP protocol is available over two transports:
 - **stdio**: `ai acp` reads from stdin and writes to stdout. This is intended for editor and external ACP clients.
 - **Unix socket**: `ai serve` listens at `~/.ai/runs/<id>/control.sock`. `ai run`, `ai watch`, and `ai send` connect to this socket as ACP clients.
 
-Transport framing is one JSON-RPC message per line. The protocol implementation lives in `pkg/rpc`; transport implementations live in `pkg/transport`.
+Transport framing is one JSON-RPC message per line. ACP message handling lives
+in `pkg/protocol`, application lifecycle and runtime capabilities live in
+`pkg/app`, and transport implementations live in `pkg/transport`.
+
 
 ## Methods
 

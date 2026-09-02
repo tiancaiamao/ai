@@ -17,7 +17,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/app"
+	"github.com/tiancaiamao/ai/pkg/protocol"
 	"github.com/tiancaiamao/ai/pkg/transport"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
@@ -117,7 +118,7 @@ type serveApp struct {
 	sockPath   string
 	socket     *transport.UnixSocket
 	hub        *transport.Hub
-	control    *rpc.ACPClient
+	control    *protocol.ACPClient
 	sessionID  string
 	logFile    *os.File
 
@@ -243,7 +244,7 @@ func startServeApp(cfg serveConfig) *serveApp {
 	ctx, cancel := context.WithCancel(context.Background())
 	sp.cancel = cancel
 	go func() {
-		err := rpc.RunACPWithContext(ctx, hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id)
+		err := app.RunACPWithContext(ctx, hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id)
 		if err != nil {
 			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
 		}
@@ -267,7 +268,7 @@ func startServeApp(cfg serveConfig) *serveApp {
 	}()
 
 	// Control client: initial prompt, signal abort and events.jsonl mirror.
-	control, sessionID, err := rpc.DialACP(sockPath)
+	control, sessionID, err := connectACP(sockPath)
 	if err != nil {
 		failServe(fmt.Sprintf("failed to start agent: %v (see %s)", err, filepath.Join(runDir, "error.log")))
 	}
@@ -396,7 +397,7 @@ func RunSubcommand(binPath string) {
 	}
 
 	// Attach the TUI to the agent over ACP.
-	client, sid, err := rpc.DialACP(tui.SocketPath("", sp.meta.ID))
+	client, sid, err := connectACP(tui.SocketPath("", sp.meta.ID))
 	if err != nil {
 		sp.stop()
 		sp.wait()
@@ -537,13 +538,13 @@ func (sp *serveProcess) wait() {
 type runModel struct {
 	watchModel
 	meta      *tui.RunMeta
-	client    *rpc.ACPClient
+	client    *protocol.ACPClient
 	sessionID string
 	inputMode bool // true when user is typing a message
 	inputBuf  *strings.Builder
 }
 
-func newRunModel(meta *tui.RunMeta, client *rpc.ACPClient, sessionID string) runModel {
+func newRunModel(meta *tui.RunMeta, client *protocol.ACPClient, sessionID string) runModel {
 	return runModel{
 		watchModel: newWatchModelForACP("ai run", meta.ID),
 		meta:       meta,
@@ -639,4 +640,12 @@ func (m runModel) View() string {
 	}
 
 	return m.viewport.View() + "\n" + status
+}
+
+func connectACP(path string) (*protocol.ACPClient, string, error) {
+	conn, err := transport.DialUnix(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return protocol.ConnectACP(conn)
 }

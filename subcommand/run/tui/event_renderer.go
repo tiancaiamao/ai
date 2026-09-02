@@ -3,12 +3,13 @@ package tui
 import (
 	"encoding/json"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/app"
 )
 
 // parseResponseEvent handles RPC response events from slash commands so that
 // `ai watch` displays the same human-readable output. All rendering lives in
-// pkg/rpc/render.go (shared with the ACP side); this file only maps the
+// pkg/app/render.go (shared with the ACP side); this file only maps the
+
 // rendered text onto a FormattedEvent and preserves TUI-specific behavior
 // (suppressing /new, response styling).
 func parseResponseEvent(evt map[string]any) *FormattedEvent {
@@ -41,7 +42,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	// Callers without a command name (FormatResponseData) fall back to shape
 	// detection inside the shared renderer.
 	command, _ := evt["command"].(string)
-	if text := rpc.FormatCommandResult(command, dataRaw); text != "" {
+	if text := app.FormatCommandResult(command, dataRaw); text != "" {
 		kind := KindMeta
 		if _, hasSessions := dataRaw["sessions"]; hasSessions {
 			// /sessions renders as a boxed response block, not a meta line.

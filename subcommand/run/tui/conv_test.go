@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/protocol"
 )
 
 func TestParseEvent_Empty(t *testing.T) {
@@ -123,7 +123,7 @@ func TestParseEvent_ToolExecutionStart_Legacy(t *testing.T) {
 }
 
 func TestParseACPUpdate_ToolCallIncludesCommand(t *testing.T) {
-	evt := ParseACPUpdate(rpc.ACPUpdate{
+	evt := ParseACPUpdate(protocol.ACPUpdate{
 		SessionUpdate: "tool_call",
 		Title:         "bash",
 		Kind:          "execute",

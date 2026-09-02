@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/protocol"
+	"github.com/tiancaiamao/ai/pkg/transport"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
@@ -75,13 +76,13 @@ func TestE2E_ACPSocketLifecycle(t *testing.T) {
 	}
 
 	sockPath := tui.SocketPath(filepath.Join(home, ".ai"), id)
-	driver, sid, err := rpc.DialACP(sockPath)
+	driver, sid, err := connectACP(sockPath)
 	if err != nil {
 		t.Fatalf("dial driver ACP socket: %v\nstderr: %s", err, stderr.String())
 	}
 	defer driver.Close()
 
-	watcher, watcherSID, err := rpc.DialACP(sockPath)
+	watcher, watcherSID, err := connectACP(sockPath)
 	if err != nil {
 		t.Fatalf("dial watcher ACP socket: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestE2E_ACPSocketLifecycle(t *testing.T) {
 		t.Fatal("timed out waiting for ACP prompt response")
 	}
 
-	replay, replaySID, err := rpc.DialACP(sockPath)
+	replay, replaySID, err := connectACP(sockPath)
 	if err != nil {
 		t.Fatalf("dial replay ACP socket: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestE2E_ACPSocketLifecycle(t *testing.T) {
 				replayUser = replayUser || strings.Contains(text, "live-ok") || strings.Contains(text, "response-ok")
 			case "agent_message_chunk":
 				replayAssistant = replayAssistant || strings.Contains(acpUpdateTextForTest(update.Content), "live-ok") || strings.Contains(acpUpdateTextForTest(update.Content), "response-ok")
-			case rpc.ACPUpdateSessionLoadEnd:
+			case protocol.ACPUpdateSessionLoadEnd:
 				replayDone = true
 			}
 		case <-time.After(100 * time.Millisecond):
@@ -195,4 +196,12 @@ func acpUpdateTextForTest(content any) string {
 		}
 	}
 	return fmt.Sprint(content)
+}
+
+func connectACP(path string) (*protocol.ACPClient, string, error) {
+	conn, err := transport.DialUnix(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return protocol.ConnectACP(conn)
 }

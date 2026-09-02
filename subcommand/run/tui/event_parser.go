@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/protocol"
 	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 
@@ -505,7 +505,7 @@ func intFromMap(m map[string]any, key string) int {
 // event. It is the ACP counterpart of ParseEvent (which parses legacy JSONL
 // event lines). The five "_" -prefixed sessionUpdate kinds carry their
 // payload in Meta (a map).
-func ParseACPUpdate(u rpc.ACPUpdate) *FormattedEvent {
+func ParseACPUpdate(u protocol.ACPUpdate) *FormattedEvent {
 	switch u.SessionUpdate {
 	case "agent_message_chunk":
 		text := acpUpdateText(u.Content)

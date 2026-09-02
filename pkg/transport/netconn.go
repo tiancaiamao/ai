@@ -3,7 +3,6 @@ package transport
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"io"
 	"net"
 	"sync"
@@ -23,7 +22,7 @@ type netConn struct {
 	mu   sync.Mutex
 }
 
-func (n *netConn) ReadMessage() (json.RawMessage, error) {
+func (n *netConn) ReadMessage() ([]byte, error) {
 	line, err := n.br.ReadBytes('\n')
 	if len(line) == 0 {
 		if err != nil {
@@ -32,12 +31,12 @@ func (n *netConn) ReadMessage() (json.RawMessage, error) {
 		return nil, io.EOF
 	}
 	trimmed := bytes.TrimRight(line, "\r\n")
-	msg := make(json.RawMessage, len(trimmed))
+	msg := make([]byte, len(trimmed))
 	copy(msg, trimmed)
 	return msg, nil
 }
 
-func (n *netConn) WriteMessage(msg json.RawMessage) error {
+func (n *netConn) WriteMessage(msg []byte) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if _, err := n.conn.Write(msg); err != nil {

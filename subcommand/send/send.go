@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
-	rpc "github.com/tiancaiamao/ai/pkg/rpc"
+	protocol "github.com/tiancaiamao/ai/pkg/protocol"
+	"github.com/tiancaiamao/ai/pkg/transport"
+
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
@@ -66,7 +68,7 @@ func SendSubcommand() {
 		os.Exit(1)
 	}
 
-	client, sid, err := rpc.DialACP(tui.SocketPath(baseDir, meta.ID))
+	client, sid, err := connectACP(tui.SocketPath(baseDir, meta.ID))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot connect to run %s: %v\n", meta.ID, err)
 		os.Exit(1)
@@ -88,7 +90,7 @@ func SendSubcommand() {
 
 // sendAndWait sends a message and blocks until the agent finishes processing
 // it (_turn_end), streaming the response in real-time.
-func sendAndWait(client *rpc.ACPClient, sid, message string, summary bool, timeout time.Duration) {
+func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, timeout time.Duration) {
 	updates := client.Updates()
 	var deadline <-chan time.Time
 	if timeout > 0 {
@@ -112,8 +114,8 @@ func sendAndWait(client *rpc.ACPClient, sid, message string, summary bool, timeo
 				fmt.Fprintln(os.Stderr, "--- agent stream ended ---")
 				return
 			}
-			if u.SessionUpdate == rpc.ACPUpdateRequestError {
-				if e, ok := u.Meta.(rpc.ACPUpdateError); ok {
+			if u.SessionUpdate == protocol.ACPUpdateRequestError {
+				if e, ok := u.Meta.(protocol.ACPUpdateError); ok {
 					fmt.Fprintf(os.Stderr, "error: %s failed: %s\n", e.Method, e.Message)
 				}
 				return
@@ -192,4 +194,12 @@ func isTerminal(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+func connectACP(path string) (*protocol.ACPClient, string, error) {
+	conn, err := transport.DialUnix(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return protocol.ConnectACP(conn)
 }

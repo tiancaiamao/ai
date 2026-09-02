@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/app"
 	"github.com/tiancaiamao/ai/pkg/transport"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 )
@@ -49,9 +49,9 @@ func ACPSubcommand() {
 	// during initialization (see logger.NewLogger).
 	var runErr error
 	if *agentConfigFlag != "" {
-		runErr = rpc.RunACPWithAgentConfigContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, "")
+		runErr = app.RunACPWithAgentConfigContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, "")
 	} else {
-		runErr = rpc.RunACPWithContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, "")
+		runErr = app.RunACPWithContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, "")
 	}
 	if err := runErr; err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

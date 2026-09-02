@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/protocol"
 )
 
 // --- Model resolution + isolated models.json ---
@@ -488,7 +488,7 @@ func TestE2E_AutoCompaction(t *testing.T) {
 	// The ACP log is the sole consumer of session/update notifications.
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
-		update := rs2.log.waitUpdate(t, func(update rpc.ACPUpdate) bool {
+		update := rs2.log.waitUpdate(t, func(update protocol.ACPUpdate) bool {
 			return update.SessionUpdate == "_compaction"
 		}, time.Until(deadline))
 		meta := updateMetaMap(t, update)
@@ -537,7 +537,8 @@ func TestE2E_BusyAndAbort(t *testing.T) {
 }
 
 // TestE2E_SteerAndFollowUp exercises the /steer and /follow-up slash handlers
-// (pkg/rpc/rpc_help_handlers.go), which are only reachable while the agent is
+// pkg/app/rpc_help_handlers.go, which are only reachable while the agent is
+
 // streaming — a state no other e2e test enters with these command types.
 func TestE2E_SteerAndFollowUp(t *testing.T) {
 	m := requireEndpoint(t)

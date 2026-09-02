@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/protocol"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
@@ -41,7 +41,7 @@ var (
 // acpEventMsg is a tea.Msg delivered for each ACP session/update received
 // from the agent (via a live ACP client connection).
 type acpEventMsg struct {
-	u rpc.ACPUpdate
+	u protocol.ACPUpdate
 }
 
 // acpStreamClosedMsg is a tea.Msg delivered when the ACP connection is closed
@@ -457,7 +457,7 @@ func WatchSubcommand() {
 
 	// TUI mode: attach to the live ACP agent over its unix socket.
 	sockPath := tui.SocketPath("", meta.ID)
-	client, sid, err := rpc.DialACP(sockPath)
+	client, sid, err := connectACP(sockPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot attach to agent: %v\n", err)
 		os.Exit(1)
@@ -484,7 +484,7 @@ func WatchSubcommand() {
 // consumeACP pumps ACP updates from the client into the tea program. It runs
 // in a background goroutine and exits when the update stream is closed.
 // Note: tea.Program.Send is safe to call after the program exits.
-func (m *watchModel) consumeACP(updates <-chan rpc.ACPUpdate, p *tea.Program) {
+func (m *watchModel) consumeACP(updates <-chan protocol.ACPUpdate, p *tea.Program) {
 	for u := range updates {
 		p.Send(acpEventMsg{u: u})
 	}
@@ -546,7 +546,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	// watchTimeout == -1: flag not set → default behavior (exit on _turn_end)
 	// watchTimeout == 0: wait forever (until the agent process exits)
 	// watchTimeout > 0: wait up to this duration
-	client, sid, err := rpc.DialACP(tui.SocketPath("", meta.ID))
+	client, sid, err := connectACP(tui.SocketPath("", meta.ID))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot connect to agent: %v\n", err)
 		os.Exit(1)
@@ -603,7 +603,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		seq := fromSeq
 		ended := false
 		for u := range updates {
-			if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+			if u.SessionUpdate == protocol.ACPUpdateSessionLoadEnd {
 				if replayLoaded {
 					ended = true
 					break
@@ -643,7 +643,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	lastTextRole := ""
 	ended := false
 	for u := range updates {
-		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+		if u.SessionUpdate == protocol.ACPUpdateSessionLoadEnd {
 			if replayLoaded {
 				ended = true
 				break
@@ -709,18 +709,18 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 // followWatchSummary accumulates events and only prints the final assistant text
 // when _turn_end or session/load replay completion is reached. This avoids
 // flooding tool output with intermediate thinking, tool calls, and tool results.
-func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) bool {
+func followWatchSummary(updates <-chan protocol.ACPUpdate, fromSeq uint64) bool {
 	return followWatchSummaryWithReplay(updates, fromSeq, true)
 }
 
-func followWatchSummaryWithReplay(updates <-chan rpc.ACPUpdate, fromSeq uint64, stopOnReplay bool) bool {
+func followWatchSummaryWithReplay(updates <-chan protocol.ACPUpdate, fromSeq uint64, stopOnReplay bool) bool {
 	var lastAssistantText strings.Builder
 	var currentAssistantText strings.Builder
 	seq := fromSeq
 	ended := false
 
 	for u := range updates {
-		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+		if u.SessionUpdate == protocol.ACPUpdateSessionLoadEnd {
 			if !stopOnReplay {
 				continue
 			}
