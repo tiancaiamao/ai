@@ -1,9 +1,9 @@
 package rpc
 
-// ACP (Agent Client Protocol) agent over stdio.
+// ACP (Agent Client Protocol) agent over the configured transport.
 //
-// Framing is newline-delimited JSON-RPC 2.0 (the same NDJSON transport used
-// by `ai rpc`), so the read loop is structurally identical to Server.
+// Framing is newline-delimited JSON-RPC 2.0. The same handler is used for
+// stdio and Unix-socket transports.
 //
 // Implemented surface (minimal, per spec baseline):
 //   - initialize                 -> protocolVersion 1 + capabilities
@@ -121,6 +121,8 @@ type acpUpdate struct {
 	// so hosts like AionUi can render the invocation parameters.
 	RawInput map[string]any        `json:"rawInput,omitempty"`
 	Commands []acpAvailableCommand `json:"commands,omitempty"`
+	Used     *int                  `json:"used,omitempty"`
+	Size     *int                  `json:"size,omitempty"`
 	// Meta carries implementation-specific extension data for `_`-prefixed
 	// sessionUpdate values. Per ACP extensibility, custom data lives in _meta;
 	// standard ACP clients ignore it.
@@ -164,17 +166,37 @@ type acpServer struct {
 }
 
 // RunACP runs the agent as an ACP server over the given transport conn. Setup
-// mirrors RunRPC: same config, session, tools, compactor and agent; only the
-// protocol layer differs. The conn may be a stdio channel (NewStdio) or a hub
-// multiplexing several unix-socket peers (NewHub); the ACP core is identical
-// either way.
+// constructs the shared agent kernel (config, session, tools, compactor and
+// agent); only the protocol layer is ACP.
 func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+	return RunACPWithContext(context.Background(), conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, role, modelOverride, runID)
+}
+
+// RunACPWithAgentConfig runs ACP with an explicit agent.yaml configuration.
+func RunACPWithAgentConfig(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
+	return RunACPWithAgentConfigContext(context.Background(), conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, agentConfigPath, modelOverride, runID)
+}
+
+// RunACPWithContext runs ACP until the transport closes or ctx is canceled.
+// Canceling ctx aborts the active agent and waits for persistence cleanup.
+func RunACPWithContext(ctx context.Context, conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+	return runACP(ctx, conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, role, "", modelOverride, runID)
+}
+
+// RunACPWithAgentConfigContext runs ACP with an explicit agent.yaml
+// configuration until the transport closes or ctx is canceled.
+func RunACPWithAgentConfigContext(ctx context.Context, conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
+	return runACP(ctx, conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, "", agentConfigPath, modelOverride, runID)
+}
+
+func runACP(ctx context.Context, conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, agentConfigPath string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
 		maxTurns:           maxTurns,
 		debugAddr:          debugAddr,
 		role:               role,
+		agentConfigPath:    agentConfigPath,
 		modelOverride:      modelOverride,
 		runID:              runID,
 	})
@@ -192,21 +214,16 @@ func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSys
 
 	// --- ACP server ---
 	srv := &acpServer{app: app, conn: conn}
-	srv.ctx, srv.cancel = context.WithCancel(context.Background())
+	srv.ctx, srv.cancel = context.WithCancel(ctx)
 	defer srv.cancel()
 	// Unblock the transport read on shutdown: canceling the ctx closes the conn,
 	// which yields io.EOF from ReadMessage so the run loop exits cleanly.
 	go func() {
 		<-srv.ctx.Done()
-		conn.Close()
+		_ = conn.Close()
+		ag.Abort()
 	}()
 
-	// Command registry: reuse the NDJSON Server purely for slash-command
-	// registration (handlePrompt dispatches /commands through it). Events go
-	// through srv.emit, never through app.server.
-	server := NewServer()
-	server.SetOutput(io.Discard)
-	app.server = server
 	app.registerAllHandlers()
 	app.buildSkillCommands()
 
@@ -225,14 +242,8 @@ func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSys
 		}()
 	}
 
-	// --- External abort signal (SIGINT/SIGTERM from the CLI wrapper) ---
-	go func() {
-		<-agentAbortSignal
-		slog.Info("[ACP] External abort signal received, aborting agent")
-		srv.markCancelled()
-		ag.Abort()
-		srv.cancel()
-	}()
+	// ACP cancellation is driven by the server context.
+	// CLI wrappers can close the transport to interrupt the read loop.
 
 	// --- Debug server if enabled ---
 	app.startDebugServer()
@@ -528,7 +539,7 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	// synchronously (no agent turn involved). Skill prompts (/skill:<name>)
 	// are excluded here — they run through the normal prompt path below where
 	// handlePrompt expands them into a full skill block.
-	if name, args, ok := matchACPCommand(s.app.server, message); ok {
+	if name, args, ok := matchACPCommand(s.app.commands, message); ok {
 		if name == "compact" {
 			// Compaction can take a while. Emit the command before running the
 			// synchronous handler so clients see an immediate acknowledgement;
@@ -561,7 +572,7 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	// with '/' without being a command (a Go comment does too), so only an
 	// explicit /skill:<name> prefix opts into skill-command parsing.
 	raw := !skill.IsSkillCommand(message)
-	if _, err := s.app.handlePrompt(RPCCommand{Type: "prompt", Message: message, Raw: raw}); err != nil {
+	if _, err := s.app.handlePrompt(message, raw, ""); err != nil {
 		s.pendingMu.Lock()
 		s.pendingPrompt = nil
 		s.pendingMu.Unlock()
@@ -574,7 +585,7 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 // '/...' text (e.g. a comment) returns false so the caller keeps treating it
 // as raw free text. Skill prompts are intentionally excluded: they are not
 // registry entries and need the expansion path in app.handlePrompt.
-func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
+func matchACPCommand(commands *command.Registry, msg string) (name, args string, ok bool) {
 	msg = strings.TrimSpace(msg)
 	if !strings.HasPrefix(msg, "/") {
 		// Some hosts prepend their own context blocks to a prompt (e.g. AionUi
@@ -598,7 +609,7 @@ func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
 	if err != nil {
 		return "", "", false
 	}
-	if _, found := server.GetSlashHandler(cmdName); !found {
+	if _, found := commands.Get(cmdName); !found {
 		return "", "", false
 	}
 	return cmdName, rest, true
@@ -610,7 +621,7 @@ func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
 // so no pendingPrompt is registered — the deferred-response path in emit never
 // fires for commands.
 func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
-	handler, _ := s.app.server.GetSlashHandler(name)
+	handler, _ := s.app.commands.Get(name)
 	result, err := handler(args)
 	if err != nil {
 		s.sendError(id, acpErrInvalidParams, fmt.Sprintf("/%s failed: %v", name, err))
@@ -622,7 +633,11 @@ func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
 			Content:       map[string]string{"type": "text", "text": text},
 		})
 	}
-	s.sendResult(id, map[string]string{"stopReason": acpStopEndTurn})
+	resultPayload := map[string]any{"stopReason": acpStopEndTurn}
+	if result != nil {
+		resultPayload["_meta"] = map[string]any{"commandResult": result}
+	}
+	s.sendResult(id, resultPayload)
 }
 
 // formatACPCommandResult renders a slash-handler result for display. The
@@ -652,7 +667,7 @@ func formatACPCommandResult(name string, result any) string {
 // joined by one item per installed skill (/skill:<name>). Safe to call again
 // later to refresh the list.
 func (s *acpServer) sendAvailableCommands() {
-	listed := s.app.server.ListSlashCommands()
+	listed := s.app.commands.ListCommands()
 	commands := make([]acpAvailableCommand, 0, len(listed)+len(s.app.skillCommands))
 	for _, c := range listed {
 		commands = append(commands, acpAvailableCommand{Name: c.Name, Description: c.Description})
@@ -719,6 +734,20 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 				Content:       map[string]string{"type": "text", "text": ae.Delta},
 			})
 		}
+
+	case agent.EventMessageEnd:
+		// Usage is available on the completed assistant message. ACP exposes it
+		// as a session/update so hosts can refresh their context indicator.
+		if event.Message == nil || event.Message.Role != "assistant" || event.Message.Usage == nil || s.app == nil || s.app.currentContextWindow <= 0 {
+			return
+		}
+		used := event.Message.Usage.TotalTokens
+		size := s.app.currentContextWindow
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "usage_update",
+			Used:          &used,
+			Size:          &size,
+		})
 
 	case agent.EventToolExecutionStart:
 		s.sendUpdate(acpUpdate{

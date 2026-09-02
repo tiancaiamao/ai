@@ -85,21 +85,21 @@ func (app *rpcApp) handleAbortSlash(args string) (any, error) {
 // registerHelpHandlers registers help and miscellaneous slash commands.
 func (app *rpcApp) registerHelpHandlers() {
 	// /help
-	app.server.RegisterSlash("help", "Show available slash commands", func(args string) (any, error) {
+	app.commands.Register("help", "Show available slash commands", func(args string) (any, error) {
 		_ = args
-		commands := app.server.ListSlashCommands()
+		commands := app.commands.ListCommands()
 		return map[string]any{"commands": commands}, nil
 	})
 
 	// /skills
-	app.server.RegisterSlash("skills", "List available skills", func(args string) (any, error) {
+	app.commands.Register("skills", "List available skills", func(args string) (any, error) {
 		_ = args
 		slog.Info("Received skills")
 		return map[string]any{"commands": app.skillCommands}, nil
 	})
 
 	// /quit
-	app.server.RegisterSlash("quit", "Exit the application", func(args string) (any, error) {
+	app.commands.Register("quit", "Exit the application", func(args string) (any, error) {
 		_ = args
 		slog.Info("Received quit command, exiting application")
 		os.Exit(0)
@@ -107,17 +107,17 @@ func (app *rpcApp) registerHelpHandlers() {
 	})
 
 	// /steer
-	app.server.RegisterSlash("steer", "Inject mid-conversation guidance", func(args string) (any, error) {
+	app.commands.Register("steer", "Inject mid-conversation guidance", func(args string) (any, error) {
 		return app.handleSteerSlash(args)
 	})
 
 	// /abort
-	app.server.RegisterSlash("abort", "Abort the current agent execution", func(args string) (any, error) {
+	app.commands.Register("abort", "Abort the current agent execution", func(args string) (any, error) {
 		return app.handleAbortSlash(args)
 	})
 
 	// /follow-up
-	app.server.RegisterSlash("follow-up", "Add a follow-up message when agent is busy", func(args string) (any, error) {
+	app.commands.Register("follow-up", "Add a follow-up message when agent is busy", func(args string) (any, error) {
 		return app.handleFollowUpSlash(args)
 	})
 }

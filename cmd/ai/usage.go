@@ -1,55 +1,11 @@
-package rpcsubcommand
+package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
-
-	"github.com/tiancaiamao/ai/pkg/rpc"
-	"github.com/tiancaiamao/ai/subcommand/helpers"
 )
 
-// RPCSubcommand implements the 'ai rpc' subcommand.
-func RPCSubcommand() {
-	fs := flag.NewFlagSet("rpc", flag.ExitOnError)
-	sessionPathFlag := fs.String("session", "", "Session file path")
-	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
-	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
-	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
-	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
-	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
-	modelFlag := fs.String("model", "", `Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.`)
-	runidFlag := fs.String("runid", "", "Run ID from parent ai serve process (used for subagent tracking)")
-	fs.Parse(os.Args[1:])
-
-	// Setup signal handling for graceful shutdown.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigCh
-		fmt.Fprintf(os.Stderr, "[rpc] received signal: %v, aborting agent\n", sig)
-		rpc.AgentAbort() // Trigger agent abort in RunRPC
-	}()
-
-	systemPrompt, err := helpers.ParseSystemPrompt(*systemPromptFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
-	// during initialization (see logger.NewLogger).
-	if err := rpc.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, *runidFlag); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// PrintUsage prints the CLI usage text to stderr.
-func PrintUsage() {
+func printUsage() {
 	fmt.Fprint(os.Stderr, `ai - AI coding assistant
 
 Usage:
@@ -58,7 +14,6 @@ Usage:
 Subcommands:
   run             Start agent with interactive TUI (serve + watch)
   serve           Start agent as background daemon
-  rpc             Start in raw RPC mode (stdin/stdout JSON-RPC)
   acp             Start as ACP agent over stdio (agent-shell, Zed, etc.)
   ls              List running and recent runs
   models          List available models (use "provider/id" syntax for --model)
@@ -88,15 +43,6 @@ Flags for 'serve':
   --id-file <path>         Write run ID to this file after startup
   --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
 
-Flags for 'rpc':
-  --session <path>         Session file path
-  --system-prompt <text>   Custom system prompt (@file to load from file)
-  --role <name>            Agent role name: loads ~/.ai/roles/<name>/agent.yaml
-  --max-turns <n>          Maximum conversation turns (0 = unlimited)
-  --timeout <duration>     Total execution timeout (0 = unlimited)
-  --http <addr>            Enable HTTP debug server (e.g., ':6060')
-    --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
-
 Flags for 'ls':
   --all                    Include finished runs
   --json                   JSON output
@@ -123,9 +69,9 @@ Examples:
   ai run --input "fix the bug"    Start with an initial prompt
   ai serve                        Start agent as background daemon
   ai serve --input "fix the bug"  Start daemon with an initial prompt
-  ai rpc                          Start raw JSON-RPC on stdin/stdout
+  ai acp                         Start ACP on stdin/stdout
   ai ls                           List running agents
-  ai ls --all                     Include finished runs
+  ai ls --all                     Include finished agents
   ai models                       List available models
   ai models deepseek               Search models by keyword
   ai send "hello"                 Send message to agent in current directory

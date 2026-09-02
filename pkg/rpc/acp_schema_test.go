@@ -87,7 +87,11 @@ func TestACPSchemaNotifications(t *testing.T) {
 	compiler := newACPSchemaCompiler(t)
 
 	var buf bytes.Buffer
-	srv := &acpServer{conn: transport.NewStdio(strings.NewReader(""), &buf), sessionID: "sess-test"}
+	srv := &acpServer{
+		app:       &rpcApp{currentContextWindow: 128000},
+		conn:      transport.NewStdio(strings.NewReader(""), &buf),
+		sessionID: "sess-test",
+	}
 
 	// agent_message_chunk
 	srv.emit(agent.NewMessageUpdateEvent(
@@ -99,6 +103,15 @@ func TestACPSchemaNotifications(t *testing.T) {
 		context.AgentMessage{},
 		agent.AssistantMessageEvent{Type: "thinking_delta", Delta: "let me think..."},
 	))
+	// usage_update
+	srv.emit(agent.NewMessageEndEvent(context.AgentMessage{
+		Role: "assistant",
+		Usage: &context.Usage{
+			InputTokens:  100,
+			OutputTokens: 25,
+			TotalTokens:  125,
+		},
+	}))
 	// tool_call (pending)
 	srv.emit(agent.NewToolExecutionStartEvent("tool-1", "bash", map[string]interface{}{"command": "ls"}))
 	// tool_call_update (completed, with tool output)
@@ -111,8 +124,8 @@ func TestACPSchemaNotifications(t *testing.T) {
 	}, true))
 
 	lines := bytes.Split(bytes.TrimRight(buf.Bytes(), "\n"), []byte("\n"))
-	if len(lines) != 5 {
-		t.Fatalf("expected 5 notifications, got %d: %s", len(lines), buf.String())
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 notifications, got %d: %s", len(lines), buf.String())
 	}
 	for i, line := range lines {
 		var m map[string]any
@@ -140,11 +153,26 @@ func TestACPSchemaNotifications(t *testing.T) {
 		t.Errorf("agent_thought_chunk: expected text block with delta, got %v", thoughtUpd["content"])
 	}
 
+	var usageMsg map[string]any
+	if err := json.Unmarshal(lines[2], &usageMsg); err != nil {
+		t.Fatalf("notification 2 not valid JSON: %v", err)
+	}
+	usageUpd := usageMsg["params"].(map[string]any)["update"].(map[string]any)
+	if kind, _ := usageUpd["sessionUpdate"].(string); kind != "usage_update" {
+		t.Errorf("expected usage_update, got %v", usageUpd)
+	}
+	if used, _ := usageUpd["used"].(float64); used != 125 {
+		t.Errorf("usage_update: expected used 125, got %v", usageUpd["used"])
+	}
+	if size, _ := usageUpd["size"].(float64); size != 128000 {
+		t.Errorf("usage_update: expected size 128000, got %v", usageUpd["size"])
+	}
+
 	// The pending tool_call must surface its arguments as rawInput — hosts
 	// like AionUi read this field to render the invocation parameters.
 	var startMsg map[string]any
-	if err := json.Unmarshal(lines[2], &startMsg); err != nil {
-		t.Fatalf("notification 2 not valid JSON: %v", err)
+	if err := json.Unmarshal(lines[3], &startMsg); err != nil {
+		t.Fatalf("notification 3 not valid JSON: %v", err)
 	}
 	toolUpd := startMsg["params"].(map[string]any)["update"].(map[string]any)
 	rawInput, ok := toolUpd["rawInput"].(map[string]any)
@@ -156,8 +184,8 @@ func TestACPSchemaNotifications(t *testing.T) {
 	}
 
 	var endMsg map[string]any
-	if err := json.Unmarshal(lines[3], &endMsg); err != nil {
-		t.Fatalf("notification 3 not valid JSON: %v", err)
+	if err := json.Unmarshal(lines[4], &endMsg); err != nil {
+		t.Fatalf("notification 4 not valid JSON: %v", err)
 	}
 	endUpd := endMsg["params"].(map[string]any)["update"].(map[string]any)
 	if title, _ := endUpd["title"].(string); title != "bash" {

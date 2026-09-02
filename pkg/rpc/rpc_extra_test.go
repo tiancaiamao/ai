@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -107,6 +106,14 @@ func TestExpandSkillCommands(t *testing.T) {
 	}
 }
 
+func TestHandlePromptUsesBusyMode(t *testing.T) {
+	app := &rpcApp{isStreaming: true, busyMode: "reject"}
+	_, err := app.handlePrompt("hello", true, "")
+	if err == nil || !strings.Contains(err.Error(), "rejected by busy-mode policy") {
+		t.Fatalf("busy mode reject was not applied: %v", err)
+	}
+}
+
 // --- slash handler error branches (no agent required) ---
 
 func TestHandleSteerSlashUsage(t *testing.T) {
@@ -158,88 +165,8 @@ func TestHandleRewindUsage(t *testing.T) {
 	}
 }
 
-// --- Server methods ---
+// --- /set handler ---
 
-func TestServerBasics(t *testing.T) {
-	s := NewServer()
-
-	if s.Commands() == nil {
-		t.Error("Commands() should return a registry")
-	}
-	if s.Context() == nil {
-		t.Error("Context() should return a context")
-	}
-
-	// Slash registration and lookup.
-	s.RegisterSlash("custom", "a custom command", func(args string) (any, error) {
-		return args, nil
-	})
-	if h, ok := s.GetSlashHandler("custom"); !ok {
-		t.Error("custom handler should be registered")
-	} else if res, err := h("xyz"); err != nil || res != "xyz" {
-		t.Errorf("custom handler = %v, %v", res, err)
-	}
-	if _, ok := s.GetSlashHandler("nope"); ok {
-		t.Error("unknown command should not have a handler")
-	}
-
-	// Hidden commands are registered but not listed.
-	s.RegisterHiddenSlash("hidden", "hidden command", func(args string) (any, error) {
-		return nil, nil
-	})
-	for _, c := range s.ListSlashCommands() {
-		if c.Name == "hidden" {
-			t.Error("hidden command should not be listed")
-		}
-	}
-
-	// extractSlashArgs prefers message, falls back to raw data.
-	if got := s.extractSlashArgs(RPCCommand{Message: "msg"}); got != "msg" {
-		t.Errorf("extractSlashArgs(message) = %q", got)
-	}
-	if got := s.extractSlashArgs(RPCCommand{Data: []byte(`"raw"`)}); got != `"raw"` {
-		t.Errorf("extractSlashArgs(data) = %q", got)
-	}
-}
-
-func TestServerOutput(t *testing.T) {
-	s := NewServer()
-	var buf bytes.Buffer
-	s.SetOutput(&buf)
-
-	s.sendError("cmd-1", "boom")
-	out := buf.String()
-	if !strings.Contains(out, `"success":false`) || !strings.Contains(out, "boom") {
-		t.Errorf("sendError output = %q", out)
-	}
-
-	buf.Reset()
-	s.EmitEvent(map[string]any{"type": "test-event"})
-	if !strings.Contains(buf.String(), "test-event") {
-		t.Errorf("EmitEvent output = %q", buf.String())
-	}
-
-	// Nil output must not panic (writeJSON no-op path).
-	s.SetOutput(nil)
-	s.sendError("cmd-2", "ignored")
-
-	s.Cancel() // must not block or panic
-	if s.Context().Err() == nil {
-		t.Error("Cancel should cancel the server context")
-	}
-}
-
-func TestServerResponseBuilders(t *testing.T) {
-	s := NewServer()
-	resp := s.successResponse("id1", "cmd", map[string]int{"a": 1})
-	if !resp.Success || resp.ID != "id1" || resp.Command != "cmd" {
-		t.Errorf("successResponse = %+v", resp)
-	}
-	errResp := s.errorResponse("id2", "cmd2", "bad")
-	if errResp.Success || errResp.Error != "bad" {
-		t.Errorf("errorResponse = %+v", errResp)
-	}
-}
 func TestSetUsage(t *testing.T) {
 	usage := SetUsage()
 	if usage["usage"] != "/set <key> [value]" {

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -26,6 +28,7 @@ type rpcAppSetupParams struct {
 	modelOverride      string
 	runID              string
 	role               string
+	agentConfigPath    string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
@@ -82,9 +85,17 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		}
 	}
 
-	// --- Role-based agent config ---
 	var agentCfg *agentconfig.AgentConfig
-	if params.role != "" {
+	if params.agentConfigPath != "" {
+		agentCfg, err = agentconfig.Load(params.agentConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load agent config: %w", err)
+		}
+		slog.Info("Loaded agent config", "path", params.agentConfigPath)
+		if params.modelOverride == "" && agentCfg.Model != "" {
+			applyModelOverride(cfg, agentCfg.Model)
+		}
+	} else if params.role != "" {
 		roleDir := filepath.Join(agentDir, "roles", params.role)
 		roleConfigPath := filepath.Join(roleDir, "agent.yaml")
 
@@ -171,26 +182,29 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 
 	// --- Build rpcApp ---
 	app := &rpcApp{
-		customSystemPrompt:    params.customSystemPrompt,
-		maxTurns:              params.maxTurns,
-		debugAddr:             params.debugAddr,
-		cfg:                   cfg,
-		configPath:            configPath,
-		model:                 model,
-		apiKey:                apiKey,
-		activeSpec:            activeSpec,
-		currentModelInfo:      currentModelInfo,
-		currentContextWindow:  currentContextWindow,
-		cwd:                   cwd,
-		agentDir:              agentDir,
-		role:                  params.role,
-		sessionPath:           sessionPath,
-		sessionMgr:            sessionMgr,
-		sess:                  sess,
-		sessionID:             sessionID,
-		sessionName:           sessionName,
-		ws:                    ws,
-		registry:              registry,
+		customSystemPrompt:   params.customSystemPrompt,
+		maxTurns:             params.maxTurns,
+		debugAddr:            params.debugAddr,
+		cfg:                  cfg,
+		configPath:           configPath,
+		model:                model,
+		apiKey:               apiKey,
+		activeSpec:           activeSpec,
+		currentModelInfo:     currentModelInfo,
+		currentContextWindow: currentContextWindow,
+		cwd:                  cwd,
+		agentDir:             agentDir,
+		role:                 params.role,
+		sessionPath:          sessionPath,
+		sessionMgr:           sessionMgr,
+		sess:                 sess,
+		sessionID:            sessionID,
+		sessionName:          sessionName,
+		ws:                   ws,
+		registry:             registry,
+		commands:             command.New(),
+		emitEvent:            func(event agent.AgentEvent) {},
+
 		compactor:             compactor,
 		compactorConfig:       compactorConfig,
 		traceOutputPath:       traceOutputPath,

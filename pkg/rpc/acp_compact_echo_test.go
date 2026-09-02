@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
@@ -35,14 +36,15 @@ func TestACPCompactEchoesBeforeRunning(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan struct{})
 
-	server := NewServer()
+	commands := command.New()
 	srv := &acpServer{
-		app:       &rpcApp{server: server},
+		app:       &rpcApp{commands: commands},
 		conn:      transport.NewStdio(strings.NewReader(""), output),
 		sessionID: "sess",
 	}
 	srv.app.emitAgentEvent = srv.emit
-	server.RegisterSlash("compact", "Compact conversation", func(string) (any, error) {
+	srv.app.emitEvent = srv.emit // set by initEventEmitter in production
+	commands.Register("compact", "Compact conversation", func(string) (any, error) {
 		srv.app.emitEvent(agent.NewCompactionStartEvent(agent.CompactionInfo{Trigger: "manual_command"}))
 		close(started)
 		<-release

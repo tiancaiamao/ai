@@ -79,7 +79,7 @@ func TestEventParsingPipeline(t *testing.T) {
 	tmpDir := t.TempDir()
 	eventsPath := filepath.Join(tmpDir, "events.jsonl")
 
-	// Write events in the format ai rpc produces.
+	// Write events in the format the ACP-backed run mirror produces.
 	events := []string{
 		`{"type":"agent_start"}`,
 		`{"type":"turn_start","turn":1}`,
@@ -287,7 +287,7 @@ func TestSubcommandHelp(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 
-	subcommands := []string{"rpc", "run", "ls", "watch", "send", "kill"}
+	subcommands := []string{"acp", "run", "serve", "ls", "watch", "send", "kill"}
 	for _, sub := range subcommands {
 		t.Run(sub, func(t *testing.T) {
 			cmd := exec.Command(bin, sub, "--help")

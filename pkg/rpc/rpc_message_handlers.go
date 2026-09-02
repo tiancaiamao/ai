@@ -129,19 +129,19 @@ func (app *rpcApp) handleExportHTML(args string) (any, error) {
 
 // registerMessageHandlers registers message-related slash commands.
 func (app *rpcApp) registerMessageHandlers() {
-	app.server.RegisterSlash("messages", "Get formatted message summaries for the current session", func(args string) (any, error) {
+	app.commands.Register("messages", "Get formatted message summaries for the current session", func(args string) (any, error) {
 		return app.handleGetMessages(args)
 	})
 
-	app.server.RegisterSlash("compact", "Compact conversation history to reduce context size", func(args string) (any, error) {
+	app.commands.Register("compact", "Compact conversation history to reduce context size", func(args string) (any, error) {
 		return app.handleCompact(args)
 	})
 
-	app.server.RegisterSlash("export_html", "Export the current session as HTML", func(args string) (any, error) {
+	app.commands.Register("export_html", "Export the current session as HTML", func(args string) (any, error) {
 		return app.handleExportHTML(args)
 	})
 
-	app.server.RegisterHiddenSlash("get_last_assistant_text", "Get the last assistant text response (internal)", func(args string) (any, error) {
+	app.commands.RegisterHidden("get_last_assistant_text", "Get the last assistant text response (internal)", func(args string) (any, error) {
 		return app.handleGetLastAssistantText(args)
 	})
 }

@@ -4,6 +4,7 @@
 package acp
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -22,30 +23,37 @@ func ACPSubcommand() {
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
+	agentConfigFlag := fs.String("agent-config", "", "Path to agent.yaml configuration file")
 	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
 	modelFlag := fs.String("model", "", `Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.`)
 	fs.Parse(os.Args[1:])
 
-	// Setup signal handling for graceful shutdown.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigCh
-		fmt.Fprintf(os.Stderr, "[acp] received signal: %v, aborting agent\n", sig)
-		rpc.AgentAbort() // Trigger agent abort in RunACP
-	}()
-
+	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
+	// during initialization (see logger.NewLogger).
 	systemPrompt, err := helpers.ParseSystemPrompt(*systemPromptFlag)
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Canceling this context aborts the active agent, closes the transport,
+	// and lets RunACP wait for event persistence to finish before returning.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	conn := transport.NewStdio(os.Stdin, os.Stdout)
+
 	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
 	// during initialization (see logger.NewLogger).
-	if err := rpc.RunACP(transport.NewStdio(os.Stdin, os.Stdout), *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, ""); err != nil {
+	var runErr error
+	if *agentConfigFlag != "" {
+		runErr = rpc.RunACPWithAgentConfigContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, "")
+	} else {
+		runErr = rpc.RunACPWithContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, "")
+	}
+	if err := runErr; err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

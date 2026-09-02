@@ -5,7 +5,7 @@ Concise project guidance for coding agents.
 ## Project
 
 - `ai` — Go-based AI coding agent (`go1.24`, module `github.com/tiancaiamao/ai`)
-- Interface: stdin/stdout JSON-RPC server, OpenAI-compatible API (`ZAI` provider)
+- Interface: ACP over stdio or Unix socket, OpenAI-compatible API (`ZAI` provider)
 
 ## Language Rules
 
@@ -61,7 +61,7 @@ Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):
 
 | Package | Role |
 |---------|------|
-| `cmd/ai/` | Entry point. `main.go` parses flags and calls `app.RunRPC()` |
+| `cmd/ai/` | Entry point. `main.go` parses flags and dispatches subcommands |
 | `pkg/app/` | RPC application — all handlers, setup, session writer (formerly `cmd/ai/rpc_*.go`) |
 | `pkg/agent/` | Agent loop, tool execution, hooks, streaming, checkpoint recovery |
 | `pkg/context/` | `AgentContext`, messages, `Tool` interface, `Compactor` interface |

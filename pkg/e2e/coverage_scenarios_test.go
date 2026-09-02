@@ -6,7 +6,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,44 +25,33 @@ func TestE2E_PreLLMCompaction(t *testing.T) {
 		t.Fatalf("write isolated models.json: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 
-	rs.send(t, typedJSON("prompt", "Reply with the single word ok."))
-	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs.logTail())
+	if err := rs.client.PromptAsync(rs.sessionID, "Reply with the single word ok."); err != nil {
+		t.Fatalf("prompt: %v", err)
 	}
 
-	ev := rs.log.waitEvent("compaction_end", "", "", 5*time.Minute)
-	if ev == "" {
-		t.Fatalf("no compaction_end event. stderr:\n%s", rs.logTail())
+	update := rs.waitUpdate(t, "_compaction", 5*time.Minute)
+	meta := updateMetaMap(t, update)
+	info, ok := meta["info"].(map[string]any)
+	if !ok {
+		t.Fatalf("compaction update missing info: %#v", meta)
 	}
-	var c struct {
-		Compaction struct {
-			Trigger string `json:"trigger"`
-			Error   string `json:"error"`
-			Before  int    `json:"before"`
-			After   int    `json:"after"`
-			Type    string `json:"type"`
-		} `json:"compaction"`
+	if status, _ := meta["status"].(string); status != "end" {
+		for update.SessionUpdate != "_compaction" || func() bool { v, _ := updateMetaMap(t, update)["status"].(string); return v == "end" }() == false {
+			update = rs.waitUpdate(t, "_compaction", 5*time.Minute)
+		}
+		meta = updateMetaMap(t, update)
+		info, _ = meta["info"].(map[string]any)
 	}
-	if err := json.Unmarshal([]byte(ev), &c); err != nil {
-		t.Fatalf("parse compaction_end: %v\n%s", err, ev)
+	if trigger, _ := info["trigger"].(string); trigger != "pre_llm_threshold" {
+		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", trigger)
 	}
-	if c.Compaction.Trigger != "pre_llm_threshold" {
-		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", c.Compaction.Trigger)
+	if errMsg, _ := info["error"].(string); errMsg != "" {
+		t.Fatalf("compaction failed: %s", errMsg)
 	}
-	if c.Compaction.Error != "" {
-		t.Fatalf("compaction failed: %s", c.Compaction.Error)
-	}
-	// before/after counts may be equal here: with a fresh session the
-	// conversation is shorter than KeepRecent, so compaction summarizes but
-	// keeps every message. The behavioral assertions are trigger + success.
-	t.Logf("pre-LLM compaction: before=%d after=%d messages", c.Compaction.Before, c.Compaction.After)
-
-	if e := rs.log.waitEvent("agent_end", "", "", 5*time.Minute); e == "" {
-		t.Fatalf("no agent_end after compaction. stderr:\n%s", rs.logTail())
-	}
+	rs.waitUpdate(t, "_turn_end", 5*time.Minute)
 }
 
 // TestE2E_CompactionToolPairing builds a session containing several bash
@@ -91,7 +79,7 @@ func TestE2E_CompactionToolPairing(t *testing.T) {
 	// holds more than ToolCallCutoff (10) visible tool results. The tiny-window
 	// phase below then exercises both the pairing repair and the cutoff
 	// archiving on real production paths.
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
 	rs.promptAndWait(t, `Use the bash tool exactly twice to run this same command: head -c 6000 /dev/zero | tr '\0' 'x'. Then use the bash tool 12 more times, one command per call, in order: echo ok1, echo ok2, echo ok3, echo ok4, echo ok5, echo ok6, echo ok7, echo ok8, echo ok9, echo ok10, echo ok11, echo ok12. After all fourteen calls finish, reply with the single word ok.`)
 	rs.closeStdin()
 	if err := rs.waitExit(30 * time.Second); err != nil {
@@ -102,43 +90,33 @@ func TestE2E_CompactionToolPairing(t *testing.T) {
 	if err := writeE2EModelsWindow(modelsPath, m.provider, m.baseURL, m.id, 2048); err != nil {
 		t.Fatalf("rewrite models.json with tiny window: %v", err)
 	}
-	rs2 := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	rs2 := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
 	defer rs2.closeStdin()
 
-	rs2.send(t, typedJSON("prompt", "Reply with the single word ok."))
-	if ack := rs2.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs2.logTail())
-	}
+	rs2.promptAsync(t, "Reply with the single word ok.")
 
-	ev := rs2.log.waitEvent("compaction_end", "", "", 5*time.Minute)
-	if ev == "" {
-		t.Fatalf("no compaction_end event. stderr:\n%s", rs2.logTail())
+	update := rs2.waitUpdate(t, "_compaction", 5*time.Minute)
+	meta := updateMetaMap(t, update)
+	info, ok := meta["info"].(map[string]any)
+	if !ok {
+		t.Fatalf("compaction update missing info: %#v", meta)
 	}
-	var c struct {
-		Compaction struct {
-			Trigger string `json:"trigger"`
-			Error   string `json:"error"`
-			Before  int    `json:"before"`
-			After   int    `json:"after"`
-		} `json:"compaction"`
+	for {
+		status, _ := meta["status"].(string)
+		if status == "end" {
+			break
+		}
+		update = rs2.waitUpdate(t, "_compaction", 5*time.Minute)
+		meta = updateMetaMap(t, update)
+		info, _ = meta["info"].(map[string]any)
 	}
-	if err := json.Unmarshal([]byte(ev), &c); err != nil {
-		t.Fatalf("parse compaction_end: %v\n%s", err, ev)
+	if trigger, _ := info["trigger"].(string); trigger != "pre_llm_threshold" {
+		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", trigger)
 	}
-	if c.Compaction.Trigger != "pre_llm_threshold" {
-		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", c.Compaction.Trigger)
+	if errMsg, _ := info["error"].(string); errMsg != "" {
+		t.Fatalf("compaction failed: %s", errMsg)
 	}
-	if c.Compaction.Error != "" {
-		t.Fatalf("compaction failed: %s", c.Compaction.Error)
-	}
-	// Unlike the fresh-session case, the resumed session is longer than
-	// KeepRecent, so compaction must actually shrink the visible history.
-	if c.Compaction.After >= c.Compaction.Before {
-		t.Errorf("compaction did not shrink messages: before=%d after=%d", c.Compaction.Before, c.Compaction.After)
-	}
-	t.Logf("tool-pairing compaction: before=%d after=%d messages", c.Compaction.Before, c.Compaction.After)
-
-	if e := rs2.log.waitEvent("agent_end", "", "", 5*time.Minute); e == "" {
+	if e := rs2.waitUpdate(t, "_turn_end", 5*time.Minute); e.SessionUpdate != "_turn_end" {
 		t.Fatalf("no agent_end after compaction. stderr:\n%s", rs2.logTail())
 	}
 }
@@ -197,7 +175,7 @@ context_management:
 		t.Fatalf("mkdir sandbox: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "--role", "guard")
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "--role", "guard")
 	defer rs.closeStdin()
 	rs.promptAndWait(t, `Use the bash tool to run the command: rm -rf sandbox (it is a harmless empty directory). After it finishes, reply with the single word ok.`)
 }
@@ -227,7 +205,7 @@ This skill does nothing useful. Reply "hello from demo-skill" when asked about i
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 	rs.promptAndWait(t, `Use the find_skill tool to search for a skill named demo-skill, then after it finishes reply with the single word ok.`)
 

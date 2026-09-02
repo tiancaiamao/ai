@@ -81,7 +81,7 @@ func (app *rpcApp) handleNewSession(args string) (any, error) {
 	app.setSession(newSess, newSessionID, name)
 
 	slog.Info("Created new session", "name", name, "id", newSessionID)
-	app.server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": name})
+
 	return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 }
 
@@ -142,7 +142,7 @@ func (app *rpcApp) handleResume(args string) (any, error) {
 	app.setSession(newSess, targetID, newSessionName)
 
 	slog.Info("Switched to session", "id", targetID, "name", newSessionName)
-	app.server.EmitEvent(map[string]any{"type": "session_switch", "session": targetID, "sessionName": newSessionName})
+
 	return map[string]any{"sessionId": targetID, "sessionName": newSessionName}, nil
 }
 
@@ -349,31 +349,31 @@ func (app *rpcApp) handleGetTree(args string) (any, error) {
 
 // registerSessionHandlers registers session-related slash commands.
 func (app *rpcApp) registerSessionHandlers() {
-	app.server.RegisterSlash("new", "Create a new session and switch to it", func(args string) (any, error) {
+	app.commands.Register("new", "Create a new session and switch to it", func(args string) (any, error) {
 		return app.handleNewSession(args)
 	})
 
-	app.server.RegisterSlash("session", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
+	app.commands.Register("session", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
 		return app.handleSessionGetState()
 	})
 
-	app.server.RegisterSlash("rewind", "Resume generation on a specific branch", func(args string) (any, error) {
+	app.commands.Register("rewind", "Resume generation on a specific branch", func(args string) (any, error) {
 		return app.handleRewind(args)
 	})
 
-	app.server.RegisterSlash("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
+	app.commands.Register("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
 		return app.handleFork(args)
 	})
 
-	app.server.RegisterSlash("resume", "List sessions or resume a session by ID/name", func(args string) (any, error) {
+	app.commands.Register("resume", "List sessions or resume a session by ID/name", func(args string) (any, error) {
 		return app.handleResume(args)
 	})
 
-	app.server.RegisterHiddenSlash("get_fork_messages", "Get messages for a fork point (internal)", func(args string) (any, error) {
+	app.commands.RegisterHidden("get_fork_messages", "Get messages for a fork point (internal)", func(args string) (any, error) {
 		return app.handleGetForkMessages(args)
 	})
 
-	app.server.RegisterHiddenSlash("get_tree", "Get the conversation tree structure (internal)", func(args string) (any, error) {
+	app.commands.RegisterHidden("get_tree", "Get the conversation tree structure (internal)", func(args string) (any, error) {
 		return app.handleGetTree(args)
 	})
 }

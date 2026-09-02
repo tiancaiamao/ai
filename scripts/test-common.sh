@@ -116,10 +116,10 @@ print_result() {
 	esac
 }
 
-# Send RPC command to AI
-send_rpc_command() {
-	local command="$1"
-	echo "$command" | timeout 5 "$AI_BIN" 2>/dev/null
+# Send an ACP request to the AI process
+send_acp_request() {
+	local request="$1"
+	echo "$request" | timeout 5 "$AI_BIN" acp 2>/dev/null
 }
 
 # Run a single test

@@ -7,7 +7,7 @@
 | `install-skills.sh` | ai 技能安装/同步（详见下方） |
 | `clean-sessions.sh` | 清理 `.ai/sessions` 下的空/短 session（用法见 `README-clean-sessions.md`） |
 | `evolve_loop.sh` | 自动进化循环 |
-| `planner_rpc_filter.py` | planner RPC 过滤 |
+| `planner_acp_filter.py` | planner ACP output filter |
 | `test.sh` / `test-common.sh` | 测试辅助 |
 
 ---

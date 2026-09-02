@@ -1,10 +1,7 @@
 package rpc
 
 import (
-	"io"
 	_ "net/http/pprof"
-	"sync"
-	"time"
 
 	"log/slog"
 
@@ -12,108 +9,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/config"
 )
 
-// Global channel for signal-triggered agent abort.
-// Used by pkg/cli.RPCSubcommand to trigger graceful shutdown.
-var (
-	agentAbortSignal = make(chan struct{}, 1)
-	abortSignalOnce  sync.Once
-)
-
-// AgentAbort triggers the abort signal for RPC subprocess graceful shutdown.
-func AgentAbort() {
-	abortSignalOnce.Do(func() {
-		close(agentAbortSignal)
-	})
-}
-
-func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
-	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
-	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
-		customSystemPrompt: customSystemPrompt,
-		maxTurns:           maxTurns,
-		debugAddr:          debugAddr,
-		role:               role,
-		modelOverride:      modelOverride,
-		runID:              runID,
-	})
-	if err != nil {
-		return err
-	}
-
-	// --- Create agent (context, session writer, executor, compactor wiring) ---
-	ag, sessionWriter, err := app.setupAgent(maxTurns)
-	if err != nil {
-		return err
-	}
-	defer sessionWriter.Close()
-	defer ag.Shutdown()
-
-	// --- Create RPC server ---
-	server := NewServer()
-	server.SetOutput(output)
-	app.server = server
-
-	// Start timeout watchdog if timeout is set.
-	// Must be after server creation so server.Cancel() is available.
-	if timeout > 0 {
-		go func() {
-			<-time.After(timeout)
-			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
-			ag.Abort()
-			// Cancel the RPC server so RunWithIO unblocks and the process exits.
-			// Without this, the process lingers forever waiting for stdin.
-			server.Cancel()
-		}()
-	}
-
-	// Watch for external abort signal (e.g., from SIGTERM handler).
-	go func() {
-		slog.Info("[RPC] Abort signal watcher started")
-		<-agentAbortSignal
-		slog.Info("[RPC] External abort signal received, aborting agent")
-		ag.Abort()
-		server.Cancel()
-		slog.Info("[RPC] Abort triggered successfully")
-	}()
-
-	// --- Register all handlers ---
-	app.registerAllHandlers()
-
-	// --- Build skill commands list ---
-	app.buildSkillCommands()
-
-	// --- Start event emitter ---
-	shutdownEmitter, eventEmitterDone := app.initEventEmitter(func(ev agent.AgentEvent) {
-		app.server.EmitEvent(ev)
-	})
-
-	// --- Emit start event ---
-	app.emitStartEvent()
-
-	// --- Start debug server if enabled ---
-	app.startDebugServer()
-
-	// --- Run RPC server ---
-	slog.Info("RPC server started", "model", app.model.ID, "cwd", app.cwd)
-	slog.Info("Waiting for commands...")
-	runErr := server.RunWithIO(input, output)
-
-	// Server stopped, event emitter will exit automatically
-	slog.Info("RPC server stopped, waiting for cleanup...")
-
-	// Wait for agent to complete
-	slog.Info("Waiting for agent to complete...")
-	ag.Wait()
-
-	close(shutdownEmitter)
-	<-eventEmitterDone
-
-	slog.Info("Agent completed, exiting...")
-	return runErr
-}
-
 // setupAgent wires the agent loop: agent context, session writer, tool
-// executor, compactor and LoopConfig. Shared by RunRPC and RunACP.
+// executor, compactor and LoopConfig. Shared by ACP.
 // The caller owns the returned sessionWriter (Close) and agent (Shutdown).
 func (app *rpcApp) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 	// --- Create agent context ---
@@ -204,7 +101,7 @@ func (app *rpcApp) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error
 }
 
 // registerAllHandlers registers all protocol + slash command handlers with
-// their validation maps. Shared by RunRPC and RunACP.
+// their validation maps. Shared by ACP.
 func (app *rpcApp) registerAllHandlers() {
 	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
 	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
@@ -219,12 +116,12 @@ func (app *rpcApp) registerAllHandlers() {
 	)
 }
 
-// buildSkillCommands populates app.skillCommands with the server's visible
-// slash commands plus one /skill:<name> entry per installed skill. Shared by
-// RunRPC and RunACP.
+// buildSkillCommands populates app.skillCommands with the registry's visible
+// slash commands plus one /skill:<name> entry per installed skill.
 func (app *rpcApp) buildSkillCommands() {
 	app.skillCommands = make([]SlashCommand, 0)
-	for _, cmd := range app.server.ListSlashCommands() {
+	for _, cmd := range app.commands.ListCommands() {
+
 		if cmd.Hidden {
 			continue
 		}

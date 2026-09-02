@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -124,6 +125,7 @@ type serveApp struct {
 	finished bool
 	status   string // final status (done/killed/failed)
 	done     chan struct{}
+	cancel   context.CancelFunc
 }
 
 // finish records the final status and closes done exactly once.
@@ -238,8 +240,10 @@ func startServeApp(cfg serveConfig) *serveApp {
 
 	// In-process ACP server. Runs until the hub is closed (see Close) or it
 	// errors out.
+	ctx, cancel := context.WithCancel(context.Background())
+	sp.cancel = cancel
 	go func() {
-		err := rpc.RunACP(hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id)
+		err := rpc.RunACPWithContext(ctx, hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id)
 		if err != nil {
 			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
 		}
@@ -248,7 +252,18 @@ func startServeApp(cfg serveConfig) *serveApp {
 		// callers cannot observe a live socket with no ACP server behind it.
 		_ = hub.Close()
 		_ = socket.Close()
-		sp.finish(tui.StatusFailed)
+
+		sp.mu.Lock()
+		status := sp.status
+		sp.mu.Unlock()
+		if status == "" {
+			if err != nil {
+				status = tui.StatusFailed
+			} else {
+				status = tui.StatusDone
+			}
+		}
+		sp.finish(status)
 	}()
 
 	// Control client: initial prompt, signal abort and events.jsonl mirror.
@@ -271,16 +286,22 @@ func startServeApp(cfg serveConfig) *serveApp {
 	// `ai ls`) and finalize status when a turn ends.
 	go sp.mirror()
 
-	// Graceful shutdown: abort the in-flight turn; status becomes "killed".
+	// Graceful shutdown: cancel the ACP context. RunACPWithContext closes
+	// the transport, aborts the in-flight turn, and waits for persistence
+	// cleanup before the serve goroutine marks the process done.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
 		fmt.Fprintf(os.Stderr, "[serve] received signal: %v, aborting agent\n", sig)
-		if sp.control != nil {
-			_ = sp.control.Cancel(sp.sessionID)
+		sp.mu.Lock()
+		if !sp.finished {
+			sp.status = tui.StatusKilled
 		}
-		sp.finish(tui.StatusKilled)
+		sp.mu.Unlock()
+		if sp.cancel != nil {
+			sp.cancel()
+		}
 	}()
 
 	return sp

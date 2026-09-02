@@ -7,11 +7,10 @@
 `-role` 只是 CLI 层的一个快捷方式：
 
 ```
-ai run --role orchestrator
+`ai run --role orchestrator`
   → run.go 收到 role="orchestrator"
-  → prompt.TemplateForRole("orchestrator") 返回嵌入的 orchestrator.md 内容
-  → 作为 --system-prompt 字符串传给 ai rpc
-  → ai rpc 层失去 role 信息，只有一段文本
+  → 作为 `--role orchestrator` 传给 `ai acp`
+  → ACP 层加载角色配置
 ```
 
 三个 role 的 prompt 模板最初通过 `//go:embed` 编译进二进制（已迁移到 `roles/` 目录）：
@@ -116,7 +115,7 @@ B. 技能库全局共享，使用统计按角色隔离
 # 有 --role
 ai run --role orchestrator
   → run 不认识 --role（该 flag 被声明为透传）
-  → 实际执行: ai rpc ... --role orchestrator
+  → 实际执行: ai acp ... --role orchestrator
   → rpc.go 解析 --role = "orchestrator"
   → newRPCApp():
       ~/.ai/roles/orchestrator/agent.yaml 存在？
@@ -130,7 +129,7 @@ ai run --role orchestrator
 
 # 无 --role
 ai run
-  → ai rpc（不带 --role）
+  → ai acp（不带 --role）
   → rpc.go 解析 --role = ""（默认空）
   → newRPCApp():
       → agentConfig = nil
@@ -148,8 +147,8 @@ ai run
 |------|---------|
 | `cmd/ai/main.go` | 无变化 |
 | `subcommand/run/run.go` | 去掉 `--role` flag 定义（变成透传）；去掉 role→systemPrompt 解析逻辑；去掉 `prompt.TemplateForRole` 调用 |
-| `subcommand/rpc/rpc.go` | 加 `--role` flag；传给 `RunRPC` 参数 |
-| `pkg/rpc/rpc_handlers.go` | `RunRPC` 签名加 `role` 参数 |
+| `subcommand/acp/acp.go` | Add the `--role` flag and pass it to `RunACP` |
+| `pkg/rpc/acp.go` | Accept the role parameter in `RunACP` |
 | `pkg/rpc/rpc_setup.go` | `newRPCApp()` 根据 role 参数查找 `~/.ai/roles/<role>/agent.yaml`；skill-stats 路径随 role 变化 |
 | `pkg/rpc/rpc_app.go` | `createBaseContext()` 记录 role 到 session meta |
 | `pkg/rpc/rpc_helpers.go` | `buildSystemPrompt()` 逻辑调整（role config 优先级） |
@@ -202,21 +201,21 @@ if app.role != "" && meta.Role != "" && app.role != meta.Role {
 
 ### P0 Feature: Role 参数透传
 **Acceptance Scenarios:**
-1. `ai run --role orchestrator` → run 不解析 `--role`，子进程 `ai rpc` 收到 `--role orchestrator`
+1. `ai run --role orchestrator` → run 不解析 `--role`，子进程 `ai acp` 收到 `--role orchestrator`
 2. `ai run`（无 `--role`） → run 不产生 `--role` 参数传给 rpc
 3. `ai run --session /tmp/s.json --role validator` → session 和 role 同时正确传递
 
 ### P0 Feature: 角色目录加载
 **Acceptance Scenarios:**
-1. `ai rpc --role orchestrator` 且 `~/.ai/roles/orchestrator/agent.yaml` 存在 → 加载成功
-2. `ai rpc --role nonexistent` 且目录不存在 → 报错退出
-3. `ai rpc`（无 `--role`）→ 用嵌入式默认 prompt.md + 全局 skill-stats
-4. `ai rpc --role orchestrator` → skill-stats 从 `~/.ai/roles/orchestrator/skill-stats.json` 读取
+1. `ai acp --role orchestrator` 且 `~/.ai/roles/orchestrator/agent.yaml` 存在 → 加载成功
+2. `ai acp --role nonexistent` 且目录不存在 → 报错退出
+3. `ai acp`（无 `--role`）→ 用嵌入式默认 prompt.md + 全局 skill-stats
+4. `ai acp --role orchestrator` → skill-stats 从 `~/.ai/roles/orchestrator/skill-stats.json` 读取
 
 ### P0 Feature: System Prompt 覆盖优先级
 **Acceptance Scenarios:**
-1. `ai rpc --role orchestrator` → 用角色 agent.yaml 中 system_prompt 指向的文件
-2. `ai rpc --role orchestrator --system-prompt @/path/to/custom.md` → system_prompt 用自定义内容，其它配置（middlewares, tools）仍从角色配置读取
+1. `ai acp --role orchestrator` → 用角色 agent.yaml 中 system_prompt 指向的文件
+2. `ai acp --role orchestrator --system-prompt @/path/to/custom.md` → system_prompt 用自定义内容，其它配置（middlewares, tools）仍从角色配置读取
 
 ### P0 Feature: Session Role 持久化
 **Acceptance Scenarios:**
