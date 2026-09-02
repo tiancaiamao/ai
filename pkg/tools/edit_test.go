@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 
@@ -123,22 +124,27 @@ func TestEditTool_ExactMatchMultiline(t *testing.T) {
 // Fuzzy match replacement
 // ---------------------------------------------------------------------------
 
-func TestEditTool_FuzzyMatchWhitespace(t *testing.T) {
+func TestEditTool_NormalizedMatchTrailingWhitespace(t *testing.T) {
 	tool, dir := newEditToolInTempDir(t)
-	writeFile(t, dir, "test.txt", "  hello  world  \nfoo bar\n")
+	writeFile(t, dir, "test.txt", "  hello world  \nfoo bar\n")
 
+	// Should match because we normalize trailing whitespace
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"path":    "test.txt",
-		"oldText": "hello world", // missing leading/trailing spaces
-		"newText": "hello universe",
+		"oldText": "  hello world", // no trailing spaces
+		"newText": "  hello universe",
 	})
 	if err != nil {
-		t.Fatalf("Execute (fuzzy): %v", err)
+		t.Fatalf("Execute (normalized): %v", err)
 	}
 
 	got := readFile(t, dir, "test.txt")
 	if !strings.Contains(got, "hello universe") {
-		t.Errorf("fuzzy match should have replaced text, got %q", got)
+		t.Errorf("normalized match should have replaced text, got %q", got)
+	}
+	// Verify leading whitespace is preserved
+	if !strings.Contains(got, "  hello universe") {
+		t.Errorf("leading whitespace not preserved, got %q", got)
 	}
 }
 
@@ -239,93 +245,123 @@ func TestEditTool_DiffInResult(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// findBestMatch (unit tests for internal logic)
+// findMatch (unit tests for internal logic)
 // ---------------------------------------------------------------------------
 
-func TestFindBestMatch_ExactMatch(t *testing.T) {
+func TestFindMatch_ExactMatch(t *testing.T) {
 	content := "foo bar baz\nhello world\n"
-	match, err := findBestMatch(content, "hello world")
+	match, err := findMatch(content, "hello world")
 	if err != nil {
-		t.Fatalf("findBestMatch: %v", err)
+		t.Fatalf("findMatch: %v", err)
 	}
-	if match.score != 0 {
-		t.Errorf("exact match score = %d, want 0", match.score)
+	if match.strategy != "exact" {
+		t.Errorf("exact match strategy = %s, want 'exact'", match.strategy)
 	}
 	if content[match.start:match.end] != "hello world" {
 		t.Errorf("match text = %q", content[match.start:match.end])
 	}
 }
 
-func TestFindBestMatch_EmptyOldText(t *testing.T) {
-	// Empty oldText matches at position 0 (strings.Index behavior)
-	match, err := findBestMatch("some content", "")
-	if err != nil {
-		t.Fatalf("findBestMatch with empty oldText: %v", err)
-	}
-	if match.start != 0 || match.end != 0 {
-		t.Errorf("empty match at [%d,%d], want [0,0]", match.start, match.end)
+func TestFindMatch_EmptyOldText(t *testing.T) {
+	// Empty oldText should return error
+	_, err := findMatch("some content", "")
+	if err == nil {
+		t.Fatal("expected error when oldText is empty")
 	}
 }
 
-func TestFindBestMatch_NoMatchInContent(t *testing.T) {
-	_, err := findBestMatch("short content", "a completely different text that is very long and unique")
+func TestFindMatch_NoMatchInContent(t *testing.T) {
+	_, err := findMatch("short content", "a completely different text that is very long and unique")
 	if err == nil {
 		t.Fatal("expected error when no match possible")
 	}
 }
 
-func TestFindBestMatch_FuzzyMatch(t *testing.T) {
+func TestFindMatch_NormalizedMatch(t *testing.T) {
 	content := "  hello world  \nsecond line\n"
-	// oldText doesn't match exactly but is close
-	match, err := findBestMatch(content, "hello world")
+	// oldText with trailing space that differs from content should still match via normalization
+	match, err := findMatch(content, "  hello world  ") // same trailing spaces
 	if err != nil {
-		t.Fatalf("findBestMatch fuzzy: %v", err)
+		t.Fatalf("findMatch normalized: %v", err)
+	}
+	// This will be exact match because the oldText exactly matches content's first line (including trailing spaces)
+	if match.strategy != "exact" {
+		t.Errorf("expected exact strategy (oldText matches exactly including trailing spaces), got %s", match.strategy)
 	}
 	if match.start < 0 || match.end > len(content) {
 		t.Errorf("match bounds [%d,%d] out of range [0,%d]", match.start, match.end, len(content))
 	}
 }
 
+func TestFindMatch_TrailingWhitespaceNormalized(t *testing.T) {
+	content := "  hello world  \nsecond line\n"
+	// oldText without trailing whitespace should still match via normalization
+	// but exact match should fail
+	_, err := findMatch(content, "  hello world\n")
+	if err != nil {
+		t.Fatalf("findMatch with newline: %v", err)
+	}
+	// This should succeed via normalization (content's trailing spaces are stripped)
+}
+
+func TestFindMatch_UnicodeNormalization(t *testing.T) {
+	content := "“Smart quotes” and text" // Actually using smart quotes
+	// oldText with ASCII quotes should match smart quotes
+	match, err := findMatch(content, "\"Smart quotes\"")
+	if err != nil {
+		t.Fatalf("findMatch unicode: %v", err)
+	}
+	// Should match via Unicode normalization
+	if match.strategy != "normalized" {
+		t.Errorf("expected normalized strategy for Unicode, got %s", match.strategy)
+	}
+}
+
 // ---------------------------------------------------------------------------
-// editDistance (unit tests)
+// normalizeForMatch (unit tests)
 // ---------------------------------------------------------------------------
 
-func TestEditDistance_Identical(t *testing.T) {
-	if d := editDistance("abc", "abc"); d != 0 {
-		t.Errorf("editDistance(abc,abc) = %d, want 0", d)
+func TestNormalizeForMatch_TrailingWhitespace(t *testing.T) {
+	input := "  hello world  \n  second line  \n"
+	expected := "  hello world\n  second line\n"
+	result := normalizeForMatch(input)
+	if result != expected {
+		t.Errorf("normalizeForMatch:\ngot:  %q\nwant: %q", result, expected)
 	}
 }
 
-func TestEditDistance_EmptyStrings(t *testing.T) {
-	if d := editDistance("", ""); d != 0 {
-		t.Errorf("editDistance('','') = %d, want 0", d)
+func TestNormalizeForMatch_LeadingWhitespacePreserved(t *testing.T) {
+	input := "    hello\n  world\n"
+	result := normalizeForMatch(input)
+	// Check that leading whitespace is preserved
+	lines := strings.Split(result, "\n")
+	if !strings.HasPrefix(lines[0], "    ") {
+		t.Errorf("leading whitespace not preserved in line 0: %q", lines[0])
 	}
-	if d := editDistance("abc", ""); d != 3 {
-		t.Errorf("editDistance(abc,'') = %d, want 3", d)
-	}
-	if d := editDistance("", "abc"); d != 3 {
-		t.Errorf("editDistance('',abc) = %d, want 3", d)
-	}
-}
-
-func TestEditDistance_SingleEdits(t *testing.T) {
-	// One insertion
-	if d := editDistance("ac", "abc"); d != 1 {
-		t.Errorf("editDistance(ac,abc) = %d, want 1", d)
-	}
-	// One deletion
-	if d := editDistance("abc", "ac"); d != 1 {
-		t.Errorf("editDistance(abc,ac) = %d, want 1", d)
-	}
-	// One substitution
-	if d := editDistance("abc", "axc"); d != 1 {
-		t.Errorf("editDistance(abc,axc) = %d, want 1", d)
+	if !strings.HasPrefix(lines[1], "  ") {
+		t.Errorf("leading whitespace not preserved in line 1: %q", lines[1])
 	}
 }
 
-func TestEditDistance_CompleteReplacement(t *testing.T) {
-	if d := editDistance("abc", "xyz"); d != 3 {
-		t.Errorf("editDistance(abc,xyz) = %d, want 3", d)
+func TestNormalizeUnicode(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"smart 'quotes'", "smart 'quotes'"},
+		{`smart "quotes"`, `smart "quotes"`},
+		{"em—dash", "em-dash"},
+		{"en–dash", "en-dash"},
+		{"ellipsis…", "ellipsis..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeUnicode(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeUnicode(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }
 
@@ -369,25 +405,6 @@ func TestTruncateString_Long(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// computeMatchScore (unit tests)
-// ---------------------------------------------------------------------------
-
-func TestComputeMatchScore_Identical(t *testing.T) {
-	lines := []string{"hello", "world"}
-	if s := computeMatchScore(lines, lines); s != 0 {
-		t.Errorf("computeMatchScore identical = %d, want 0", s)
-	}
-}
-
-func TestComputeMatchScore_Different(t *testing.T) {
-	a := []string{"hello"}
-	b := []string{"world"}
-	s := computeMatchScore(a, b)
-	if s == 0 {
-		t.Error("computeMatchScore for different strings should be > 0")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // resolvePath (unit tests via tool execution)
 // ---------------------------------------------------------------------------
@@ -408,5 +425,64 @@ func TestEditTool_ResolveAbsolutePath(t *testing.T) {
 	got := readFile(t, dir, "test.txt")
 	if got != "replaced" {
 		t.Errorf("content = %q, want %q", got, "replaced")
+	}
+}
+
+// TestEdit_AmbiguousMatchListsLocations verifies goose-style error reporting:
+// when oldText matches multiple locations, every location is listed with its
+// line number instead of a bare "not found" failure.
+func TestEdit_AmbiguousMatchListsLocations(t *testing.T) {
+	tool, dir := newEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "dup here\nmid\ndup here\n")
+
+	_, err := tool.Execute(t.Context(), map[string]any{
+		"path": "a.txt", "oldText": "dup here", "newText": "X",
+	})
+	if err == nil || !strings.Contains(err.Error(), "matches 2 locations") {
+		t.Fatalf("err = %v, want multiple-match error", err)
+	}
+	if !strings.Contains(err.Error(), "L1") || !strings.Contains(err.Error(), "L3") {
+		t.Fatalf("error should list L1 and L3, got: %v", err)
+	}
+}
+
+// TestEdit_NoMatchErrorSuggestsSimilarContext verifies the not-found error
+// surfaces nearby lines that resemble the requested text.
+func TestEdit_NoMatchErrorSuggestsSimilarContext(t *testing.T) {
+	tool, dir := newEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "func handleRequest(w http) {\n\treturn\n}\n")
+
+	_, err := tool.Execute(t.Context(), map[string]any{
+		"path": "a.txt", "oldText": "func handelRequest(w http) {", "newText": "X",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "handleRequest") || !strings.Contains(err.Error(), "L1") {
+		t.Fatalf("no-match error lacks suggestion, got: %v", err)
+	}
+}
+
+// TestEdit_EmptyOldTextRejected is a regression test: an empty oldText used
+// to hang the tool in exactMatchPositions (strings.Index(x, "") always
+// returns 0 and never advances). Copilot review finding, PR #386.
+func TestEdit_EmptyOldTextRejected(t *testing.T) {
+	tool, dir := newEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "hello world\n")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := tool.Execute(t.Context(), map[string]any{
+			"path": "a.txt", "oldText": "", "newText": "X",
+		})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+			t.Fatalf("err = %v, want explicit empty-oldText rejection", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("empty oldText hangs the edit tool (regression)")
 	}
 }

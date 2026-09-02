@@ -291,7 +291,10 @@ func loadConfigWithLogger() (*config.Config, string, error) {
 
 // resolveModelAndKey resolves the LLM model and API key from config.
 func resolveModelAndKey(cfg *config.Config) (llm.Model, string, config.ModelSpec, error) {
-	model := cfg.GetLLMModel()
+	model, activeSpec, err := config.ResolveModel(cfg)
+	if err != nil {
+		slog.Info("Model spec fallback", "error", err)
+	}
 
 	slog.Info("Model", "id", model.ID, "provider", model.Provider, "baseURL", model.BaseURL)
 	if cfg.Compactor != nil {
@@ -302,11 +305,6 @@ func resolveModelAndKey(cfg *config.Config) (llm.Model, string, config.ModelSpec
 			"toolSummaryAutomation", cfg.Compactor.ToolSummaryAutomation)
 	}
 
-	activeSpec, err := resolveActiveModelSpec(cfg)
-	if err != nil {
-		slog.Info("Model spec fallback", "error", err)
-	}
-	model = applyModelLimitsFromSpec(model, activeSpec)
 	apiKey, err := config.ResolveAPIKeyWithProxy(model.Provider, model.Proxy)
 	if err != nil {
 		return llm.Model{}, "", config.ModelSpec{}, fmt.Errorf("missing API key: %w", err)
@@ -385,6 +383,7 @@ func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspac
 	registry.Register(tools.NewWriteTool(ws))
 	registry.Register(tools.NewGrepTool(ws))
 	registry.Register(editTool)
+	registry.Register(tools.NewMultiEditTool(ws))
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	return ws, registry, nil

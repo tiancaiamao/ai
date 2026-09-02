@@ -10,7 +10,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/session"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -37,13 +36,7 @@ func applyModelOverride(cfg *config.Config, modelOverride string) {
 	config.ApplyModelOverride(cfg, modelOverride)
 }
 
-func applyModelLimitsFromSpec(model llm.Model, spec config.ModelSpec) llm.Model {
-	return config.ApplyModelLimitsFromSpec(model, spec)
-}
-
-func resolveActiveModelSpec(cfg *config.Config) (config.ModelSpec, error) {
-	return config.ResolveActiveModelSpec(cfg)
-}
+// loadModelSpecs/filterModelSpecsWithKeys/findModelSpec moved to pkg/config.
 
 func loadModelSpecs(cfg *config.Config) ([]config.ModelSpec, string, error) {
 	return config.LoadModelSpecsFromConfig(cfg)

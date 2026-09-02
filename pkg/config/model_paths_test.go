@@ -110,9 +110,12 @@ func TestResolveActiveModelSpec(t *testing.T) {
 
 	// Matching spec found in models.json.
 	cfg := &Config{Model: ModelConfig{ID: "glm-4.6", Provider: "zai"}}
-	spec, err := ResolveActiveModelSpec(cfg)
+	spec, matched, err := ResolveActiveModelSpec(cfg)
 	if err != nil {
 		t.Fatalf("ResolveActiveModelSpec error: %v", err)
+	}
+	if !matched {
+		t.Error("expected matched=true for zai/glm-4.6")
 	}
 	if spec.ID != "glm-4.6" || spec.Provider != "zai" {
 		t.Errorf("spec = %+v, want zai/glm-4.6", spec)
@@ -123,9 +126,12 @@ func TestResolveActiveModelSpec(t *testing.T) {
 
 	// No matching spec → falls back to ModelSpecFromConfig.
 	cfg = &Config{Model: ModelConfig{ID: "unknown-model", Provider: "zai", API: "openai"}}
-	spec, err = ResolveActiveModelSpec(cfg)
+	spec, matched, err = ResolveActiveModelSpec(cfg)
 	if err != nil {
 		t.Fatalf("ResolveActiveModelSpec fallback error: %v", err)
+	}
+	if matched {
+		t.Error("expected matched=false for unknown model")
 	}
 	if spec.ID != "unknown-model" {
 		t.Errorf("fallback spec = %+v", spec)
@@ -140,12 +146,108 @@ func TestResolveActiveModelSpec(t *testing.T) {
 		return p
 	}())
 	cfg = &Config{Model: ModelConfig{ID: "m", Provider: "p"}}
-	spec, err = ResolveActiveModelSpec(cfg)
+	spec, matched, err = ResolveActiveModelSpec(cfg)
 	if err == nil {
 		t.Error("expected error when models.json is invalid")
 	}
+	if matched {
+		t.Error("expected matched=false on load error")
+	}
 	if spec.ID != "m" {
 		t.Errorf("error path should still return fallback spec, got %+v", spec)
+	}
+}
+
+func TestResolveModel_SpecWinsOnMatch(t *testing.T) {
+	writeModelsFile(t, testModelsJSON)
+
+	// Config carries stale endpoint fields for a model that exists in
+	// models.json — the spec must win.
+	cfg := &Config{Model: ModelConfig{
+		ID:        "glm-4.6",
+		Provider:  "zai",
+		BaseURL:   "https://chatgpt.com/backend-api",
+		API:       "openai-codex-responses",
+		MaxTokens: 999,
+	}}
+	model, spec, err := ResolveModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveModel error: %v", err)
+	}
+	if spec.ID != "glm-4.6" || spec.Provider != "zai" {
+		t.Fatalf("spec = %+v, want zai/glm-4.6", spec)
+	}
+	if model.BaseURL != "https://api.z.ai/v1" {
+		t.Errorf("BaseURL = %q, want spec value", model.BaseURL)
+	}
+	if model.API != "openai" {
+		t.Errorf("API = %q, want spec value", model.API)
+	}
+	if model.MaxTokens != 128000 {
+		t.Errorf("MaxTokens = %d, want spec value 128000", model.MaxTokens)
+	}
+	if model.ContextWindow != 200000 {
+		t.Errorf("ContextWindow = %d, want spec value 200000", model.ContextWindow)
+	}
+}
+
+func TestResolveModel_ConfigKeptWithoutMatch(t *testing.T) {
+	writeModelsFile(t, testModelsJSON)
+
+	// No models.json entry → config's own endpoint fields apply
+	// (custom endpoints scenario).
+	cfg := &Config{Model: ModelConfig{
+		ID:        "custom-model",
+		Provider:  "zai",
+		BaseURL:   "http://localhost:8080/v1",
+		API:       "anthropic-messages",
+		MaxTokens: 4096,
+	}}
+	model, spec, err := ResolveModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveModel error: %v", err)
+	}
+	if spec.ID != "custom-model" {
+		t.Errorf("spec = %+v, want config fallback", spec)
+	}
+	if model.BaseURL != "http://localhost:8080/v1" {
+		t.Errorf("BaseURL = %q, want config value", model.BaseURL)
+	}
+	if model.API != "anthropic-messages" {
+		t.Errorf("API = %q, want config value", model.API)
+	}
+	if model.MaxTokens != 4096 {
+		t.Errorf("MaxTokens = %d, want config value", model.MaxTokens)
+	}
+}
+
+func TestResolveModel_SparseSpecKeepsConfigFields(t *testing.T) {
+	// Spec entry without baseUrl/api at any level → empty spec fields fall
+	// back to the config values instead of wiping them.
+	writeModelsFile(t, `{
+  "providers": {
+    "p": {
+      "models": [
+        {"id": "sparse-model", "contextWindow": 100000}
+      ]
+    }
+  }
+}`)
+	cfg := &Config{Model: ModelConfig{
+		ID:       "sparse-model",
+		Provider: "p",
+		BaseURL:  "http://localhost:8080/v1",
+		API:      "anthropic-messages",
+	}}
+	model, _, err := ResolveModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveModel error: %v", err)
+	}
+	if model.BaseURL != "http://localhost:8080/v1" {
+		t.Errorf("BaseURL = %q, want config value kept for sparse spec", model.BaseURL)
+	}
+	if model.API != "anthropic-messages" {
+		t.Errorf("API = %q, want config value kept for sparse spec", model.API)
 	}
 }
 

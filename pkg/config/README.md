@@ -37,6 +37,26 @@ Environment overrides (take precedence over config file):
 - `ZAI_BASE_URL` → `Model.BaseURL`
 - `ZAI_MAX_TOKENS` → `Model.MaxTokens`
 
+### Reference Resolution
+
+`config.json`'s model section is a **reference** (`provider` + `id`) into
+`models.json`, which owns the model facts. `ResolveModel` applies this at
+startup:
+
+- **Match** (`provider+id` found in `models.json`): the spec is authoritative.
+  `baseUrl`, `api`, `proxy`, and `maxTokens` are taken from the spec; stale
+  values in `config.json` are ignored (a warning is logged). This makes a
+  mismatched hand-edited config (e.g. a zai model pointing at another
+  provider's endpoint) fail-safe instead of failing at request time with
+  authentication errors.
+- **No match**: the config's own endpoint fields apply, supporting custom
+  endpoints not registered in `models.json` (local gateways, etc.).
+- **Sparse spec**: empty spec fields fall back to the config values instead
+  of wiping them.
+
+The runtime model-switch handler and the `--model` override follow the same
+rule: when the model resolves in `models.json`, the spec wins.
+
 ## Model Specs
 
 Model definitions are loaded from `~/.ai/models.json` via `ModelSpec`:
