@@ -132,8 +132,11 @@ git diff <base-sha>..FETCH_HEAD -- <specific-file>
 
 ## 输出格式
 
+Reviewer 开始工作时先写骨架 JSON（`"status": "in_progress"`），完成后覆盖为完整结果（`"status": "completed"`）：
+
 ```json
 {
+  "status": "completed",
   "findings": [
     {
       "title": "[P1] Fix null pointer risk in auth handler",

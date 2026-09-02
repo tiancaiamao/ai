@@ -50,6 +50,7 @@ Output **all** findings that the original author would fix.
 If no findings found, output complete JSON with empty findings array:
 ```json
 {
+  "status": "completed",
   "findings": [],
   "overall_correctness": "patch is correct",
   "overall_explanation": "No issues found",
@@ -60,6 +61,7 @@ If no findings found, output complete JSON with empty findings array:
 If findings found, output:
 ```json
 {
+  "status": "completed",
   "findings": [
     {
       "title": "<≤ 80 chars, imperative>",
@@ -80,10 +82,15 @@ If findings found, output:
 
 ### Completion Criteria
 
-1. **Output immediately after review** - Once you've reviewed all changed files and identified findings, write the JSON result using the `write` tool
-2. **Do NOT continue analyzing** - After outputting JSON, do not perform additional code checks or verification
-3. **Review scope** - Focus only on files changed in the diff/patch. Do not explore beyond these changes
-4. **Stop condition** - You have completed review when you've examined all changed files and decided on the findings list
+1. **Write skeleton first** - 开始 review 前，先用 `write` 工具写出骨架 JSON 到目标文件：
+   ```json
+   {"status": "in_progress", "findings": [], "overall_correctness": "", "overall_explanation": "", "overall_confidence_score": 0}
+   ```
+   这样即使 session 中断，调用方也能区分 "review 在进行中" vs "review 从未执行"。
+2. **Output immediately after review** - 一旦你审查完所有变更文件并确定 findings，用 `write` 工具写入完整 JSON 结果（覆盖骨架），`status` 改为 `"completed"`
+3. **Do NOT continue analyzing** - 写入完整 JSON 后，不要再进行额外的代码检查或验证
+4. **Review scope** - 只关注 diff/patch 中变更的文件。不要探索这些变更之外的代码
+5. **Stop condition** - 当你审查完所有变更文件并确定 findings 列表时，review 完成
 
 ### Rules
 
@@ -94,6 +101,7 @@ If findings found, output:
 - Keep line ranges short (5-10 lines max).
 - Do NOT generate a PR fix.
 - Do NOT wrap JSON in markdown fences.
+- **需要带行号引用代码时**：用 `nl -ba file | sed -n 'X,Yp'`（`read` 工具不输出行号）。
 
 ### Overall Correctness
 

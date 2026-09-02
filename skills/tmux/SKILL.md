@@ -346,12 +346,12 @@ When you've started a long-running task in tmux, use these commands to check sta
 | Attach to session | `tmux attach -t <name>` |
 | Send interrupt (Ctrl+C) | `tmux send-keys -t <name> C-c` |
 | Kill session | `tmux kill-session -t <name>` ⛔ **禁止 `kill-server`** |
-| Wait for completion | `tmux_wait.sh <name> [timeout]` |
+| Wait for completion | `tmux_wait.sh <name> <output-file> [timeout]` |
 
 **Example workflow:**
 ```bash
-# 1. Start long build
-tmux new -s build -d "go build ./... 2>&1 | tee /tmp/build.log"
+# 1. Start long build (redirect output to file + .done marker)
+tmux new -s build -d "go build ./... 2>&1 | tee /tmp/build.log && touch /tmp/build.log.done"
 
 # 2. Do other work...
 
@@ -362,8 +362,13 @@ tmux capture-pane -t build -p -S -20
 tmux attach -t build
 
 # 5. Wait for completion in script
-~/.ai/skills/tmux/bin/tmux_wait.sh build 600
+#    ⚠️ output-file 是必选参数！脚本会等待 ${output-file}.done 出现
+~/.ai/skills/tmux/bin/tmux_wait.sh build /tmp/build.log 600
 ```
+
+> **⚠️ CRITICAL**: `tmux_wait.sh` 的正确用法是 `tmux_wait.sh <session-name> <output-file> [timeout]`。
+> `output-file` 是 **必选** 参数，不是可选的。脚本通过检测 `${output-file}.done` 文件来判断任务完成。
+> 如果只写 `tmux_wait.sh <name> 600`，`600` 会被当作 output-file 而非 timeout！
 
 ## When to Use
 
