@@ -84,6 +84,23 @@ network operations. Keeping proxy selection in the model provider config makes
 runtime routing explicit while preserving a convenient proxy mechanism for the
 interactive login flow.
 
+## Edit Tool: Progressive Matching + Structural Sentinel (2026-08)
+
+**Problem**: Session analysis of a real weak-model run (tinyactor, 10 edits all "successful", 7 whole-file `write` rewrites) showed the failure chain that destroys codebases: a weak model writes an imprecise `oldText` (indentation drift in Python/YAML, dropped paren in Lisp) → the old Levenshtein-window matcher silently accepts it or picks the wrong near-duplicate window → the edit lands in the wrong place or produces broken structure → the model sees a confusing distant error (or none), gives up on editing, and falls back to rewriting the whole file — which re-rolls the dice on every previously fixed region. The rewrites, not the failed edits, were the actual disaster.
+
+**What changed** (`pkg/tools/edit.go`, new `pkg/tools/structcheck.go`):
+
+1. **Matching layer** — Levenshtein best-window fuzzy matching removed. Replaced by progressive strictness: exact match → normalized match (trailing whitespace + Unicode variants like smart quotes/NBSP). Leading whitespace is never normalized: indentation is semantics in Python/YAML/Lisp. A drifted `oldText` is now rejected with a clear error instead of silently matching the wrong sibling function.
+2. **Structural sentinel** — after computing the edited content (edit) or before overwriting an existing file (write), `structCheck` rejects changes that break language structure: Lisp-family paren balance (`scm/ss/lisp/el/cl/rkt/sld`, aware of char literals like `#\(` and block comments) parsed in-process; Python/YAML via external interpreter when available (silent skip if absent). Errors report the approximate offending line so the model can fix its `newText` locally instead of escalating to a rewrite.
+3. **No-op guard**: `oldText == newText` is rejected up front.
+4. **Goose-style error reporting**: ambiguous `oldText` no longer fails with a bare error — every match location is listed with line numbers so the model can add context; not-found errors surface nearby lines resembling the requested text as suggestions.
+
+A companion `multi_edit` tool applies several replacements to one file atomically. All ranges are resolved against the ORIGINAL content (codex-style), so earlier edits can never shift or invalidate later matches — the classic sequential-apply hazard. Overlapping spans are rejected, structural validation runs on the combined result, and nothing is written unless every edit resolves.
+
+**Why not stricter rejection of fuzzy matches only?** Rejecting imprecise matches without addressing broken-but-well-matched replacements leaves half the failure chain open: syntax-breaking `newText` still lands silently and surfaces as a distant runtime error later. The two layers together cut the chain at both entry points; the "write" gate closes the loop because whole-file rewrites of structural files now hit the same validation.
+
+**Validation**: agent-level A/B on benchmark task `020_scm_stress` (10-edit Guile file with deliberately near-duplicate helpers, weak model `ollama/laguna`) reproduced the target behavior with the fixed binary: 7 in-run sentinel rejections with precise line numbers, followed by in-place `newText` correction and recovery via pure edits (zero rewrites) in one PASS run; zero false-positive rejections across both arms. Mechanism-level unit tests pin the behavior deltas (near-duplicate drift rejected, exact/normalized windows hit correctly, indentation drift stays rejected).
+
 ## Shared Slash-Command Result Renderers (2026-08)
 
 **Problem**: Slash-command results were rendered twice with diverging output: the TUI shape-sniffed response payloads client-side (`subcommand/run/tui/event_renderer.go`, ~700 lines), while ACP hosts — which have no TUI renderer of their own and just display text — needed server-side formatting (PR #384 added a parallel set of per-command renderers in `acp.go`). Same commands, two code paths, inconsistent formats.

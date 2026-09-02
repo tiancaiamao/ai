@@ -74,6 +74,16 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agentct
 		}
 	}
 
+	// Structural sentinel for overwrites: a full-file rewrite that introduces
+	// parens/syntax damage destroys unrelated code. Reject it up front.
+	if existing, err := os.ReadFile(path); err == nil {
+		if err := structCheck(path, string(existing), content); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("cannot read existing file for structural check: %w", err)
+	}
+
 	// Write file
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file %s: %w", path, err)
