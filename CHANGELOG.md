@@ -3,6 +3,24 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## `ai acp` registers as a first-class run (2026-08)
+
+**What changed**: `ai acp` (the stdio ACP agent used by Zed / agent-shell) now
+goes through the same serve infrastructure as `ai serve`: it creates a run
+(`~/.ai/runs/<id>/run.json`), mirrors turn ends into `events.jsonl`, records
+the active session via the run→session link, and listens on a control socket
+in addition to stdio. Concretely, `subcommand/run` exports `ServeConfig` and a
+new `StdioServe` entry point that attaches the stdio peer to the transport
+`Hub` alongside the unix-socket peers; the process shuts down (status `done`)
+when the stdio client disconnects.
+
+**Why**: Every external tool (`ai ls`, `ai send`, `ai watch`, `ai history`)
+addresses agents by run id, but `ai acp` runs were invisible — an agent driven
+from an editor could not be inspected, followed, or continued from the CLI.
+Reusing the hub also means multiple UIs can now attach to the same acp-hosted
+agent: the editor drives it over stdio while `ai watch` observes and `ai send`
+injects follow-up prompts over the socket.
+
 ## Read-Only Session History CLI: `ai history` (2026-08)
 
 **What changed**: Added a read-only query layer over persisted sessions and a
