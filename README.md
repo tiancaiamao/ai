@@ -29,6 +29,7 @@ ai <subcommand> [flags]
 | `watch` | Attach to a running serve instance (TUI) |
 | `send` | Send a message to a running agent instance |
 | `kill` | Stop a running agent instance |
+| `history` | Read-only query over persisted session history (windows/list/read/search) |
 
 ### Examples
 
@@ -50,6 +51,11 @@ ai acp < commands.jsonl
 # List runs
 ai ls
 ai ls --all --json
+
+# Inspect persisted session history (read-only)
+ai history windows --id <run-id>
+ai history search "auth bug" --id <run-id>
+ai history read --entry <entry-id>
 ```
 
 ### Flags

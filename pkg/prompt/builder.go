@@ -20,6 +20,9 @@ var compactSummarizePrompt string
 //go:embed "compact_check.md"
 var compactCheckPrompt string
 
+//go:embed "compact_hint.md"
+var compactHint string
+
 // CompactorBasePrompt returns a baseline system prompt used by the compactor
 // for token estimation in CalculateDynamicThreshold. This string is NOT sent
 // to the LLM as a system prompt — the compactor reuses the agent's system prompt
@@ -279,4 +282,10 @@ func NormalizeThinkingLevel(level string) string {
 // percentage (e.g. "40%").
 func CompactCheckPrompt() string {
 	return compactCheckPrompt
+}
+
+// CompactHint returns the post-compaction hint injected as a user message
+// after a successful compaction.
+func CompactHint() string {
+	return compactHint
 }

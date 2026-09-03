@@ -64,6 +64,13 @@ Flags for 'kill':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
   --force                  Send SIGKILL instead of graceful abort
 
+Flags for 'history':
+  --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted;
+                           finished runs are matched too)
+  --session <path>         Session directory path, bypassing run resolution
+  --json                   Machine mode: JSONL on stdout, no truncation markers
+  Run 'ai history' with no arguments for the full per-action flag reference.
+
 Examples:
   ai run                          Start agent with interactive TUI
   ai run --input "fix the bug"    Start with an initial prompt
@@ -82,5 +89,8 @@ Examples:
   ai kill                         Stop agent in current directory
   ai kill --id abc123             Stop specific run by ID
   ai kill --force                 Force kill (SIGKILL)
+  ai history windows --id abc123  List session generations of a run
+  ai history search "auth bug"    Search session history of the current run
+  ai history read --entry <id>    Read one history entry in full
 `)
 }

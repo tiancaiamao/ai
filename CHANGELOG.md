@@ -3,6 +3,35 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Read-Only Session History CLI: `ai history` (2026-08)
+
+**What changed**: Added a read-only query layer over persisted sessions and a
+new `ai history` subcommand (`windows` / `list` / `read` / `search`) for
+inspecting history across compaction boundaries. `pkg/session` gained bounded
+history queries (`ListWindows`, `ListItems`, `ReadItem`, `Search`) with hard
+output caps, and runs are now linked to their session via `RunMeta.Session` +
+`ResolveRunIDForHistory`, so `--id <run>` (or a unique prefix) addresses the
+session a run produced. Text output follows a navigation protocol (paging +
+totals + explicit truncation markers) and `--json` emits clean JSONL for
+piping. A session-history skill teaches the model to use the same commands for
+recovery ("what did we say before the compaction?") without a live window.
+
+**Why**: After compaction, earlier conversation content is invisible to both
+the user and the model, and there was no way to audit what an agent actually
+did in a past run. Exposing history as a separate read-only CLI keeps the
+write path untouched (compaction semantics unchanged) while giving humans and
+the model a budgeted, pipe-friendly window into prior generations. Run→session
+linking removes the need to know internal session directory paths.
+
+Hardening pass: addressing is run-id only — `--id` (or `--session`) is
+required and cwd-based auto-select was removed, because an agent's working
+directory can change mid-run and no longer identifies the run. `findByFilter`
+skips run dirs whose `run.json` ID mismatches the directory name (corrupt
+data instead of duplicate candidates), ambiguity errors are bounded (candidate
+lists capped at 10; cwd conflicts report count + most recent instead of
+dumping every ID), and `search --no-tool` suppresses self-matches from the
+agent's own earlier search output. Truncation is uniformly `--max-chars`.
+
 ## `config.json` Model Section Is a Reference into `models.json` (2026-09)
 
 **What changed**: At startup the model is now resolved via `config.ResolveModel`:

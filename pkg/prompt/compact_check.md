@@ -6,7 +6,8 @@ Choose "reject" only if you need specific details from earlier messages for your
 
 If you reject, you may add a second line with a brief reason.
 If you have been using planning-related tools or skills, this is a good time to review and update progress before rejecting.
-Persisted files survive compaction and you can reload them later.
+Even after compaction, full message history remains queryable via the session-history skill (ai history), so compacting does not destroy the details.
 
 Reply with a single word on the first line: confirm or reject. Do not use any tools. Do not reply in any other language.
+
 </agent:compact-check>

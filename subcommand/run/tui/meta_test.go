@@ -181,6 +181,23 @@ func TestFindByPrefix_EmptyRunsDir(t *testing.T) {
 	assert.Len(t, matches, 0)
 }
 
+func TestFindByPrefix_SkipsMismatchedIDDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Well-formed run.
+	r := RunMeta{ID: "aabb01", PID: 2001, CWD: "/x", Status: StatusRunning, StartedAt: 1}
+	require.NoError(t, SaveRunMeta(&r, RunMetaPath(tmpDir, "aabb01")))
+
+	// Corrupt entry: run.json inside dir "aabb02" claims ID "aabb01".
+	corrupt := RunMeta{ID: "aabb01", PID: 2002, CWD: "/x", Status: StatusRunning, StartedAt: 2}
+	require.NoError(t, SaveRunMeta(&corrupt, RunMetaPath(tmpDir, "aabb02")))
+
+	matches, err := FindByPrefix(tmpDir, "aabb")
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "mismatched run dir must be skipped, not returned as a duplicate")
+	assert.Equal(t, "aabb01", matches[0].ID)
+}
+
 func TestIsRunning_CurrentProcess(t *testing.T) {
 	meta := &RunMeta{
 		ID:        "test01",
@@ -339,4 +356,79 @@ func TestCreateRun_RecordsPidStartTime(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, GetProcessStartTime(os.Getpid()), meta.PidStartTime,
 		"CreateRun should record process start time")
+}
+
+func TestRunMeta_SessionRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	meta := newTestMeta("abc123")
+	meta.Session = "0197a3f2-8b4c-7def-9a2b-3c4d5e6f7a8b"
+
+	path := RunMetaPath(tmpDir, meta.ID)
+	require.NoError(t, SaveRunMeta(meta, path))
+
+	loaded, err := LoadRunMeta(path)
+	require.NoError(t, err)
+	assert.Equal(t, meta.Session, loaded.Session, "Session should survive save/load round-trip")
+}
+
+func TestRunMeta_SessionAbsentInOldRunJSON(t *testing.T) {
+	// run.json written before the Session field existed must deserialize
+	// without error, leaving Session empty.
+	tmpDir := t.TempDir()
+	legacy := `{"id":"old001","pid":1,"cwd":"/tmp","status":"done","started_at":100}`
+	path := RunMetaPath(tmpDir, "old001")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o644))
+
+	loaded, err := LoadRunMeta(path)
+	require.NoError(t, err)
+	assert.Equal(t, "old001", loaded.ID)
+	assert.Empty(t, loaded.Session, "legacy run.json should yield empty Session")
+}
+
+func TestSetRunSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	meta, err := CreateRun(tmpDir, "/test", os.Getpid())
+	require.NoError(t, err)
+
+	require.NoError(t, SetRunSession(tmpDir, meta.ID, "session-a"))
+	loaded, err := LoadRunMeta(RunMetaPath(tmpDir, meta.ID))
+	require.NoError(t, err)
+	assert.Equal(t, "session-a", loaded.Session)
+	assert.Equal(t, meta.ID, loaded.ID, "SetRunSession must preserve other fields")
+
+	// Switching sessions overwrites the previous value (resume follows).
+	require.NoError(t, SetRunSession(tmpDir, meta.ID, "session-b"))
+	loaded, err = LoadRunMeta(RunMetaPath(tmpDir, meta.ID))
+	require.NoError(t, err)
+	assert.Equal(t, "session-b", loaded.Session)
+}
+
+func TestSetRunSession_MissingRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	err := SetRunSession(tmpDir, "nothere", "session-a")
+	assert.Error(t, err, "updating a nonexistent run should fail")
+}
+
+func TestFindAllByCwd_IncludesFinishedRuns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	statuses := map[string]string{"fin001": StatusDone, "fin002": StatusFailed, "fin003": StatusKilled}
+	for id, status := range statuses {
+		m := newTestMeta(id)
+		m.CWD = tmpDir
+		m.Status = status
+		require.NoError(t, SaveRunMeta(m, RunMetaPath(tmpDir, id)))
+	}
+	other := newTestMeta("fin004")
+	other.CWD = "/somewhere/else"
+	require.NoError(t, SaveRunMeta(other, RunMetaPath(tmpDir, "fin004")))
+
+	matches, err := FindAllByCwd(tmpDir, tmpDir)
+	require.NoError(t, err)
+	got := make(map[string]string, len(matches))
+	for _, m := range matches {
+		got[m.ID] = m.Status
+	}
+	assert.Equal(t, statuses, got, "FindAllByCwd should match cwd across all statuses and ignore other cwds")
 }
