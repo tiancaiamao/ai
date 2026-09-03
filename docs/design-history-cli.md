@@ -1,8 +1,7 @@
 # Design: `ai history` 子命令 + session-history skill
 
-> 状态：设计稿，待用户确认（brainstorm gate）。
-> 取代 `docs/plan-history-tool.md` 中的"原生工具"方案；该文档保留作背景。
-> 注意：按 AGENTS.md 约定，最终合入 `docs/` 的用户文档需为英文；本设计稿为工作文档，暂用中文与 `plan-history-tool.md` 保持一致。
+> 状态：已实现（PR #401）。本文档是唯一设计记录，取代并删除了 `docs/plan-history-tool.md`（原生工具方案）。
+> 注意：按 AGENTS.md 约定，`docs/` 最终用户文档需为英文；本设计稿暂为中文工作文档。
 
 ## 1. 现状（改之前长什么样）
 
@@ -72,17 +71,19 @@ summary + recent messages 保持现状。`history` 是纯增量的读口，不�
 ### 4.1 CLI 规格
 
 ```
-ai history windows [--id <run-id|prefix>] [--limit N] [--oldest-first] [--json]
-ai history list   [--id ...] [--window <window-id>] [--role user|assistant|tool|system|developer]
+ai history windows --id <run-id|prefix> [--limit N] [--oldest-first] [--json]
+ai history list   --id <run-id|prefix> [--window <window-id>] [--role user|assistant|tool|system|developer]
                   [--no-tool] [--entry <entry-id>] [--limit N] [--max-chars N] [--oldest-first] [--json]
-ai history read   --entry <entry-id> [--offset-chars N] [--limit-chars N] [--id ...] [--json]
-ai history search <query> [--id ...] [--window <window-id>] [--role ...] [--limit N]
-                  [--case-sensitive] [--json]
+ai history read   --entry <entry-id> [--offset-chars N] [--max-chars N] --id <run-id|prefix> [--json]
+ai history search <query> --id <run-id|prefix> [--window <window-id>] [--role ...] [--limit N]
+                  [--no-tool] [--case-sensitive] [--json]
 ```
+
+所有 action 必须显式寻址：`--id <run-id|prefix>`（或 `--session <path>` 逃生门）。**没有** cwd 自动选择——agent 运行中可以切换工作目录，cwd 不再可靠标识 run；曾试加过 `--latest`（cwd 内最近 run），因同一原因移除。`--id` 同样命中 done/failed 的 run。
 
 - **windows**：列 compaction 代际。每行：`window_id`（该代际 compaction entry ID；首个 window 用 session header）、`created_at`、`tokens_before`、`item_count`（代际内 message entry 数）、`summary_preview`（≤200 chars）。
 - **list**：列 window 内 items。每行：`entry_id`、`role`、`timestamp`、`content`（截断到 `max-chars`，默认 400，上限 2000，尾部 `…[truncated, N chars total]`）、`total_chars`、`tool_name`（仅 tool result）。`--entry <id>` = 返回该 entry 及其祖先链。省略 `--window` = 当前 leaf→root 路径；指定 = 跨代际。`--no-tool` 排除 tool result。
-- **read**：单条全量，字符级分页。返回 `entry_id, role, timestamp, tool_name?, content, total_chars`。`--limit-chars` 默认 20000、上限 50000；offset 超界返回空 content + total_chars。
+- **read**：单条全量，字符级分页。返回 `entry_id, role, timestamp, tool_name?, content, total_chars`。`--max-chars` 默认 20000、上限 50000；offset 超界返回空 content + total_chars。
 - **search**：字面子串，范围 = 所有 message entry + 所有 compaction snapshot 文件。每命中：`entry_id, role, window_id, timestamp, match`（命中 ± 上下文片段，≤400 chars）。query 长度 1..1000。返回含 `total_count`。
 
 **全局有界**：所有 list/search `--limit` 默认 20、上限 100；单次调用输出总量上限 40000 字符（约 10k token），超出截断并标注 `…[output truncated at 40000 chars, refine your query]`。数值为实现期常量，集中定义便于调整。
@@ -109,7 +110,7 @@ ai history search <query> [--id ...] [--window <window-id>] [--role ...] [--limi
 
 ### 4.5 Skill
 
-- 位置：`.ai/skills/history/SKILL.md`（进 repo，随项目分发）。
+- 位置：`skills/session-history/SKILL.md`（进 repo，随项目分发）。
 - 内容（约 50 行）：**触发条件**（需要回顾 compact 之前的内容；用户说"之前/我们说过"而 live window 没有）→ **命令表**（4 个 action 一行一个 + 常用参数）→ **示例**（search → read 两跳定位）→ **纪律提示**（先 search 拿 entry_id 和 total_count，再 read 翻页；不要盲目加大 limit）。
 - **不包含** jsonl schema、snapshot 文件格式等存储细节——那些已封装在 CLI 后面。
 
@@ -124,20 +125,19 @@ ai history search <query> [--id ...] [--window <window-id>] [--role ...] [--limi
 | `subcommand/helpers/helpers.go` | 改 | 扩展 resolve 以支持 done/failed run（不影响既有命令语义） |
 | `pkg/agent/runtime_meta.go`（或其注入链） | 改 | context 注入 run ID |
 | `cmd/ai/main.go` + `usage.go` | 改 | 注册 `history` 子命令 |
-| `.ai/skills/history/SKILL.md` | 新 | skill |
-| `docs/plan-history-tool.md` | 改 | 标注 superseded，指向本设计 |
+| `skills/session-history/SKILL.md` | 新 | skill |
 
 ## 5. 验收场景
 
 ### P0 Feature: 跨 compact 边界的内容恢复
 **Acceptance Scenarios:**
 1. 构造一个发生 过 compaction 的 session；`ai history search "<compact 前的已知短语>" --id <run>` 返回该条旧消息，`entry_id`/`role`/`snippet` 正确，且 snippet 属于 snapshot 内容。
-2. `ai history read --entry <该 entry_id>` 返回全量内容，`total_chars` 与实际一致；`--offset-chars`/`--limit-chars` 翻页拼接后等于全文。
+2. `ai history read --entry <该 entry_id>` 返回全量内容，`total_chars` 与实际一致；`--offset-chars`/`--max-chars` 翻页拼接后等于全文。
 3. `ai history windows` 列出 ≥2 个代际，按新到旧排序，`tokens_before`/`item_count`/`summary_preview` 与 session 内容吻合。
 
 ### P0 Feature: run-id 寻址与 session 跟随
 **Acceptance Scenarios:**
-4. 同一 cwd 两个并发 run A/B；`ai history windows --id A` 只反映 A 的 session；`--id B` 只反映 B 的；省略 `--id` 时报歧义错误并列出两个 ID。
+4. 同一 cwd 两个并发 run A/B；`ai history windows --id A` 只反映 A 的 session；`--id B` 只反映 B 的；省略 `--id` 时明确报错提示必须显式寻址。
 5. run A 内执行 `/resume` 切换 session 后，`ai history --id A` 查到的是切换后 session 的代际与内容。
 6. `--id` 为不存在的 ID / 无法唯一匹配的前缀 → 非零退出码 + 明确错误；run 结束（status=done）后 `--id` 仍可解析查询。
 
@@ -158,30 +158,22 @@ ai history search <query> [--id ...] [--window <window-id>] [--role ...] [--limi
 - 空 session / 从未 compact → `windows` 返回单个 window（header 代际）。
 - 非 message entry（compaction/session_info/branch_summary）默认不出现在 list/search；compaction summary 可经 `--role system` 观察（可选实现，若实现成本高则 defer）。
 - `--window` 传了不存在的 window_id → 明确错误。
-- run.json 缺 Session 字段（旧 run）→ 明确错误提示"该 run 未记录 session，用 --session <path> 指定"（是否提供 `--session` 逃生门：待拍板，建议提供，便于人工使用）。
+- run.json 缺 Session 字段（旧 run）→ 明确错误提示"该 run 未记录 session，用 --session <path> 指定"（`--session` 逃生门已实现，便于人工使用）。
 
-## 7. 对照 `plan-history-tool.md`（Completeness Checklist）
+## 7. Deferred 与非目标（承自原 plan）
 
-| 原 plan 条目 | 状态 | 说明 |
-|---|---|---|
-| §4 四个 action 契约 | ✅ Covered | 转为 CLI 四子命令（§4.1），参数集基本保留 |
-| §4 单工具 + action / DirectModelOnly 暴露 | 🔀 Merged/废弃 | 不做原生工具，无需模型私有暴露机制；CLI 对人也有用 |
-| §5 方案 b（list 返回 ID 自寻址） | ✅ Covered | search/list 返回 entry_id |
-| §5 方案 a（inline `[id:]` 注入） | ⏸️ Deferred | Codex 有此机制；待 skill 路线验证后再评估（含缓存影响） |
-| §5 MAX_RESULT_TOKENS 机制 | 🔀 Merged | 转为 CLI 内 40000 字符输出上限（§4.1） |
-| §6 查询层复用走链逻辑 | ✅ Covered | §4.4，抽 `pathToLeaf`/`resolveSnapshot` |
-| §6 测试要求 | ✅ Covered | §5 验收场景 + `pkg/session/history_test.go` |
-| §7 边界与错误 | ✅ Covered | §6 |
-| §8 非目标（new_context / notes / 语义检索 / 多机） | ✅ 同样非目标 | 本设计不变 |
-| §9 D1 字面搜索 | ✅ Covered | 差异：默认大小写不敏感（D4，待拍板） |
-| §9 D3 界值 | 🔀 Merged | 调整为字符级常量，集中在 §4.1 |
-| §9 D5 window_id 跨代际 | ✅ Covered | `list --window` |
-| §9 D5 branch 按 entry_id 展开 | ⏸️ Deferred | 非当前分支 follow-up |
-| §6.5 引用编号错误（§10 所指） | ✅ Fixed | 原 plan 遗留 nit，随 supersede 一并消解 |
+原 `plan-history-tool.md` 中未随本次实现的内容，留作后续参考：
 
-## Open Points（待用户拍板）
+- **inline `[id:]` 注入（方案 a）**：在 live context 每条消息末尾追加 `\n[id: <EntryID>]`（Codex 做法），让模型"看到什么就能引用什么"。已实现的是方案 b（search/list 返回 `entry_id`，模型两跳引用）。方案 a 需验证缓存影响：ID 短且固定，前缀生成后稳定，理论不影响 prefix cache，但必须对照 `pkg/compact` 的 cache_read 指标确认。
+- **branch 按 `entry_id` 展开**：非当前分支的历史默认不可达，留 follow-up。
+- **非目标（不变）**：`new_context`（硬重置）、`notes`（跨窗口持久工作状态）各自独立 PR；语义/embedding 检索明确不做，保持字面子串；远程/多机不支持。
 
-1. search 默认大小写不敏感 + `--case-sensitive` 开关（推荐是）。
-2. 是否提供 `--session <path>` 逃生门（人工直接指定 session，推荐是）。
-3. 单次输出上限 40000 chars、read `--limit-chars` 上限 50000 是否合适。
-4. skill 名称（建议 `session-history`，触发词覆盖 "history/历史/之前/compact"）。
+## 8. 已拍板的决策
+
+原设计稿的 Open Points 实现结果：
+
+1. search 默认大小写不敏感 + `--case-sensitive` 开关 → **采用**。
+2. `--session <path>` 逃生门 → **已实现**（人工/agent 直接指定 session dir）。
+3. 单次输出上限 40000 chars、read `--max-chars` 上限 50000 → **采用**。
+4. skill 名称 → **`session-history`**。
+5. （实现期追加）寻址收敛为仅 run id：cwd 自动选择与 `--latest` 被移除，原因见 §4.1。
