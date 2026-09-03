@@ -78,7 +78,7 @@ func parseActionFlags(fs *flag.FlagSet, args []string, stderr io.Writer) bool {
 
 // addGlobalFlags registers the flags shared by every action.
 func addGlobalFlags(fs *flag.FlagSet, idFlag, sessionFlag *string) {
-	fs.StringVar(idFlag, "id", "", "run ID or prefix (auto-selects by cwd if omitted)")
+	fs.StringVar(idFlag, "id", "", "run ID or unique prefix (required unless --session is given)")
 	fs.StringVar(sessionFlag, "session", "", "session directory path (escape hatch when the run does not record a session)")
 }
 
@@ -97,9 +97,11 @@ Actions:
   search     Literal substring search over messages and compaction snapshots
 
 Global flags:
-  --id <run-id|prefix>   Run ID or prefix (auto-selects by cwd; done/failed
-                         runs are also matched; ambiguous prefixes error with
-                         candidate IDs)
+  --id <run-id|prefix>   Run ID or unique prefix; required unless --session
+                         is given (no cwd auto-select: an agent's cwd can
+                         change during its lifetime; done/failed runs are
+                         matched too; ambiguous prefixes error with a
+                         bounded candidate list)
   --session <path>       Session directory path, bypassing run resolution
   --json                 Machine mode: JSONL on stdout, no truncation markers
 
@@ -121,12 +123,14 @@ Flags for 'read':
   --entry <id>           Entry to read (required)
   --offset-chars <n>     Character offset to start from (default 0; offsets
                          beyond the end return empty content, exit 0)
-  --limit-chars <n>      Max characters to return (default 20000, max 50000)
+  --max-chars <n>        Max characters to return (default 20000, max 50000)
 
 Flags for 'search':
   <query>                Literal substring to search (required, 1..1000 chars)
   --window <id>          Restrict to one window
   --role <role>          Filter by role
+  --no-tool              Exclude tool results (avoids self-matches on
+                         earlier search output)
   --limit <n>            Max matches to return (default 20, max 100)
   --case-sensitive       Match case-sensitively (default: insensitive)
 
@@ -136,9 +140,14 @@ query]" when the cap is hit.
 
 Examples:
   ai history windows --id a1b2c3       List generations of a run's session
-  ai history list --limit 50           List recent items of the current run
-  ai history read --entry <entry-id>   Read one entry in full
-  ai history read --entry e --offset-chars 20000 --limit-chars 20000
-  ai history search "auth bug" --json  Search, machine-readable output
+  ai history list --id a1b2c3 --limit 50
+                                       List recent items of a run
+  ai history read --id a1b2c3 --entry <entry-id>
+                                       Read one entry in full
+  ai history read --id a1b2c3 --entry e --offset-chars 20000 --max-chars 20000
+  ai history search "auth bug" --id a1b2c3 --json
+                                       Search, machine-readable output
+  ai history search "err" --id a1b2c3 --json | jq -r '.entry_id'
+                                       Collect entry IDs for batch reads
 `)
 }

@@ -69,6 +69,7 @@ type HistoryItemsOptions struct {
 type HistorySearchOptions struct {
 	WindowID      string
 	Role          string
+	ExcludeTool   bool
 	Limit         int
 	CaseSensitive bool
 }
@@ -318,7 +319,7 @@ func (s *Session) currentPathItems(path []*SessionEntry) []HistoryItem {
 
 func (s *Session) searchItemsLocked(opts HistorySearchOptions) ([]HistoryItem, error) {
 	path := pathToLeaf(s.entries, s.leafID, s.byID)
-	filter := HistoryItemsOptions{Role: opts.Role}
+	filter := HistoryItemsOptions{Role: opts.Role, ExcludeTool: opts.ExcludeTool}
 
 	// A specific window searches only that generation; the default scope is
 	// all current-branch messages plus every snapshot reachable from the

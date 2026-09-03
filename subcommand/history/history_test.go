@@ -390,6 +390,26 @@ func TestResolveSessionDirAmbiguousPrefixListsCandidates(t *testing.T) {
 	}
 }
 
+func TestResolveSessionDirAmbiguousPrefixBoundsCandidates(t *testing.T) {
+	withTempHome(t)
+	baseDir := t.TempDir()
+	// More candidates than maxDisambiguationCandidates.
+	for i := 0; i < 15; i++ {
+		saveRun(t, baseDir, fmt.Sprintf("abc%03d", i), "/tmp/a", "")
+	}
+
+	_, err := resolveSessionDir(baseDir, "abc", "")
+	if err == nil {
+		t.Fatal("expected ambiguity error")
+	}
+	if !strings.Contains(err.Error(), "15 candidates") {
+		t.Errorf("error %q should report the candidate count", err)
+	}
+	if strings.Count(err.Error(), "abc0") > maxDisambiguationCandidates {
+		t.Errorf("error %q should list at most %d candidates", err, maxDisambiguationCandidates)
+	}
+}
+
 func TestResolveSessionDirMissingSessionPromptsEscapeHatch(t *testing.T) {
 	withTempHome(t)
 	baseDir := t.TempDir()

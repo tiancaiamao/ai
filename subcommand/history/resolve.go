@@ -16,9 +16,12 @@ import (
 // Resolution order (docs/design-history-cli.md §4.2):
 //  1. --session <path>: explicit escape hatch, used as-is (typically when an
 //     old run.json carries no Session field).
-//  2. --id / cwd auto-select via helpers.ResolveRunIDForHistory (matches
-//     running and finished runs), then read run.json's Session field (the
-//     session UUID) and locate it under the run's session directory.
+//  2. --id <run-id|prefix> via helpers.ResolveRunIDForHistory (required;
+//     matches running and finished runs), then read run.json's Session field
+//     (the session UUID) and locate it under the run's session directory.
+//
+// There is no cwd-based fallback on purpose: an agent's working directory can
+// change during its lifetime, so the cwd does not reliably identify the run.
 func resolveSessionDir(baseDir, idFlag, sessionFlag string) (string, error) {
 	if sessionFlag != "" {
 		info, err := os.Stat(sessionFlag)
@@ -41,10 +44,14 @@ func resolveSessionDir(baseDir, idFlag, sessionFlag string) (string, error) {
 	return sessionDirForRun(meta)
 }
 
+// maxDisambiguationCandidates bounds the candidate list in the prefix
+// ambiguity error; a very short prefix can match hundreds of runs.
+const maxDisambiguationCandidates = 10
+
 // disambiguationError enriches resolution failures with candidate IDs.
 // Prefix ambiguity must never be silently guessed: when a prefix matches
-// multiple runs, every candidate ID is listed. The cwd auto-select path
-// already lists candidates in the error from the resolver.
+// multiple runs, candidate IDs are listed — bounded to
+// maxDisambiguationCandidates so a short prefix cannot flood the output.
 func disambiguationError(baseDir, idFlag string, err error) error {
 	if idFlag == "" {
 		return err
@@ -56,6 +63,10 @@ func disambiguationError(baseDir, idFlag string, err error) error {
 	ids := make([]string, len(matches))
 	for i, m := range matches {
 		ids[i] = m.ID
+	}
+	if len(ids) > maxDisambiguationCandidates {
+		return fmt.Errorf("run ID prefix %q is ambiguous (%d candidates: %s ...), use a longer --id",
+			idFlag, len(ids), strings.Join(ids[:maxDisambiguationCandidates], " "))
 	}
 	return fmt.Errorf("run ID prefix %q is ambiguous, candidates: %v; use a longer --id", idFlag, ids)
 }

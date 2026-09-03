@@ -142,7 +142,7 @@ func runRead(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("read")
 	entryID := fs.String("entry", "", "entry to read (required)")
 	offsetChars := fs.Int("offset-chars", 0, "character offset to start from")
-	limitChars := fs.Int("limit-chars", session.HistoryDefaultReadChars, "max characters to return (max 50000)")
+	maxChars := fs.Int("max-chars", session.HistoryDefaultReadChars, "max characters to return (max 50000)")
 	jsonOutput := fs.Bool("json", false, "emit a single JSON object")
 	var idFlag, sessionFlag string
 	addGlobalFlags(fs, &idFlag, &sessionFlag)
@@ -170,7 +170,7 @@ func runRead(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	item, err := sess.ReadItem(*entryID, *offsetChars, *limitChars)
+	item, err := sess.ReadItem(*entryID, *offsetChars, *maxChars)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
@@ -239,6 +239,7 @@ func runSearch(args []string, stdout, stderr io.Writer) int {
 	role := fs.String("role", "", "filter by role")
 	limit := fs.Int("limit", session.HistoryDefaultLimit, "max matches to return (max 100)")
 	caseSensitive := fs.Bool("case-sensitive", false, "match case-sensitively (default: insensitive)")
+	noTool := fs.Bool("no-tool", false, "exclude tool results (avoids self-matches on earlier search output)")
 	jsonOutput := fs.Bool("json", false, "emit JSONL")
 	var idFlag, sessionFlag string
 	addGlobalFlags(fs, &idFlag, &sessionFlag)
@@ -269,7 +270,7 @@ func runSearch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	response, err := sess.Search(query, session.HistorySearchOptions{
-		WindowID: *windowID, Role: *role, Limit: *limit, CaseSensitive: *caseSensitive,
+		WindowID: *windowID, Role: *role, ExcludeTool: *noTool, Limit: *limit, CaseSensitive: *caseSensitive,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)

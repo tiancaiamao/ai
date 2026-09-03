@@ -141,47 +141,17 @@ func TestResolveRunIDForHistory_Errors(t *testing.T) {
 	}
 }
 
-func TestResolveRunIDForHistory_AutoSelectByCwd(t *testing.T) {
+func TestResolveRunIDForHistory_RequiresID(t *testing.T) {
 	baseDir := t.TempDir()
-	dir := t.TempDir()
-	oldWd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(oldWd) }()
-	resolvedWd, err := os.Getwd() // macOS may resolve /var → /private/var
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// No runs in cwd.
-	if _, err := ResolveRunIDForHistory(baseDir, ""); err == nil {
-		t.Error("expected error when no runs in cwd")
-	}
-
-	// Single finished run is auto-selected (unlike ResolveRunID).
-	saveTestRun(t, baseDir, "done001", resolvedWd, tui.StatusDone)
-	meta, err := ResolveRunIDForHistory(baseDir, "")
-	if err != nil {
-		t.Fatalf("auto-select single done run: %v", err)
-	}
-	if meta.ID != "done001" {
-		t.Errorf("got %s, want done001", meta.ID)
-	}
-
-	// Multiple runs in cwd → ambiguity error listing candidates.
-	saveTestRun(t, baseDir, "done002", resolvedWd, tui.StatusRunning)
-	_, err = ResolveRunIDForHistory(baseDir, "")
+	// Even with runs present, empty id must error: cwd no longer identifies
+	// the run (an agent's working directory can change during its lifetime).
+	saveTestRun(t, baseDir, "done001", "/x", tui.StatusDone)
+	_, err := ResolveRunIDForHistory(baseDir, "")
 	if err == nil {
-		t.Fatal("expected ambiguity error with multiple runs in cwd")
+		t.Fatal("expected error when --id is omitted")
 	}
-	for _, id := range []string{"done001", "done002"} {
-		if !strings.Contains(err.Error(), id) {
-			t.Errorf("ambiguity error should list candidate %s: %v", id, err)
-		}
+	if !strings.Contains(err.Error(), "--id") {
+		t.Errorf("error should tell the caller to pass --id: %v", err)
 	}
 }
 

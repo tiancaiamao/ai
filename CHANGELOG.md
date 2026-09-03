@@ -23,6 +23,15 @@ write path untouched (compaction semantics unchanged) while giving humans and
 the model a budgeted, pipe-friendly window into prior generations. Run→session
 linking removes the need to know internal session directory paths.
 
+Hardening pass: addressing is run-id only — `--id` (or `--session`) is
+required and cwd-based auto-select was removed, because an agent's working
+directory can change mid-run and no longer identifies the run. `findByFilter`
+skips run dirs whose `run.json` ID mismatches the directory name (corrupt
+data instead of duplicate candidates), ambiguity errors are bounded (candidate
+lists capped at 10; cwd conflicts report count + most recent instead of
+dumping every ID), and `search --no-tool` suppresses self-matches from the
+agent's own earlier search output. Truncation is uniformly `--max-chars`.
+
 ## `config.json` Model Section Is a Reference into `models.json` (2026-09)
 
 **What changed**: At startup the model is now resolved via `config.ResolveModel`:

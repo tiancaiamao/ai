@@ -87,51 +87,33 @@ func ResolveRunID(baseDir, id string) (*tui.RunMeta, error) {
 }
 
 // ResolveRunIDForHistory resolves the target run for read-only history
-// queries. It follows the same exact/prefix/cwd resolution order as
-// ResolveRunID, but accepts runs in any status (running/done/failed/killed),
-// because history is commonly queried after the run has finished.
+// queries by exact ID or unique prefix. It accepts runs in any status
+// (running/done/failed/killed), because history is commonly queried after
+// the run has finished.
+//
+// Unlike ResolveRunID there is deliberately no cwd auto-select fallback:
+// an agent's working directory can change during its lifetime, so the cwd
+// no longer identifies the run reliably. Callers must pass an explicit id.
 // ResolveRunID's semantics for the send/watch/kill callers are unchanged.
 func ResolveRunIDForHistory(baseDir, id string) (*tui.RunMeta, error) {
-	if id != "" {
-		// Try exact match first: look for run.json directly.
-		exactPath := tui.RunMetaPath(baseDir, id)
-		if meta, err := tui.LoadRunMeta(exactPath); err == nil {
-			return meta, nil
-		}
-
-		// Try prefix match.
-		matches, err := tui.FindByPrefix(baseDir, id)
-		if err != nil {
-			return nil, fmt.Errorf("prefix match for %q: %w", id, err)
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("no run found matching %q", id)
-		}
-		// FindByPrefix returns at most 1 match on success (errors on multiple).
-		return &matches[0], nil
+	if id == "" {
+		return nil, fmt.Errorf("--id <run-id> is required; pass the run_id from <agent:runtime_state/>")
 	}
 
-	// Auto-select by cwd.
-	cwd, err := os.Getwd()
+	// Try exact match first: look for run.json directly.
+	exactPath := tui.RunMetaPath(baseDir, id)
+	if meta, err := tui.LoadRunMeta(exactPath); err == nil {
+		return meta, nil
+	}
+
+	// Try prefix match.
+	matches, err := tui.FindByPrefix(baseDir, id)
 	if err != nil {
-		return nil, fmt.Errorf("get cwd: %w", err)
+		return nil, fmt.Errorf("prefix match for %q: %w", id, err)
 	}
-
-	matches, err := tui.FindAllByCwd(baseDir, cwd)
-	if err != nil {
-		return nil, fmt.Errorf("find runs by cwd: %w", err)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no run found matching %q", id)
 	}
-
-	switch len(matches) {
-	case 0:
-		return nil, fmt.Errorf("no runs found in %s", cwd)
-	case 1:
-		return &matches[0], nil
-	default:
-		ids := make([]string, len(matches))
-		for i, m := range matches {
-			ids[i] = m.ID
-		}
-		return nil, fmt.Errorf("multiple runs in %s (IDs: %v), use --id to disambiguate", cwd, ids)
-	}
+	// FindByPrefix returns at most 1 match on success (errors on multiple).
+	return &matches[0], nil
 }

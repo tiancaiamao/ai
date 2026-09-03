@@ -181,6 +181,23 @@ func TestFindByPrefix_EmptyRunsDir(t *testing.T) {
 	assert.Len(t, matches, 0)
 }
 
+func TestFindByPrefix_SkipsMismatchedIDDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Well-formed run.
+	r := RunMeta{ID: "aabb01", PID: 2001, CWD: "/x", Status: StatusRunning, StartedAt: 1}
+	require.NoError(t, SaveRunMeta(&r, RunMetaPath(tmpDir, "aabb01")))
+
+	// Corrupt entry: run.json inside dir "aabb02" claims ID "aabb01".
+	corrupt := RunMeta{ID: "aabb01", PID: 2002, CWD: "/x", Status: StatusRunning, StartedAt: 2}
+	require.NoError(t, SaveRunMeta(&corrupt, RunMetaPath(tmpDir, "aabb02")))
+
+	matches, err := FindByPrefix(tmpDir, "aabb")
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "mismatched run dir must be skipped, not returned as a duplicate")
+	assert.Equal(t, "aabb01", matches[0].ID)
+}
+
 func TestIsRunning_CurrentProcess(t *testing.T) {
 	meta := &RunMeta{
 		ID:        "test01",

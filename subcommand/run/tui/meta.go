@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -266,6 +267,13 @@ func findByFilter(baseDir string, match func(*RunMeta) bool) ([]RunMeta, error) 
 		meta, err := LoadRunMeta(metaPath)
 		if err != nil {
 			continue // skip unreadable entries
+		}
+		// The directory name is the source of truth for addressing; a run.json
+		// whose ID disagrees is corrupt (stale copies, partial writes). Skip it
+		// so it cannot surface as a duplicate candidate.
+		if meta.ID != e.Name() {
+			slog.Warn("skipping run dir with mismatched run.json ID", "dir", e.Name(), "run_json_id", meta.ID)
+			continue
 		}
 		if match(meta) {
 			results = append(results, *meta)
