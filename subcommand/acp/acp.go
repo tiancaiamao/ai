@@ -1,19 +1,19 @@
 // Package acp implements the 'ai acp' subcommand: an ACP (Agent Client
 // Protocol) agent over stdio, compatible with agent-shell and other ACP
 // clients (JSON-RPC 2.0, newline-delimited framing).
+//
+// Unlike a bare stdio agent, `ai acp` registers itself as a run (run.json,
+// events.jsonl and a control socket under ~/.ai/runs/<id>/), so it shows up
+// in `ai ls` and can be observed and driven externally (`ai send`, `ai watch`,
+// `ai history --id <run>`).
 package acp
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/tiancaiamao/ai/pkg/app"
-	"github.com/tiancaiamao/ai/pkg/transport"
-	"github.com/tiancaiamao/ai/subcommand/helpers"
+	"github.com/tiancaiamao/ai/subcommand/run"
 )
 
 // ACPSubcommand implements the 'ai acp' subcommand.
@@ -29,31 +29,18 @@ func ACPSubcommand() {
 	modelFlag := fs.String("model", "", `Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.`)
 	fs.Parse(os.Args[1:])
 
-	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
-	// during initialization (see logger.NewLogger).
-	systemPrompt, err := helpers.ParseSystemPrompt(*systemPromptFlag)
-
+	// Startup errors must go to stderr — stdout is the ACP channel.
+	err := run.StdioServe(run.ServeConfig{
+		Session:      *sessionPathFlag,
+		SystemPrompt: *systemPromptFlag,
+		MaxTurns:     *maxTurnsFlag,
+		Timeout:      *timeoutFlag,
+		HTTP:         *debugAddr,
+		AgentConfig:  *agentConfigFlag,
+		Role:         *roleFlag,
+		Model:        *modelFlag,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Canceling this context aborts the active agent, closes the transport,
-	// and lets RunACP wait for event persistence to finish before returning.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	conn := transport.NewStdio(os.Stdin, os.Stdout)
-
-	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
-	// during initialization (see logger.NewLogger).
-	var runErr error
-	if *agentConfigFlag != "" {
-		runErr = app.RunACPWithAgentConfigContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, "")
-	} else {
-		runErr = app.RunACPWithContext(ctx, conn, *sessionPathFlag, *debugAddr, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, "")
-	}
-	if err := runErr; err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

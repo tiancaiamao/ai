@@ -14,7 +14,7 @@ Usage:
 Subcommands:
   run             Start agent with interactive TUI (serve + watch)
   serve           Start agent as background daemon
-  acp             Start as ACP agent over stdio (agent-shell, Zed, etc.)
+    acp             Start as ACP agent over stdio (agent-shell, Zed, etc.); registers a run visible to 'ai ls'
   ls              List running and recent runs
   models          List available models (use "provider/id" syntax for --model)
   watch           Attach to a running serve instance (TUI)
@@ -76,7 +76,7 @@ Examples:
   ai run --input "fix the bug"    Start with an initial prompt
   ai serve                        Start agent as background daemon
   ai serve --input "fix the bug"  Start daemon with an initial prompt
-  ai acp                         Start ACP on stdin/stdout
+    ai acp                         Start ACP on stdin/stdout (registers a run: 'ai ls', 'ai send', 'ai watch', 'ai history' all work on it)
   ai ls                           List running agents
   ai ls --all                     Include finished agents
   ai models                       List available models

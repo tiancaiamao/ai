@@ -24,7 +24,7 @@ ai <subcommand> [flags]
 |------------|-------------|
 | `run` | Start agent with interactive TUI (serves + watches in one process) |
 | `serve` | Start agent as a background daemon (foreground process, redirect I/O to files) |
-| `acp` | ACP (Agent Client Protocol) agent over stdio (agent-shell, Zed, etc.) |
+| `acp` | ACP (Agent Client Protocol) agent over stdio (agent-shell, Zed, etc.); registers a run so `ai ls`/`send`/`watch`/`history` can address it |
 | `ls` | List running and recent agent instances |
 | `watch` | Attach to a running serve instance (TUI) |
 | `send` | Send a message to a running agent instance |
@@ -45,7 +45,8 @@ ai watch
 ai send "what about error handling?"
 ai kill
 
-# ACP protocol (for editor/tool integration)
+# ACP protocol (for editor/tool integration); registers a run, so the same
+# agent is visible to `ai ls` / `ai watch` / `ai send` / `ai history --id`
 ai acp < commands.jsonl
 
 # List runs

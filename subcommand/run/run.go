@@ -24,17 +24,19 @@ import (
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
-// serveConfig holds the shared configuration for `ai serve` / `ai run`.
-type serveConfig struct {
-	session      string
-	systemPrompt string
-	maxTurns     int
-	timeout      time.Duration
-	http         string
-	name         string
-	role         string
-	model        string
-	idFile       string // write run ID here once the ACP server is live
+// ServeConfig holds the shared configuration for `ai serve`, `ai run` and
+// `ai acp`.
+type ServeConfig struct {
+	Session      string
+	SystemPrompt string
+	MaxTurns     int
+	Timeout      time.Duration
+	HTTP         string
+	Name         string
+	Role         string
+	Model        string
+	AgentConfig  string // path to agent.yaml; takes precedence over Role
+	IDFile       string // write run ID here once the ACP server is live
 }
 
 // ServeSubcommand starts the agent in this process. The ACP server runs over
@@ -64,16 +66,16 @@ func ServeSubcommand(binPath string) {
 		fmt.Fprintf(os.Stderr, "warn: failed to set process group: %v\n", err)
 	}
 
-	sp := startServeApp(serveConfig{
-		session:      *sessionFlag,
-		systemPrompt: *systemPromptFlag,
-		maxTurns:     *maxTurnsFlag,
-		timeout:      *timeoutFlag,
-		http:         *httpFlag,
-		name:         *nameFlag,
-		role:         *roleFlag,
-		model:        *modelFlag,
-		idFile:       *idFileFlag,
+	sp := startServeApp(ServeConfig{
+		Session:      *sessionFlag,
+		SystemPrompt: *systemPromptFlag,
+		MaxTurns:     *maxTurnsFlag,
+		Timeout:      *timeoutFlag,
+		HTTP:         *httpFlag,
+		Name:         *nameFlag,
+		Role:         *roleFlag,
+		Model:        *modelFlag,
+		IDFile:       *idFileFlag,
 	})
 	defer sp.Close()
 
@@ -108,6 +110,58 @@ func ServeSubcommand(binPath string) {
 	if status == tui.StatusFailed {
 		os.Exit(1)
 	}
+}
+
+// StdioServe runs the same infrastructure as `ai serve` (run meta,
+// events.jsonl mirror, control socket, hub) but exposes the ACP server on
+// stdin/stdout as the primary peer. Used by `ai acp`: the controlling ACP
+// client (Zed, agent-shell) drives the agent over stdio while the run stays
+// visible to `ai ls` and attachable via `ai send` / `ai watch` /
+// `ai history --id <run>` through the control socket.
+//
+// The process exits when the stdio peer disconnects, a termination signal
+// arrives, or the agent fails; the final status is recorded in run.json.
+func StdioServe(cfg ServeConfig) error {
+	sp := startServeApp(cfg)
+	defer sp.Close()
+
+	// Attach the stdio peer to the hub. The hub's readLoop swallows
+	// per-conn read errors, so eofConn is how we notice the client going
+	// away and shut the agent down.
+	sp.hub.AddConn(newEOFConn(transport.NewStdio(os.Stdin, os.Stdout), sp.cancel))
+
+	<-sp.done
+
+	sp.meta.Status = sp.status
+	sp.meta.FinishedAt = time.Now().Unix()
+	if err := tui.SaveRunMeta(sp.meta, sp.metaPath); err != nil {
+		return fmt.Errorf("save run meta: %w", err)
+	}
+
+	if sp.status == tui.StatusFailed {
+		return fmt.Errorf("agent failed (see %s)", filepath.Join(filepath.Dir(sp.metaPath), "error.log"))
+	}
+	return nil
+}
+
+// eofConn wraps a Conn and invokes onEOF (once) when the peer's read side
+// returns — EOF or any read error.
+type eofConn struct {
+	transport.Conn
+	onEOF func()
+	once  sync.Once
+}
+
+func newEOFConn(c transport.Conn, onEOF func()) *eofConn {
+	return &eofConn{Conn: c, onEOF: onEOF}
+}
+
+func (c *eofConn) ReadMessage() ([]byte, error) {
+	msg, err := c.Conn.ReadMessage()
+	if err != nil {
+		c.once.Do(c.onEOF)
+	}
+	return msg, err
 }
 
 // serveApp holds the runtime state of the in-process ACP server.
@@ -165,7 +219,7 @@ func failServe(msg string) {
 // startServeApp sets up the run directory, meta file, unix socket, hub and
 // control client, then starts the in-process ACP server. The process exits
 // when a turn completes (_turn_end) or a termination signal arrives.
-func startServeApp(cfg serveConfig) *serveApp {
+func startServeApp(cfg ServeConfig) *serveApp {
 	homeDir, err := os.UserHomeDir()
 
 	if err != nil {
@@ -174,14 +228,14 @@ func startServeApp(cfg serveConfig) *serveApp {
 	baseDir := filepath.Join(homeDir, ".ai")
 
 	// Resolve system prompt.
-	sysPrompt, err := helpers.ParseSystemPrompt(cfg.systemPrompt)
+	sysPrompt, err := helpers.ParseSystemPrompt(cfg.SystemPrompt)
 	if err != nil {
 		failServe(fmt.Sprintf("invalid system prompt: %v", err))
 	}
-	if cfg.role != "" {
-		roleConfigPath := filepath.Join(homeDir, ".ai", "roles", cfg.role, "agent.yaml")
+	if cfg.Role != "" {
+		roleConfigPath := filepath.Join(homeDir, ".ai", "roles", cfg.Role, "agent.yaml")
 		if _, err := os.Stat(roleConfigPath); err != nil {
-			failServe(fmt.Sprintf("role not found: %s (path %s)", cfg.role, roleConfigPath))
+			failServe(fmt.Sprintf("role not found: %s (path %s)", cfg.Role, roleConfigPath))
 		}
 	}
 
@@ -207,8 +261,8 @@ func startServeApp(cfg serveConfig) *serveApp {
 		failServe(fmt.Sprintf("failed to create log file: %v", err))
 	}
 
-	if cfg.name != "" {
-		meta.Name = cfg.name
+	if cfg.Name != "" {
+		meta.Name = cfg.Name
 		if err := tui.SaveRunMeta(meta, tui.RunMetaPath(baseDir, id)); err != nil {
 			failServe(fmt.Sprintf("failed to save run meta: %v", err))
 		}
@@ -247,7 +301,12 @@ func startServeApp(cfg serveConfig) *serveApp {
 	ctx, cancel := context.WithCancel(context.Background())
 	sp.cancel = cancel
 	go func() {
-		err := app.RunACPWithContext(ctx, hub, cfg.session, cfg.http, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.role, cfg.model, id)
+		var err error
+		if cfg.AgentConfig != "" {
+			err = app.RunACPWithAgentConfigContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Timeout, cfg.AgentConfig, cfg.Model, id)
+		} else {
+			err = app.RunACPWithContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Timeout, cfg.Role, cfg.Model, id)
+		}
 		if err != nil {
 			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
 		}
@@ -280,8 +339,8 @@ func startServeApp(cfg serveConfig) *serveApp {
 
 	// Publish the run ID only once the ACP server is live, so callers that
 	// poll this file can immediately dial the socket.
-	if cfg.idFile != "" {
-		if err := os.WriteFile(cfg.idFile, []byte(id+"\n"), 0o644); err != nil {
+	if cfg.IDFile != "" {
+		if err := os.WriteFile(cfg.IDFile, []byte(id+"\n"), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: failed to write id file: %v\n", err)
 		}
 	}
@@ -367,15 +426,15 @@ func RunSubcommand(binPath string) {
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
-	cfg := serveConfig{
-		session:      *sessionFlag,
-		systemPrompt: *systemPromptFlag,
-		maxTurns:     *maxTurnsFlag,
-		timeout:      *timeoutFlag,
-		http:         *httpFlag,
-		name:         *nameFlag,
-		role:         *roleFlag,
-		model:        *modelFlag,
+	cfg := ServeConfig{
+		Session:      *sessionFlag,
+		SystemPrompt: *systemPromptFlag,
+		MaxTurns:     *maxTurnsFlag,
+		Timeout:      *timeoutFlag,
+		HTTP:         *httpFlag,
+		Name:         *nameFlag,
+		Role:         *roleFlag,
+		Model:        *modelFlag,
 	}
 
 	// Serve writes its run ID here once the ACP server is live.
@@ -463,31 +522,31 @@ var serveErrorLogHint = "~/.ai/runs/<id>/error.log"
 
 // startServeProcess spawns a detached `ai serve` subprocess in its own
 // process group.
-func startServeProcess(binPath string, cfg serveConfig, idFile string) (*serveProcess, error) {
+func startServeProcess(binPath string, cfg ServeConfig, idFile string) (*serveProcess, error) {
 	args := []string{"serve", "--id-file", idFile}
-	if cfg.session != "" {
-		args = append(args, "--session", cfg.session)
+	if cfg.Session != "" {
+		args = append(args, "--session", cfg.Session)
 	}
-	if cfg.systemPrompt != "" {
-		args = append(args, "--system-prompt", cfg.systemPrompt)
+	if cfg.SystemPrompt != "" {
+		args = append(args, "--system-prompt", cfg.SystemPrompt)
 	}
-	if cfg.maxTurns > 0 {
-		args = append(args, "--max-turns", strconv.Itoa(cfg.maxTurns))
+	if cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(cfg.MaxTurns))
 	}
-	if cfg.timeout > 0 {
-		args = append(args, "--timeout", cfg.timeout.String())
+	if cfg.Timeout > 0 {
+		args = append(args, "--timeout", cfg.Timeout.String())
 	}
-	if cfg.http != "" {
-		args = append(args, "--http", cfg.http)
+	if cfg.HTTP != "" {
+		args = append(args, "--http", cfg.HTTP)
 	}
-	if cfg.name != "" {
-		args = append(args, "--name", cfg.name)
+	if cfg.Name != "" {
+		args = append(args, "--name", cfg.Name)
 	}
-	if cfg.role != "" {
-		args = append(args, "--role", cfg.role)
+	if cfg.Role != "" {
+		args = append(args, "--role", cfg.Role)
 	}
-	if cfg.model != "" {
-		args = append(args, "--model", cfg.model)
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
 	}
 
 	cmd := exec.Command(binPath, args...)
