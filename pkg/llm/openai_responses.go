@@ -21,7 +21,13 @@ type responsesEventChunk struct {
 	Delta       string `json:"delta"`
 	Arguments   string `json:"arguments"`
 	OutputIndex int    `json:"output_index"`
-	Item        *struct {
+	Error       *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error"`
+
+	Item *struct {
 		Type      string `json:"type"`
 		ID        string `json:"id"`
 		Name      string `json:"name"`

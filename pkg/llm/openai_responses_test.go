@@ -523,6 +523,48 @@ func TestStreamOpenAIResponses_NoDoubleAccumulation(t *testing.T) {
 	}
 }
 
+func TestStreamOpenAIResponses_TruncatedStreamIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"partial"}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	stream := StreamOpenAIResponses(context.Background(), Model{ID: "gpt-test", BaseURL: srv.URL, API: "openai-responses"}, LLMContext{}, "k", 5*time.Second)
+	var got error
+	for it := range stream.Iterator(context.Background()) {
+		if !it.Done {
+			if e, ok := it.Value.(LLMErrorEvent); ok {
+				got = e.Error
+			}
+		}
+	}
+	if got == nil || !strings.Contains(got.Error(), "stream ended before completion") {
+		t.Fatalf("error = %v, want truncated stream diagnostic", got)
+	}
+}
+
+func TestStreamOpenAIResponses_ResponseFailedDiagnostic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"type":"response.failed","response":{"error":{"code":"bad_gateway","message":"upstream failed"}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	stream := StreamOpenAIResponses(context.Background(), Model{ID: "gpt-test", BaseURL: srv.URL, API: "openai-responses"}, LLMContext{}, "k", 5*time.Second)
+	var got error
+	for it := range stream.Iterator(context.Background()) {
+		if !it.Done {
+			if e, ok := it.Value.(LLMErrorEvent); ok {
+				got = e.Error
+			}
+		}
+	}
+	if got == nil || !strings.Contains(got.Error(), "bad_gateway") || !strings.Contains(got.Error(), "upstream failed") {
+		t.Fatalf("error = %v, want provider diagnostic", got)
+	}
+}
+
 func TestBuildOpenAIResponsesRequest_ReasoningContext(t *testing.T) {
 	// Configured reasoningContext must appear on the Responses body even when
 	// the model does not declare reasoning effort controls.
