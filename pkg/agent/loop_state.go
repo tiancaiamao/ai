@@ -151,6 +151,11 @@ func (s *loopState) performCompaction(
 
 	after := len(s.agentCtx.RecentMessages)
 
+	// History was replaced, so the next request cannot extend the previous
+	// prefix. Clear the fingerprint to mark it as a known reset instead of a
+	// divergence in the prefix-cache check.
+	s.agentCtx.AgentState.ResetLLMRequestFingerprint("compaction:" + trigger)
+
 	// Plant a fresh canary for context retention checks in future askLLM
 	// rounds. The canary is appended to the end and stays in RecentMessages
 	// until the next compaction — askLLM never touches RecentMessages.
