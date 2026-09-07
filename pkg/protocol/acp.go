@@ -357,7 +357,7 @@ func (s *acpServer) handleSessionLoad(req acpRequest) {
 func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 	pendingCalls := make(map[string]bool)
 	for _, msg := range messages {
-		if msg.Metadata != nil && msg.Metadata.Kind == "compactionSummary" {
+		if msg.Metadata != nil && (msg.Metadata.Kind == "compactionSummary" || msg.Metadata.Kind == "runtimeState") {
 			continue
 		}
 		switch msg.Role {

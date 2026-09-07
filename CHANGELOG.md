@@ -3,6 +3,33 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Frozen runtime_state snapshots: append-only requests for prefix caching (2026-09)
+
+**What changed**: `runtime_state` is no longer re-injected as an ephemeral
+message before the last user message on every LLM call
+(`streamAssistantResponse`). Instead, `RunLoop` freezes the snapshot at the
+turn boundary as a persisted user-role message (`Metadata.Kind =
+"runtimeState"`, via `runtimeStateTurnMessage`). A new snapshot message is
+appended only when the snapshot content actually changes (workdir /
+startup path / role / run id moved); unchanged snapshots produce no new
+history entry. `updateRuntimeMetaSnapshot` now refreshes immediately on
+identity change instead of waiting for the band/heartbeat cycle (the snapshot
+content is identity-only, so heartbeats regenerate byte-identical payloads
+and no longer cause new messages). Display layers skip the internal message:
+`pkg/protocol` replay omits it from session re-injection and the TUI event
+parser does not render it.
+
+**Why**: The provider implicit prompt cache (GLM/DeepSeek-style) matches
+strict prefix chains, not longest-common-prefix blocks. The ephemeral
+re-injection occupied a slot before the last user message; on the next turn
+that slot was replaced by real history, so every new user prompt's first
+request diverged mid-history (`messages_diverged` at the runtime_state slot,
+`cache_read: 0`) and also polluted the provider's chain for subsequent
+appended calls. Codex-style freeze-at-turn-boundary + delta-append keeps
+every request a pure tail append of the previous one, restoring near-full
+cache hits on the first LLM call of each turn (verified in traces: appended
+calls hit ~21.6k/24.1k tokens, diverged ones hit 0).
+
 ## `ai acp` registers as a first-class run (2026-08)
 
 **What changed**: `ai acp` (the stdio ACP agent used by Zed / agent-shell) now

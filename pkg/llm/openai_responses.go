@@ -51,7 +51,7 @@ type responsesEventChunk struct {
 			OutputTokens       int `json:"output_tokens"`
 			TotalTokens        int `json:"total_tokens"`
 			InputTokensDetails *struct {
-				CachedTokens int `json:"cached_tokens"`
+				CachedTokens *int `json:"cached_tokens"`
 			} `json:"input_tokens_details"`
 		} `json:"usage"`
 		Error *struct {
@@ -424,15 +424,13 @@ func extractResponsesUsage(chunk responsesEventChunk) Usage {
 	}
 	ru := chunk.Response.Usage
 	cached := 0
-	if ru.InputTokensDetails != nil {
-		cached = ru.InputTokensDetails.CachedTokens
+	if ru.InputTokensDetails != nil && ru.InputTokensDetails.CachedTokens != nil {
+		cached = *ru.InputTokensDetails.CachedTokens
+		u.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cached}
 	}
 	u.InputTokens = max(0, ru.InputTokens-cached)
 	u.OutputTokens = ru.OutputTokens
 	u.TotalTokens = ru.TotalTokens
-	if cached > 0 {
-		u.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cached}
-	}
 	return u
 }
 

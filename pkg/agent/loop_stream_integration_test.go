@@ -60,7 +60,13 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 	}
 }
 
-func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T) {
+// TestStreamAssistantResponse_NoRuntimeStateInjection verifies that the LLM
+// call path does not inject runtime_state: the snapshot is frozen as a
+// persisted message at the turn boundary in RunLoop (see
+// runtimeStateTurnMessage). Ephemeral re-injection before the last user
+// message would shift mid-history positions between requests and break
+// provider prefix caching.
+func TestStreamAssistantResponse_NoRuntimeStateInjection(t *testing.T) {
 	var observedMessages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -115,104 +121,6 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 		t.Fatalf("expected assistant text 'ok', got %q", got)
 	}
 
-	if len(observedMessages) < 1 {
-		t.Fatalf("expected at least 1 message (system), got %d", len(observedMessages))
-	}
-	if observedMessages[0].Role != "system" {
-		t.Fatalf("expected first message to be system, got %q", observedMessages[0].Role)
-	}
-
-	var systemContent string
-	if err := json.Unmarshal(observedMessages[0].Content, &systemContent); err != nil {
-		t.Fatalf("failed to parse system content: %v", err)
-	}
-	if strings.Contains(systemContent, "<runtime_state>") {
-		t.Fatalf("expected runtime payload outside system prompt, got system content: %q", systemContent)
-	}
-
-	// First message: runtime_state should be injected as a user message.
-	foundRuntimeState := false
-	for _, msg := range observedMessages {
-		if msg.Role == "user" {
-			var runtimeContent string
-			if err := json.Unmarshal(msg.Content, &runtimeContent); err == nil {
-				if strings.Contains(runtimeContent, "<agent:runtime_state") {
-					foundRuntimeState = true
-					if !strings.Contains(runtimeContent, `current_workdir: "/tmp/worktree-a"`) {
-						t.Fatalf("expected runtime_state to include current_workdir, got: %q", runtimeContent)
-					}
-					if !strings.Contains(runtimeContent, `startup_path: "/tmp/project-root"`) {
-						t.Fatalf("expected runtime_state to include startup_path, got: %q", runtimeContent)
-					}
-					if !strings.Contains(runtimeContent, `role: "reviewer"`) {
-						t.Fatalf("expected runtime_state to include role, got: %q", runtimeContent)
-					}
-				}
-			}
-		}
-	}
-	if !foundRuntimeState {
-		t.Fatal("expected runtime_state to be injected on first message")
-	}
-}
-
-func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) {
-	// runtime_state telemetry must be injected so the agent knows its working directory.
-	var observedMessages []struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("failed to read request body: %v", err)
-		}
-		var req struct {
-			Messages []struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"messages"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			t.Fatalf("failed to decode request JSON: %v", err)
-		}
-		observedMessages = req.Messages
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":2,\"total_tokens\":14}}\n\n")
-	}))
-	defer server.Close()
-
-	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
-
-	config := &LoopConfig{
-		Model: llm.Model{
-			ID:       "test-model",
-			Provider: "test",
-			BaseURL:  server.URL,
-			API:      "openai-completions",
-		},
-		APIKey:         "test-key",
-		ThinkingLevel:  "high",
-		ContextWindow:  128000,
-		GetWorkingDir:  func() string { return "/tmp/new-session-workdir" },
-		GetStartupPath: func() string { return "/tmp/startup-root" },
-	}
-
-	stream := newTestAgentEventStream()
-	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
-	if err != nil {
-		t.Fatalf("streamAssistantResponse returned error: %v", err)
-	}
-	if got := strings.TrimSpace(msg.ExtractText()); got != "ok" {
-		t.Fatalf("expected assistant text 'ok', got %q", got)
-	}
-
-	// runtime_state MUST be injected
-	foundRuntimeState := false
 	for _, m := range observedMessages {
 		if m.Role != "user" {
 			continue
@@ -222,18 +130,8 @@ func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) 
 			continue
 		}
 		if strings.Contains(content, "<agent:runtime_state") {
-			foundRuntimeState = true
-			if !strings.Contains(content, `current_workdir: "/tmp/new-session-workdir"`) {
-				t.Fatalf("expected runtime_state to include current_workdir, got: %q", content)
-			}
-			if !strings.Contains(content, `startup_path: "/tmp/startup-root"`) {
-				t.Fatalf("expected runtime_state to include startup_path, got: %q", content)
-			}
-			break
+			t.Fatalf("runtime_state must not be injected per LLM call (breaks prefix caching), got: %q", content)
 		}
-	}
-	if !foundRuntimeState {
-		t.Fatal("expected runtime_state to be injected")
 	}
 }
 

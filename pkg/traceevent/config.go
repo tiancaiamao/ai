@@ -233,6 +233,7 @@ var eventNameToBit = map[string]int{
 	"llm_retry_aborted":               39,
 	"llm_retry_exhausted":             40,
 	"tool_output_truncated":           41,
+	"llm_prefix_cache_check":          42,
 	"compact_llm_decide_check":        58,
 	"compact_llm_decide_ask":          59,
 }
@@ -268,6 +269,7 @@ var defaultEnabledEvents = []string{
 	"llm_retry_scheduled",
 	"llm_retry_aborted",
 	"llm_retry_exhausted",
+	"llm_prefix_cache_check",
 	"tool_summary",
 	"tool_summary_batch",
 	"tool_output_truncated",
@@ -292,6 +294,7 @@ var eventSelectorGroups = map[string][]string{
 		"llm_retry_scheduled",
 		"llm_retry_aborted",
 		"llm_retry_exhausted",
+		"llm_prefix_cache_check",
 	},
 	"tool": {
 		"tool_execution",

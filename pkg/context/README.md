@@ -72,8 +72,9 @@ System-maintained metadata tracking:
 - Current turn number
 - `ToolCallsSinceLastTrigger` — counter for compaction interval logic
 - Runtime state
+- `LastLLMRequest` — fingerprint of the most recent LLM request (model, system/tools hashes, per-message hashes) used by the agent loop for provider prefix-cache miss detection; `ResetLLMRequestFingerprint` clears it when compaction rewrites history
 
-Persisted to `agent_state.json` in the session directory via `SaveAgentState` / `LoadAgentState`.
+`AgentState` lives in memory only — it is rebuilt from `RecentMessages` each turn and never written to the session directory. After a process restart the fingerprint is gone, so the next LLM request reports a prefix-cache cold start.
 
 ## Compaction Result
 
@@ -106,9 +107,11 @@ Implemented by `pkg/compact.Compactor`. See [docs/context-management.md](../../d
 
 ## AgentState Persistence
 
-`AgentState` is persisted as `agent_state.json` directly in the session directory.
-This file is written after compaction events and loaded on session resume.
-Messages are NOT stored here — they come from `sess.GetMessages()`.
+`AgentState` is NOT persisted. It is plain in-memory state: most fields are
+recomputed from `RecentMessages` every turn (token counts, runtime metadata),
+and the LLM request fingerprint is intentionally volatile so a resumed session
+starts with a prefix-cache cold start. Messages are loaded on resume from
+`sess.GetMessages()`.
 
 ## Token Estimation
 
@@ -126,9 +129,8 @@ Estimates use a simple heuristic (~4 characters per token). Used by the compacto
 |------|-------------|
 | `context.go` | `AgentContext`, `Tool` interface, message management, token estimation, tool whitelist |
 | `message.go` | `AgentMessage`, `ContentBlock`, `TextContent`, `ImageContent`, `ToolCallContent`, `ThinkingContent` |
-| `agent_state.go` | `AgentState` tracking metadata |
+| `agent_state.go` | `AgentState` tracking metadata, `LLMRequestFingerprint` |
 | `compactor.go` | `Compactor` interface, `CompactionResult`, `ToolCallRecord` |
-| `checkpoint_io.go` | `SaveAgentState` / `LoadAgentState`, `SplitLines` |
 | `conversion.go` | `ConvertMessagesToLLM`, `ConvertToolsToLLM` — agent-to-LLM type conversion |
 | `token_estimation.go` | `EstimateTokens()` standalone function |
 | `constants.go` | Package constants (`RecentMessagesKeep`) |

@@ -148,10 +148,19 @@ func RunLoop(
 			}
 		}()
 
-		newMessages := append([]agentctx.AgentMessage{}, prompts...)
+		// Freeze the runtime_state snapshot as a persisted message at the
+		// turn boundary (codex-style delta append): state changes add new
+		// messages before the user input instead of rewriting history, so
+		// requests stay append-only for provider prefix caching.
+		turnPrompts := prompts
+		if runtimeMsg := runtimeStateTurnMessage(agentCtx, config); runtimeMsg != nil {
+			turnPrompts = append([]agentctx.AgentMessage{*runtimeMsg}, prompts...)
+		}
+
+		newMessages := append([]agentctx.AgentMessage{}, turnPrompts...)
 		currentCtx := &agentctx.AgentContext{
 			SystemPrompt:   agentCtx.SystemPrompt,
-			RecentMessages: append(agentCtx.RecentMessages, prompts...),
+			RecentMessages: append(agentCtx.RecentMessages, turnPrompts...),
 			Tools:          agentCtx.Tools,
 			AgentState:     agentCtx.AgentState,
 		}
@@ -159,7 +168,7 @@ func RunLoop(
 		stream.Push(NewAgentStartEvent())
 		stream.Push(NewTurnStartEvent())
 
-		for _, msg := range prompts {
+		for _, msg := range turnPrompts {
 			stream.Push(NewMessageStartEvent(msg))
 			stream.Push(NewMessageEndEvent(msg))
 		}
