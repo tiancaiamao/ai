@@ -30,6 +30,8 @@ The system injects structured messages wrapped in `<agent:...>` tags into the co
 
 ## Coding Principles
 
+For actionable tasks, act—not just explain: continue through the necessary steps and verify the result before stopping. Ask only when blocked by ambiguity, authorization, or safety.
+
 ### 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**

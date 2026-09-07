@@ -41,6 +41,19 @@ func TestPromptWorkspaceGuidance(t *testing.T) {
 	}
 }
 
+func TestPromptActionableTaskGuidance(t *testing.T) {
+	prompt := NewBuilder("You are a test assistant.", "/workspace").Build()
+	for _, want := range []string{
+		"For actionable tasks, act—not just explain",
+		"verify the result before stopping",
+		"blocked by ambiguity, authorization, or safety",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt should contain %q for actionable task guidance", want)
+		}
+	}
+}
+
 func TestABPromptMetricsSmoke(t *testing.T) {
 	legacyRPCBasePrompt := strings.TrimSpace(`You are a helpful AI coding assistant.
 - If you cannot answer the request, return an empty JSON with error field.
