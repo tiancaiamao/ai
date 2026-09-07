@@ -3,6 +3,7 @@ package agent
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"strings"
 	"testing"
 )
 
@@ -110,89 +111,6 @@ func containsSubstring(s, substr string) bool {
 	return false
 }
 
-func TestInsertBeforeLastUserMessage(t *testing.T) {
-	cases := []struct {
-		name     string
-		messages []llm.LLMMessage
-		insert   llm.LLMMessage
-		wantLen  int
-		check    func([]llm.LLMMessage) bool
-	}{
-		{
-			name:     "empty messages",
-			messages: nil,
-			insert:   llm.LLMMessage{Role: "user", Content: "runtime"},
-			wantLen:  1,
-			check: func(msgs []llm.LLMMessage) bool {
-				return len(msgs) == 1 && msgs[0].Content == "runtime"
-			},
-		},
-		{
-			name: "no user message - append to end",
-			messages: []llm.LLMMessage{
-				{Role: "assistant", Content: "hi"},
-			},
-			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
-			wantLen: 2,
-			check: func(msgs []llm.LLMMessage) bool {
-				return msgs[1].Content == "runtime"
-			},
-		},
-		{
-			name: "single user message - insert before",
-			messages: []llm.LLMMessage{
-				{Role: "user", Content: "hello"},
-			},
-			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
-			wantLen: 2,
-			check: func(msgs []llm.LLMMessage) bool {
-				return msgs[0].Content == "runtime" && msgs[1].Content == "hello"
-			},
-		},
-		{
-			name: "multiple messages - insert before last user",
-			messages: []llm.LLMMessage{
-				{Role: "user", Content: "first"},
-				{Role: "assistant", Content: "response"},
-				{Role: "user", Content: "last"},
-			},
-			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
-			wantLen: 4,
-			check: func(msgs []llm.LLMMessage) bool {
-				// runtime should be at index 2, before "last" at index 3
-				return msgs[2].Content == "runtime" && msgs[3].Content == "last"
-			},
-		},
-		{
-			name: "tool results after user - insert before user",
-			messages: []llm.LLMMessage{
-				{Role: "user", Content: "request"},
-				{Role: "assistant", Content: ""},
-				{Role: "toolResult", Content: "output"},
-				{Role: "user", Content: "follow-up"},
-			},
-			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
-			wantLen: 5,
-			check: func(msgs []llm.LLMMessage) bool {
-				// runtime should be before "follow-up"
-				return msgs[3].Content == "runtime" && msgs[4].Content == "follow-up"
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := insertBeforeLastUserMessage(tc.messages, tc.insert)
-			if len(result) != tc.wantLen {
-				t.Fatalf("expected %d messages, got %d", tc.wantLen, len(result))
-			}
-			if !tc.check(result) {
-				t.Fatalf("check failed for messages: %+v", result)
-			}
-		})
-	}
-}
-
 func TestInsertBeforeFirstUserMessage(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -273,4 +191,53 @@ func TestInsertBeforeFirstUserMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntimeStateTurnMessage(t *testing.T) {
+	newConfig := func(dir string) *LoopConfig {
+		return &LoopConfig{GetWorkingDir: func() string { return dir }}
+	}
+
+	t.Run("first turn injects snapshot", func(t *testing.T) {
+		agentCtx := agentctx.NewAgentContext("sys")
+		msg := runtimeStateTurnMessage(agentCtx, newConfig("/tmp/worktree-a"))
+		if msg == nil {
+			t.Fatal("expected runtime_state message on first turn")
+		}
+		if msg.Metadata == nil || msg.Metadata.Kind != runtimeStateKind {
+			t.Fatalf("expected kind %q, got %+v", runtimeStateKind, msg.Metadata)
+		}
+		if text := msg.ExtractText(); !strings.Contains(text, "/tmp/worktree-a") {
+			t.Fatalf("expected workdir in snapshot, got %q", text)
+		}
+	})
+
+	t.Run("unchanged snapshot skips", func(t *testing.T) {
+		agentCtx := agentctx.NewAgentContext("sys")
+		first := runtimeStateTurnMessage(agentCtx, newConfig("/tmp/worktree-a"))
+		if first == nil {
+			t.Fatal("expected first turn snapshot")
+		}
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, *first)
+		if got := runtimeStateTurnMessage(agentCtx, newConfig("/tmp/worktree-a")); got != nil {
+			t.Fatalf("expected nil for unchanged snapshot, got %q", got.ExtractText())
+		}
+	})
+
+	t.Run("changed snapshot appends new message", func(t *testing.T) {
+		agentCtx := agentctx.NewAgentContext("sys")
+		first := runtimeStateTurnMessage(agentCtx, newConfig("/tmp/worktree-a"))
+		if first == nil {
+			t.Fatal("expected first turn snapshot")
+		}
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, *first)
+
+		second := runtimeStateTurnMessage(agentCtx, newConfig("/tmp/worktree-b"))
+		if second == nil {
+			t.Fatal("expected new snapshot message after cwd change")
+		}
+		if second.ExtractText() == first.ExtractText() {
+			t.Fatal("expected different snapshot content after cwd change")
+		}
+	})
 }
