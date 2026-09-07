@@ -90,11 +90,11 @@ func (c *Compactor) GenerateSummary(goCtx context.Context, messages []agentctx.A
 		span.AddField("input_tokens", doneEvent.Usage.InputTokens)
 		span.AddField("output_tokens", doneEvent.Usage.OutputTokens)
 		span.AddField("total_tokens", doneEvent.Usage.TotalTokens)
-		cachedTokens := 0
+		// Record cache usage only when the provider reported it. An explicit
+		// cached_tokens=0 is distinct from missing cache usage.
 		if doneEvent.Usage.PromptTokensDetails != nil {
-			cachedTokens = doneEvent.Usage.PromptTokensDetails.CachedTokens
+			span.AddField("cache_read", doneEvent.Usage.PromptTokensDetails.CachedTokens)
 		}
-		span.AddField("cache_read", cachedTokens)
 
 		if streamErr != nil {
 			lastErr = streamErr

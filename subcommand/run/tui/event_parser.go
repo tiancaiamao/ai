@@ -191,6 +191,15 @@ func parseMessageEnd(evt map[string]any) *FormattedEvent {
 		return nil
 	}
 
+	// Skip internal runtime_state messages (frozen snapshot injected at turn
+	// boundaries for provider prefix caching) — they are bookkeeping, not
+	// user-visible conversation.
+	if meta, ok := msg["metadata"].(map[string]any); ok {
+		if kind, _ := meta["kind"].(string); kind == "runtimeState" {
+			return nil
+		}
+	}
+
 	// Extract text content
 	content, _ := msg["content"].([]any)
 	var text string

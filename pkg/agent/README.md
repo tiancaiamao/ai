@@ -132,6 +132,7 @@ The stream supports abort via `Push(agentEndEvent)` and cancellation through con
 | `tool_tag_parser.go` | Tool tag parsing |
 | `llm_stream.go` | LLM stream consumption and event translation |
 | `llm_stream_parse.go` | Parsing LLM streaming responses into events |
+| `llm_prefix_cache.go` | Provider prefix-cache miss detection (`checkPrefixCache`, request fingerprinting) |
 | `llm_retry.go` | Retry logic for LLM API errors |
 | `llm_error_types.go` | Error classification for retries |
 | `error_stack.go` | Error chain tracking with stack traces |
@@ -139,8 +140,7 @@ The stream supports abort via `Push(agentEndEvent)` and cancellation through con
 | `metrics_aggregate.go` | Metrics aggregation from trace events |
 | `metrics_snapshot.go` | Metrics snapshot types |
 | `result.go` | `UsageStats`, `GetTotalUsage()` result types |
-| `resume.go` | `LoadResumeState()` — session resume from agent_state.json |
-| `runtime_meta.go` | Runtime metadata injection for telemetry (`injectRuntimeMeta`) |
+| `runtime_meta.go` | Runtime metadata injection (`injectRuntimeMeta`); runtime_state snapshots are frozen as persisted messages at turn boundaries (`runtimeStateTurnMessage`) so LLM requests stay append-only for provider prefix caching |
 
 
 ## Dependencies

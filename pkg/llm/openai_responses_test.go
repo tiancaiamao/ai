@@ -190,10 +190,11 @@ type testResponse struct {
 }
 
 type testUsage struct {
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
-	CachedTokens int
+	InputTokens      int
+	OutputTokens     int
+	TotalTokens      int
+	CachedTokens     int
+	OmitCachedTokens bool
 }
 
 type testRespError struct {
@@ -210,7 +211,7 @@ func (r testResponse) chunk() responsesEventChunk {
 			OutputTokens       int `json:"output_tokens"`
 			TotalTokens        int `json:"total_tokens"`
 			InputTokensDetails *struct {
-				CachedTokens int `json:"cached_tokens"`
+				CachedTokens *int `json:"cached_tokens"`
 			} `json:"input_tokens_details"`
 		} `json:"usage"`
 		Error *struct {
@@ -224,21 +225,26 @@ func (r testResponse) chunk() responsesEventChunk {
 		Status: r.Status,
 	}
 	if r.Usage != nil {
-		d := &struct {
-			CachedTokens int `json:"cached_tokens"`
-		}{CachedTokens: r.Usage.CachedTokens}
+		var details *struct {
+			CachedTokens *int `json:"cached_tokens"`
+		}
+		if !r.Usage.OmitCachedTokens {
+			details = &struct {
+				CachedTokens *int `json:"cached_tokens"`
+			}{CachedTokens: &r.Usage.CachedTokens}
+		}
 		resp.Usage = &struct {
 			InputTokens        int `json:"input_tokens"`
 			OutputTokens       int `json:"output_tokens"`
 			TotalTokens        int `json:"total_tokens"`
 			InputTokensDetails *struct {
-				CachedTokens int `json:"cached_tokens"`
+				CachedTokens *int `json:"cached_tokens"`
 			} `json:"input_tokens_details"`
 		}{
 			InputTokens:        r.Usage.InputTokens,
 			OutputTokens:       r.Usage.OutputTokens,
 			TotalTokens:        r.Usage.TotalTokens,
-			InputTokensDetails: d,
+			InputTokensDetails: details,
 		}
 	}
 	if r.Error != nil {
@@ -384,6 +390,25 @@ func TestOpenAIResponsesParser(t *testing.T) {
 		}
 		if u.PromptTokensDetails == nil || u.PromptTokensDetails.CachedTokens != 20 {
 			t.Errorf("cached tokens mismatch: %+v", u.PromptTokensDetails)
+		}
+	})
+
+	t.Run("missing cached usage stays unknown", func(t *testing.T) {
+		chunk := testResponse{Status: "completed", Usage: &testUsage{InputTokens: 120, OutputTokens: 30, TotalTokens: 150, OmitCachedTokens: true}}.chunk()
+		u := extractResponsesUsage(chunk)
+		if u.PromptTokensDetails != nil {
+			t.Errorf("cached tokens should be unknown, got %+v", u.PromptTokensDetails)
+		}
+		if u.InputTokens != 120 {
+			t.Errorf("input tokens = %d, want 120", u.InputTokens)
+		}
+	})
+
+	t.Run("explicit zero cached tokens is preserved", func(t *testing.T) {
+		chunk := testResponse{Status: "completed", Usage: &testUsage{InputTokens: 120, OutputTokens: 30, TotalTokens: 150}}.chunk()
+		u := extractResponsesUsage(chunk)
+		if u.PromptTokensDetails == nil || u.PromptTokensDetails.CachedTokens != 0 {
+			t.Errorf("explicit zero cached tokens mismatch: %+v", u.PromptTokensDetails)
 		}
 	})
 }

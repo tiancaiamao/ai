@@ -62,16 +62,6 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Inject runtime_state as ephemeral message before last user message.
-	runtimeAppendix := injectRuntimeMeta(agentCtx, config)
-	if runtimeAppendix != "" {
-		runtimeMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: runtimeAppendix,
-		}
-		llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
-	}
-
 	// Inject skills + instructions as a single user message before the first
 	// user message. Both are stable within a session (skills rarely change,
 	// instructions are AGENTS.md content), so merging them into one message
@@ -79,12 +69,11 @@ func streamAssistantResponse(
 	//
 	// They are NOT persisted to RecentMessages — re-injected on every LLM call.
 	//
-	// Final ordering:
-	//   [system_prompt, <skills+instructions>, user1, asst1, ..., <runtime_state>, user_input]
-	//
-	// runtime_state is injected separately below (before last user) because it
-	// can change when the user calls change_workspace, and we don't want it to
-	// break the stable prefix cache.
+	// runtime_state is NOT injected here: it is frozen as a persisted message
+	// at the turn boundary in RunLoop (see runtimeStateTurnMessage). Requests
+	// must stay append-only; ephemeral re-injection before the last user
+	// message would rewrite mid-history positions and kill provider prefix
+	// caches (see llm_prefix_cache.go).
 	if config.AgentContextPrefix != "" {
 		prefixMsg := llm.LLMMessage{
 			Role:    "user",
@@ -102,7 +91,6 @@ func streamAssistantResponse(
 		Tools:         llmTools,
 		ThinkingLevel: thinkingLevel,
 	}
-	//	emitLLMRequestSnapshot(ctx, config.Model, llmCtxParams)
 
 	// Stream LLM response
 	llmStart := time.Now()
@@ -114,6 +102,10 @@ func streamAssistantResponse(
 		traceevent.Field{Key: "timeout_ms", Value: llmTimeout.Milliseconds()},
 	)
 	defer llmSpan.End()
+
+	// Detect provider prefix-cache misses by comparing this request with the
+	// previous one before sending (see llm_prefix_cache.go).
+	checkPrefixCache(ctx, llmSpan, agentCtx, model.ID, llmCtxParams)
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
@@ -206,14 +198,17 @@ func streamAssistantResponse(
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
 
-			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens
+			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens.
+			// Omit cache_read when the provider did not report cache usage; an
+			// explicit cached_tokens=0 remains meaningful.
 			cachedTokens := 0
 			if e.Timings != nil && e.Timings.CacheN > 0 {
 				cachedTokens = e.Timings.CacheN
+				llmSpan.AddField("cache_read", cachedTokens)
 			} else if e.Usage.PromptTokensDetails != nil {
 				cachedTokens = e.Usage.PromptTokensDetails.CachedTokens
+				llmSpan.AddField("cache_read", cachedTokens)
 			}
-			llmSpan.AddField("cache_read", cachedTokens)
 
 			// Additional llama.cpp timing metrics if available
 			if e.Timings != nil {
@@ -472,14 +467,32 @@ func updateRuntimeMetaSnapshot(
 	agentCtx.AgentState.RuntimeMetaTurns++
 	band := runtimeTokenBand(meta.TokensPercent)
 
+	// The snapshot content is identity-only (run_id/role/cwd/startup path),
+	// so any content change means the environment moved (e.g.
+	// change_workspace) and must be refreshed immediately — not on the next
+	// heartbeat.
+	candidate := buildRuntimeStateSnapshot(runID, role, currentWorkdir, startupPath)
 	shouldRefresh := strings.TrimSpace(agentCtx.AgentState.RuntimeMetaSnapshot) == "" ||
 		agentCtx.AgentState.RuntimeMetaBand != band ||
+		agentCtx.AgentState.RuntimeMetaSnapshot != candidate ||
 		agentCtx.AgentState.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
 		return agentCtx.AgentState.RuntimeMetaSnapshot
 	}
 
+	agentCtx.AgentState.RuntimeMetaSnapshot = candidate
+	agentCtx.AgentState.RuntimeMetaBand = band
+	agentCtx.AgentState.RuntimeMetaTurns = 0
+
+	return candidate
+}
+
+// buildRuntimeStateSnapshot renders the runtime_state payload. Its content
+// must only depend on environment identity, never on per-turn counters: the
+// snapshot is frozen into the conversation as a persisted message, and
+// identical content must not produce a new history entry.
+func buildRuntimeStateSnapshot(runID string, role string, currentWorkdir string, startupPath string) string {
 	// runtime_state is purely informational - no directives or commands
 	// Build run_id line only when available (subagent spawned via ai serve).
 	var runIDLine string
@@ -490,7 +503,7 @@ func updateRuntimeMetaSnapshot(
 	if strings.TrimSpace(role) != "" {
 		roleLine = fmt.Sprintf("\n  role: %s", runtimeYAMLString(role))
 	}
-	snapshot := fmt.Sprintf(`<agent:runtime_state/>
+	return fmt.Sprintf(`<agent:runtime_state/>
 %s%s
   current_workdir: %s
   startup_path: %s`,
@@ -499,39 +512,6 @@ func updateRuntimeMetaSnapshot(
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
 	)
-
-	agentCtx.AgentState.RuntimeMetaSnapshot = snapshot
-	agentCtx.AgentState.RuntimeMetaBand = band
-	agentCtx.AgentState.RuntimeMetaTurns = 0
-
-	return snapshot
-}
-
-func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
-	if len(messages) == 0 {
-		return []llm.LLMMessage{msg}
-	}
-
-	// Find the last user message index
-	lastUserIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			lastUserIdx = i
-			break
-		}
-	}
-
-	// If no user message found, append to end
-	if lastUserIdx == -1 {
-		return append(messages, msg)
-	}
-
-	// Insert before the last user message
-	result := make([]llm.LLMMessage, 0, len(messages)+1)
-	result = append(result, messages[:lastUserIdx]...)
-	result = append(result, msg)
-	result = append(result, messages[lastUserIdx:]...)
-	return result
 }
 
 // insertBeforeFirstUserMessage inserts msg immediately before the first user-role

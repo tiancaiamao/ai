@@ -75,6 +75,49 @@ func EstimateConversationTokens(messages []agentctx.AgentMessage) int {
 	return total
 }
 
+// runtimeStateKind marks persisted runtime_state messages in message
+// metadata. Display layers (TUI, ACP replay) skip them; the loop uses them
+// to detect whether the frozen snapshot needs refreshing.
+const runtimeStateKind = "runtimeState"
+
+// runtimeStateTurnMessage computes the runtime_state snapshot for this turn
+// and returns it as a new persisted user message when it differs from the
+// last frozen snapshot already in history.
+//
+// Unlike the old ephemeral re-injection (a fresh message inserted before the
+// last user message on every LLM call), the snapshot is frozen into the
+// conversation at the turn boundary: state changes append new messages
+// instead of rewriting history, so every request stays a pure tail append of
+// the previous one and provider prefix caches keep hitting (see
+// llm_prefix_cache.go).
+func runtimeStateTurnMessage(agentCtx *agentctx.AgentContext, config *LoopConfig) *agentctx.AgentMessage {
+	appendix := injectRuntimeMeta(agentCtx, config)
+	if strings.TrimSpace(appendix) == "" {
+		return nil
+	}
+	if lastRuntimeStateMessage(agentCtx) == appendix {
+		return nil
+	}
+	msg := agentctx.NewUserMessage(appendix).WithKind(runtimeStateKind)
+	return &msg
+}
+
+// lastRuntimeStateMessage returns the text of the most recent persisted
+// runtime_state message in history, or "" when none exists (first turn, or
+// the snapshot was dropped by compaction).
+func lastRuntimeStateMessage(agentCtx *agentctx.AgentContext) string {
+	if agentCtx == nil {
+		return ""
+	}
+	for i := len(agentCtx.RecentMessages) - 1; i >= 0; i-- {
+		msg := &agentCtx.RecentMessages[i]
+		if msg.Metadata != nil && msg.Metadata.Kind == runtimeStateKind {
+			return msg.ExtractText()
+		}
+	}
+	return ""
+}
+
 func runtimeYAMLString(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
