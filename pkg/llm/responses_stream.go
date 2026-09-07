@@ -33,6 +33,9 @@ func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStrea
 
 	parser := newResponsesParser()
 	stream.Push(LLMStartEvent{Partial: NewPartialMessage()})
+	sawData := false
+	terminal := false
+	var lastEventType string
 
 	for scanner.Scan() {
 		setReadDeadline()
@@ -48,13 +51,34 @@ func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStrea
 			continue
 		}
 		data := strings.TrimPrefix(line, "data: ")
+		sawData = true
 		if data == "[DONE]" {
+			terminal = true
 			break
 		}
 
 		var chunk responsesEventChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil || chunk.Type == "" {
-			continue
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("invalid Responses SSE event (last_event=%q): %w", lastEventType, err)})
+			return
+		}
+		if chunk.Type == "" {
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses SSE event missing type (payload=%q)", truncateSSEPayload(data))})
+			return
+		}
+		lastEventType = chunk.Type
+		if chunk.Type == "response.failed" && chunk.Response != nil && chunk.Response.Error != nil {
+			failure := chunk.Response.Error
+			code := strings.TrimSpace(failure.Code)
+			message := strings.TrimSpace(failure.Message)
+			if code == "" {
+				code = "unknown"
+			}
+			if message == "" {
+				message = "no message"
+			}
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses response.failed (%s): %s", code, message)})
+			return
 		}
 
 		switch chunk.Type {
@@ -103,10 +127,27 @@ func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStrea
 	}
 
 	if err := scanner.Err(); err != nil {
-		stream.Push(LLMErrorEvent{Error: fmt.Errorf("error reading Responses stream: %w", err)})
+		stream.Push(LLMErrorEvent{Error: fmt.Errorf("error reading Responses stream (last_event=%q): %w", lastEventType, err)})
+		return
+	}
+	if !terminal {
+		reason := "stream ended before completion"
+		if !sawData {
+			reason = "stream ended without any data events"
+		}
+		stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses %s (last_event=%q)", reason, lastEventType)})
 		return
 	}
 
 	msg := parser.buildMessage()
 	stream.Push(LLMDoneEvent{Message: &msg, StopReason: "stop"})
+}
+
+func truncateSSEPayload(payload string) string {
+	const max = 512
+	payload = strings.TrimSpace(payload)
+	if len(payload) <= max {
+		return payload
+	}
+	return payload[:max] + "..."
 }
