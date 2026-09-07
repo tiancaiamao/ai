@@ -198,14 +198,17 @@ func streamAssistantResponse(
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
 
-			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens
+			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens.
+			// Omit cache_read when the provider did not report cache usage; an
+			// explicit cached_tokens=0 remains meaningful.
 			cachedTokens := 0
 			if e.Timings != nil && e.Timings.CacheN > 0 {
 				cachedTokens = e.Timings.CacheN
+				llmSpan.AddField("cache_read", cachedTokens)
 			} else if e.Usage.PromptTokensDetails != nil {
 				cachedTokens = e.Usage.PromptTokensDetails.CachedTokens
+				llmSpan.AddField("cache_read", cachedTokens)
 			}
-			llmSpan.AddField("cache_read", cachedTokens)
 
 			// Additional llama.cpp timing metrics if available
 			if e.Timings != nil {
