@@ -332,8 +332,12 @@ func streamAssistantResponse(
 		case ChunkError:
 			errVal := result.Error
 			if errVal == nil {
-				errVal = errors.New("unknown llm error")
+				// A nil error event is a producer bug, not an actionable provider
+				// response. Keep that distinction in both the user-facing error and
+				// trace instead of collapsing it into "unknown llm error".
+				errVal = errors.New("LLM stream emitted an error event without details")
 			}
+
 			if errors.Is(errVal, context.DeadlineExceeded) {
 				errVal = fmt.Errorf("llm request timeout after %s: %w", llmTimeout, errVal)
 			}
