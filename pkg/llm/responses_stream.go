@@ -10,10 +10,15 @@ import (
 	"time"
 )
 
+type responsesStreamMeta struct {
+	HTTPStatus int
+	RequestID  string
+}
+
 // processResponsesSSE parses the shared Responses API event stream. Providers
 // may use different authentication, endpoints, and request bodies, but the
 // response event protocol is the same.
-func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStream[LLMEvent, LLMMessage], chunkIntervalTimeout time.Duration) {
+func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStream[LLMEvent, LLMMessage], chunkIntervalTimeout time.Duration, meta responsesStreamMeta) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -63,7 +68,7 @@ func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStrea
 			return
 		}
 		if chunk.Type == "" {
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses SSE event missing type (payload=%q)", truncateSSEPayload(data))})
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses SSE event missing type (payload=%q, %s)", truncateSSEPayload(data), formatResponsesStreamMeta(meta))})
 			return
 		}
 		lastEventType = chunk.Type
@@ -75,9 +80,20 @@ func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStrea
 				code = "unknown"
 			}
 			if message == "" {
-				message = "no message"
+				message = "provider supplied no error message"
 			}
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses response.failed (%s): %s", code, message)})
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses response.failed (%s): %s (%s, payload=%q)", code, message, formatResponsesStreamMeta(meta), truncateSSEPayload(data))})
+			return
+		}
+		if chunk.Type == "error" {
+			message := strings.TrimSpace(chunk.Message)
+			if message == "" {
+				message = "provider supplied an empty error event"
+			}
+			if code := strings.TrimSpace(chunk.Code); code != "" {
+				message = fmt.Sprintf("%s: %s", code, message)
+			}
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("Responses SSE error: %s (last_event=%q, %s, payload=%q)", message, lastEventType, formatResponsesStreamMeta(meta), truncateSSEPayload(data))})
 			return
 		}
 
@@ -141,6 +157,20 @@ func processResponsesSSE(ctx context.Context, body io.Reader, stream *EventStrea
 
 	msg := parser.buildMessage()
 	stream.Push(LLMDoneEvent{Message: &msg, StopReason: "stop"})
+}
+
+func formatResponsesStreamMeta(meta responsesStreamMeta) string {
+	parts := make([]string, 0, 2)
+	if meta.HTTPStatus > 0 {
+		parts = append(parts, fmt.Sprintf("http_status=%d", meta.HTTPStatus))
+	}
+	if meta.RequestID != "" {
+		parts = append(parts, fmt.Sprintf("request_id=%q", meta.RequestID))
+	}
+	if len(parts) == 0 {
+		return "no HTTP metadata"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func truncateSSEPayload(payload string) string {

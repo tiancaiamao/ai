@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -388,10 +389,22 @@ func StreamOpenAIResponses(
 		defer resp.Body.Close()
 		// Parse the shared Responses API stream. OpenAI and Codex differ in
 		// request/auth details, not in the response event protocol.
-		processResponsesSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
+		processResponsesSSE(ctx, resp.Body, stream, chunkIntervalTimeout, responsesStreamMeta{
+			HTTPStatus: resp.StatusCode,
+			RequestID:  responseRequestID(resp.Header),
+		})
 	}()
 
 	return stream
+}
+
+func responseRequestID(headers http.Header) string {
+	for _, key := range []string{"x-request-id", "request-id", "x-correlation-id"} {
+		if value := strings.TrimSpace(headers.Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func modelURL(model Model) string {
