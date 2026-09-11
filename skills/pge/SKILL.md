@@ -22,17 +22,19 @@ description: Planner-Generator-Evaluator 编排模式。GAN 启发的多 agent �
 3. **Structured feedback** — Evaluator 应输出结构化反馈（每条标准的 ✅/❌ + 具体证据），而非简单的 pass/fail
 4. **Progressive disclosure** — Agent 从小入口（spec.md）开始，按需深入代码
 5. **Context firewall** — 每个 subagent 独立上下文窗口，隔离中间噪声
-6. **2-3 轮收敛** — 正常 2-3 轮循环即可收敛。超过 3 轮说明 spec 有问题，应暂停报告用户
+6. **2-3 轮收敛** — 正常 2-3 轮循环即可收敛。超过 3 轮说明 spec 有问题，应暂停报告确认方
 
 ## Three Roles
 
-**Orchestrator（你）**：分析需求、写 spec、拆解任务、调度与验收，**永不写实现代码**。
+**Orchestrator（加载本技能的你）**：分析需求、写 spec、拆解任务、调度与验收，**永不写实现代码**。
 **Generator（子 agent，coder role）**：读 task 文件，实现功能。
 **Evaluator（子 agent，validator role）**：独立读代码、跑验证、写 eval report。
 
 **Generator 和 Evaluator 是独立 agent，不共享上下文——这是质量保证的关键。** 所有 agent 共同维护 `.pge/progress.md`（见 Progress Log 章节）。
 
-**You ARE the Orchestrator.** No need to spawn yourself.
+**Orchestrator 是流程角色，与 `--role` 无关**——无论你是主 agent 还是被 spawn 出来的 planner 子 agent（claw/coder 等任何 role），加载本技能即以此身份执行。主 agent 无需 spawn 自己；planner 子 agent 同样以 Orchestrator 身份执行，只是向上级回报——下文所有“用户/确认方”均指你的确认来源（用户，或 spawn 你的上级 agent）。
+
+**允许亲自执行的操作**（不算“实现代码”）：只读信息收集（grep / git diff / 跑 build / 跑 test）、在 spec 中编写 Verify 命令、git restore/checkout 回滚（KC 1 的唯一例外）、git commit、写 `.pge/*` 文件。
 
 ## Prerequisite
 
@@ -65,7 +67,7 @@ Design (用户需求)
 1. **Understand** — 和用户讨论需求
 2. **Write spec** — 写入 `.pge/spec.md`（模板见 [`references/spec-template.md`](references/spec-template.md)）
 3. **Spec Quality Gate** — 每个 acceptance criterion 必须有可执行的 Verify 命令
-4. **Get user confirmation** — 展示 spec，等用户说 ok
+4. **Get user confirmation** — 展示 spec，等确认方确认（主 agent = 用户；planner 子 agent = 上级）
 
 ### Phase 2: Decomposition
 
@@ -93,7 +95,7 @@ Design (用户需求)
    不要 kill，保持活着
 4. **Kitchen Sink 检查**（Orchestrator 执行，不 spawn agent）：
    `git status --porcelain --untracked-files=all` 列出所有变更文件（含新增、暂存、未暂存），对比 task 的 Write 文件列表
-   有超出范围的文件 → progress.md → ai send 让 Generator 回滚 → 回到步骤 2
+   有超出范围的文件 → 单文件机械越界：Orchestrator 直接 `git restore` 并记 progress.md；范围不清或跨多文件：progress.md → ai send 让 Generator 回滚 → 回到步骤 2
    未超出范围 → progress.md → 继续
 5. Spawn Evaluator (validator role) → 独立读代码、跑验证命令
 6. Evaluator 写报告 → .pge/eval-{task}.md → progress.md（含 PASS/FAIL + 摘要）
@@ -107,7 +109,7 @@ Design (用户需求)
    └── FAIL ──→ ai send eval feedback 给同一个 Generator
                  Generator 修复 → spawn 新 Evaluator → 回到步骤 5
                  ↑
-                 └── 最多 3 轮，仍 FAIL → 停下来报告用户
+                 └── 最多 3 轮，仍 FAIL → 停下来报告确认方
 ```
 
 **FAIL 反馈模板：** 见 [`references/prompt-templates.md`](references/prompt-templates.md) 的 "Generator Fix Prompt" 部分
@@ -120,7 +122,7 @@ Design (用户需求)
 
 **One task at a time.** 不要在 Task 1 通过前启动 Task 2。
 
-**⚠️ 并发限制：** Generator + Evaluator = 主 agent + 2 个子 agent = 3，已达 `subagent` 技能的并发上限。Phase 4 spawn Review 前必须先 kill 当前 task 的 Generator 和 Evaluator。
+**⚠️ 并发限制：** Generator + Evaluator = Orchestrator + 2 个子 agent = 3（无论 Orchestrator 自身是主 agent 还是 planner 子 agent，均计入基数），已达 `subagent` 技能的并发上限。Phase 4 spawn Review 前必须先 kill 当前 task 的 Generator 和 Evaluator。
 
 ### Phase 4: Phase Review & Commit
 
@@ -174,7 +176,7 @@ Design (用户需求)
 
 所有 agent 按时间顺序向 `.pge/progress.md` **追加**（禁止覆盖写入），作为流程执行的见证——eval report + git log 覆盖功能视角，progress.md 提供流程合规性视角。
 
-**格式：** 每行一条：`[时间戳] 角色 | 事件`，如 `[2025-07-07 10:15:00] GENERATOR | gen-auth DONE. Write: pkg/auth/login.go`
+**格式：** 每行一条：`[时间戳] 角色 | 事件`，如 `[2025-07-07 10:15:00] GENERATOR | gen-auth DONE. Write: pkg/auth/login.go`。角色名用你实际的 role 大写（如 ORCHESTRATOR/CLAW），不必硬编码 ORCHESTRATOR
 
 写入时机：Orchestrator 在 spawn/kill、Kitchen Sink、更新 state.md、commit 时；Generator 在 DONE/BLOCKED 时；Evaluator 在写完 eval report 后。
 
@@ -225,7 +227,7 @@ Design (用户需求)
 
 | Scenario | Action |
 |----------|--------|
-| Generator 无响应 | 连续两轮 watch 无输出且 `git diff` 无变化 → kill → 有产出+build 通过: spawn Evaluator; 否则: 报告用户 |
+| Generator 无响应 | 连续两轮 watch 无输出且 `git diff` 无变化 → kill → 有产出+build 通过: spawn Evaluator; 否则: 报告确认方 |
 | Generator outputs BLOCKED | Kill → address reason → respawn once |
 | Agent crash | Check rpc.log → retry with modified instructions |
 | Same task fails 3× | **Stop. Report to user.** |
@@ -237,7 +239,7 @@ Design (用户需求)
 
 ## Key Constraints
 
-1. **Orchestrator 永不写实现代码** — 所有对源文件的 edit/write 交给 Generator
+1. **Orchestrator 永不写实现代码** — 所有对源文件的 edit/write 交给 Generator。这是流程策略（保持验收中立、防 self-evaluation bias），非能力限制；允许操作白名单见 Three Roles 章节
 2. **Validate against spec, not against tasks** — tasks are means, spec is the end
 3. **Generator and Evaluator are separate agents** — self-evaluation is unreliable
 4. **FAIL 后 `ai send` 给同一个 Generator** — 保持上下文连续性，不 spawn 新的
@@ -253,7 +255,7 @@ Design (用户需求)
 
 ## Prompt Templates
 
-角色映射（Generator→`coder`, Evaluator→`validator`, Review→`reviewer`）和 prompt 模板见 [`references/prompt-templates.md`](references/prompt-templates.md)。
+角色映射（Generator→`coder`, Evaluator→`validator`, Review→`reviewer`）和 prompt 模板见 [`references/prompt-templates.md`](references/prompt-templates.md)。发起 PGE 的 agent 本身（即 Orchestrator）不 spawn 自己，任意 `--role` 均可。
 
 ## End-to-End Example
 

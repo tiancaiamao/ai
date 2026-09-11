@@ -2,7 +2,7 @@
 
 以一个 task 的完整生命周期为例，展示从 spec 到 commit 的全流程。
 
-> 以下命令遵循 `subagent` 技能的 spawn 模式。`RUN_ID` 来自 `<agent:runtime_state>` 的 `run_id` 字段。
+> 以下命令遵循 `subagent` 技能的 spawn 模式。`RUN_ID` 来自 `<agent:runtime_state>` 的 `run_id` 字段。progress.md 中的 `ORCHESTRATOR` 角色名请替换为你实际的 role 大写。
 
 ## 场景
 
@@ -237,8 +237,7 @@ REVIEW_TMUX="agent-$RUN_ID-review"
 REVIEW_ID_FILE="/tmp/agent-$RUN_ID-review.id"
 
 tmux new-session -d -s "$REVIEW_TMUX" \
-    "ai serve --role coder \
-   --system-prompt @~/.ai/skills/review/reviewer.md \
+    "ai serve --role reviewer \
    --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff \$(cat .pge/phase-start-commit)..HEAD (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
    --name 'rev-phase1' \
    --id-file $REVIEW_ID_FILE \
@@ -249,7 +248,7 @@ REVIEW_ID=$(cat $REVIEW_ID_FILE)
 echo "$REVIEW_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn rev-phase1 (coder)" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn rev-phase1 (reviewer)" >> .pge/progress.md
 
 # Watch Review agent
 ai watch --id "$REVIEW_ID" --follow --pretty

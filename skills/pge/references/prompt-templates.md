@@ -7,6 +7,7 @@
 | Generator | `coder` | 实现代码 |
 | Evaluator | `validator` | 独立验证 |
 | Review | `reviewer` | 代码审查 |
+| Orchestrator | 任意（不 spawn 自己） | 加载 pge 技能的 agent 本身，任意 role 均可充当 |
 
 具体的 `ai serve` 参数（`--name`, `--input-file`, `--id-file`, `--timeout` 等）参见 `subagent` 技能。
 
