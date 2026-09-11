@@ -32,7 +32,7 @@ cd /home/user/myproject && go build ./... && go test ./src/middleware/...
 1. READ BEFORE WRITE — grep 确认 API 存在再使用
 2. MODIFY ONLY WRITE FILES — 不要改动 Write 列表之外的文件
 3. BUILD MUST PASS — 实现后必须构建成功
-4. Output DONE: <file list> when complete
+4. Output DONE: <file list> + 结果包（Verified: <验证命令及结果> / Risks: <风险，无则 none> / OpenQuestions: <待确认问题，无则 none>）
 EOF
 
 # 写 progress.md
@@ -93,7 +93,7 @@ ai send --id "$CHILD_ID" --wait --timeout 5m \
   "Kitchen Sink detected. The following files are outside task Write scope:
   $(git status --porcelain --untracked-files=all | sed 's/^...//' | grep -v 'src/middleware/auth.go' | grep -v 'src/routes/router.go')
   Please revert these changes and only modify files in Write scope.
-  Output DONE: <fixed file list> when complete."
+  Output DONE: <fixed file list> + 结果包（Verified/Risks/OpenQuestions）when complete."
 # 回到 Step 3 watch
 ```
 
@@ -160,7 +160,7 @@ ai send --id "$CHILD_ID" --wait --timeout 5m \
 $(grep '❌' .pge/eval-add-jwt-auth.md)
 
 请修复这些问题，eval report 在 .pge/eval-add-jwt-auth.md。
-修复后输出 DONE: <file list>"
+修复后输出 DONE: <file list> + 结果包（Verified/Risks/OpenQuestions）"
 
 # Kill 旧 Evaluator，spawn 新 Evaluator 重新验证
 ai kill --id "$EVAL_ID"

@@ -49,7 +49,7 @@
    - `OpenQuestions:` 仍需 Orchestrator 确认的问题，无则写 `none`
    - 完整执行轨迹不需要回传，但支撑判断的依据（关键决策对应 spec 哪条）必须说明
 6. **On DONE, write to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] GENERATOR | {task-name} DONE. Write: <file list> | Risks: <...> | Open: <...>\" >> .pge/progress.md"`
-7. **BLOCKED if stuck** — 参考 task 文件的 Stop Conditions 节。遇到停止条件（需求矛盾、API/输入不存在、需要越出 Write 范围），输出 `BLOCKED: <reason>`，不要猜测实现
+7. **BLOCKED if stuck** — 参考 task 文件的 Stop Conditions 节。遇到停止条件（需求矛盾、API/输入不存在、需要越出 Write 范围的实现文件；按 PGE 规则写 `.pge/` 流程日志不算越界），输出 `BLOCKED: <reason>`，不要猜测实现
 ```
 
 ---
@@ -72,7 +72,7 @@ ai serve --role validator --name eval-{task} --input-file /tmp/eval-{task}.md
 1. cd {project_dir}
 2. For each criterion, run the verification command YOURSELF
 3. For code quality, READ the actual source files
-4. Output verdict per the format in `~/.ai/skills/pge/references/eval-report-template.md` (✅/❌/⚠️ + PASS/FAIL summary)
+4. Output verdict per the format in `~/.ai/skills/pge/references/eval-report-template.md` (✅/❌ per criterion + PASS/FAIL summary)
 5. Write report to `.pge/eval-{task}.md`
 6. **Append verdict to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] EVALUATOR | {task-name} VERDICT: <PASS|FAIL> — <summary>\" >> .pge/progress.md"`
 ```

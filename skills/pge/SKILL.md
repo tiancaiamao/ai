@@ -34,7 +34,7 @@ description: Planner-Generator-Evaluator 编排模式。GAN 启发的多 agent �
 
 **Orchestrator 是流程角色，与 `--role` 无关**——无论你是主 agent 还是被 spawn 出来的 planner 子 agent（claw/coder 等任何 role），加载本技能即以此身份执行。主 agent 无需 spawn 自己；planner 子 agent 同样以 Orchestrator 身份执行，只是向上级回报——下文所有“用户/确认方”均指你的确认来源（用户，或 spawn 你的上级 agent）。
 
-**允许亲自执行的操作**（不算“实现代码”）：只读信息收集（grep / git diff / 跑 build / 跑 test）、在 spec 中编写 Verify 命令、git restore/checkout 回滚（KC 1 的唯一例外）、git commit、写 `.pge/*` 文件。
+**允许亲自执行的操作**（不算“实现代码”）：只读信息收集（grep / git diff / 跑 build / 跑 test）、在 spec 中编写 Verify 命令、git restore/checkout 回滚（KC 1 的唯一例外）、git commit、写 `.pge/*` 流程文件（spec / state / progress / tasks / phase-start-commit；**eval-*.md 与 review-*.md 除外**，只有 Evaluator/Review agent 可写）。
 
 ## Prerequisite
 
@@ -93,8 +93,8 @@ Design (用户需求)
 2. Watch Generator → 等待 DONE/BLOCKED
 3. Generator 完成 → 写 progress.md（含产出文件列表）
    不要 kill，保持活着
-4. **Kitchen Sink 检查**（Orchestrator 执行，不 spawn agent）：
-   `git status --porcelain --untracked-files=all` 列出所有变更文件（含新增、暂存、未暂存），对比 task 的 Write 文件列表
+4. **Kitchen Sink 检查**（Orchestrator 执行，不 spawn agent）：   `git status --porcelain --untracked-files=all` 列出所有变更文件（含新增、暂存、未暂存），对比 task 的 Write 文件列表
+   对比基线 = task 开始时的已变更文件集（用户既有未提交修改、上一 task 未 commit 的产物不算越界）。
    有超出范围的文件 → 单文件机械越界：Orchestrator 直接 `git restore` 并记 progress.md；范围不清或跨多文件：progress.md → ai send 让 Generator 回滚 → 回到步骤 2
    未超出范围 → progress.md → 继续
 5. Spawn Evaluator (validator role) → 独立读代码、跑验证命令
@@ -149,7 +149,7 @@ Design (用户需求)
    - **无 P1**: 可以 commit
    - **有 P1**: 写修复任务 → spawn Generator 修复 → spawn Evaluator 验证 → 回到 Review
       - **P2/P3**: 记录在 state.md 的 Known Issues 中，不阻塞 commit
-5. **Phase 合入** — 前提：所有 eval report PASS + 全量回归通过 + review 无 P1。
+5. **Phase 合入** — 前提：所有 eval report PASS + 全量回归通过 + review 无阻塞问题（P0/P1）。
    - 若 Phase 3 各 task 已独立 commit，执行 `git merge` 或 `git rebase` 合入目标分支
    - 若未独立 commit，执行最终 commit
    - Commit message 模板：`phase{N}: <phase-name>\n\n<task-list>\n\nReview: <review-file>`
@@ -176,7 +176,7 @@ Design (用户需求)
 
 所有 agent 按时间顺序向 `.pge/progress.md` **追加**（禁止覆盖写入），作为流程执行的见证——eval report + git log 覆盖功能视角，progress.md 提供流程合规性视角。
 
-**格式：** 每行一条：`[时间戳] 角色 | 事件`，如 `[2025-07-07 10:15:00] GENERATOR | gen-auth DONE. Write: pkg/auth/login.go`。角色名用你实际的 role 大写（如 ORCHESTRATOR/CLAW），不必硬编码 ORCHESTRATOR
+**格式：** 每行一条：`[时间戳] 角色 | 事件`，如 `[2025-07-07 10:15:00] GENERATOR | gen-auth DONE. Write: pkg/auth/login.go`。角色名用 PGE 语义角色大写（GENERATOR/EVALUATOR/REVIEW，与 `--role` 无关）；planner 行无固定语义名，用你实际的 role 大写（如 ORCHESTRATOR/CLAW）
 
 写入时机：Orchestrator 在 spawn/kill、Kitchen Sink、更新 state.md、commit 时；Generator 在 DONE/BLOCKED 时；Evaluator 在写完 eval report 后。
 

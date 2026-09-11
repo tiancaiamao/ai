@@ -80,8 +80,8 @@ ai history read --entry e12ab34 --id cbbcf4 --offset-chars 20000 --max-chars 200
 `ai history` queries exactly one run or session — **there is no cross-session search** (no `--project` / `--all-runs`). To answer "which session did X", shortlist candidates on disk first, then use this skill's actions to read them:
 
 - **Where sessions live**: `~/.ai/sessions/<munged-project-path>/<session-uuid>/messages.jsonl` (path separators become dashes, e.g. `--Users-genius-project-tinyactor--`).
-- **Shortlisting**: `grep -l "keyword" ~/.ai/sessions/<project-dir>/*/messages.jsonl`, then rank candidates by mention count and file mtime. Raw grep is the right tool for this sweep; `ai history` takes over once a session is identified.
-- **Binding a session to a run ID**: `ai ls` lists only live agents, and `~/.ai/runs/` holds thousands of opaque directories. Reliable trick: correlate the agent's **reply timestamp with the session file's mtime** (second-level match) to pair run id ↔ session directory.
+- **Shortlisting**: `grep -rl "keyword" ~/.ai/sessions/<project-dir>/*/` — scan the whole session dir, not just `messages.jsonl`: after compaction, old-window messages live only in `compactions/*.jsonl` snapshots. Rank candidates by mention count and file mtime. Raw grep is the right tool for this sweep; `ai history` takes over once a session is identified.
+- **Binding a session to a run ID**: preferred: `grep -l '"session": "<session-uuid>"' ~/.ai/runs/*/run.json` pairs run id ↔ session directly (newer runs record the session UUID in run.json; some older runs lack the field). Fallback for those: correlate the agent's **reply timestamp with the session file's mtime** (second-level match) — weaker, since resumed runs and message appends also bump mtime.
 - **Confirm a candidate**: `ai history list --session <path> --role user --oldest-first --max-chars 800` shows the session's opening task; then proceed with search → read.
 
 ## Forensics: keep tool messages
