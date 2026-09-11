@@ -20,15 +20,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/agentconfig"
 )
 
-// ModelCatalog returns model registry data used by protocol adapters.
-func (app *App) ModelCatalog() ([]config.ModelSpec, config.ModelInfo, error) {
-	specs, path, err := loadModelSpecs(app.cfg)
-	if err != nil {
-		return nil, config.ModelInfo{}, fmt.Errorf("load models from %s: %w", path, err)
-	}
-	return filterModelSpecsWithKeys(specs), app.currentModelInfo, nil
-}
-
 // LoadSession loads and activates a persisted session.
 func (app *App) LoadSession(id string) (*session.Session, string, error) {
 	if _, err := app.sessionMgr.GetMeta(id); err != nil {

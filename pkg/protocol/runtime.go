@@ -3,7 +3,6 @@ package protocol
 import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/command"
-	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
@@ -33,8 +32,5 @@ type Runtime interface {
 	StartDebugServer()
 	SetSession(*session.Session, string, string)
 	LoadSession(string) (*session.Session, string, error)
-	ModelCatalog() ([]config.ModelSpec, config.ModelInfo, error)
-	ResolveModelOption(string) (string, string, error)
-	SetModel(string, string) error
 	FormatCommandResult(string, any) string
 }
