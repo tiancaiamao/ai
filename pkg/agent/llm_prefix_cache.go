@@ -25,9 +25,10 @@ const (
 )
 
 // checkPrefixCache compares the fingerprint of the request about to be sent
-// with the previously sent one, records the outcome on the llm_call span and
-// as an instant llm_prefix_cache_check trace event, then stores the new
-// fingerprint. Compaction clears the fingerprint via
+// with the previously sent one, records the outcome on the llm_call span,
+// then stores the new fingerprint. A miss is additionally recorded as an
+// instant llm_prefix_cache_check trace event; hits are the common case and
+// are left off the trace to avoid noise. Compaction clears the fingerprint via
 // AgentState.ResetLLMRequestFingerprint so history rewrites are reported as a
 // known reset rather than a divergence.
 func checkPrefixCache(
@@ -64,17 +65,19 @@ func checkPrefixCache(
 		span.AddField("prefix_diverge_index", divergeIndex)
 	}
 
-	traceevent.Log(ctx, traceevent.CategoryLLM, "llm_prefix_cache_check",
-		traceevent.Field{Key: "hit", Value: hit},
-		traceevent.Field{Key: "reason", Value: reason},
-		traceevent.Field{Key: "diverge_index", Value: divergeIndex},
-		traceevent.Field{Key: "prev_messages", Value: prevCount},
-		traceevent.Field{Key: "curr_messages", Value: len(curr.MsgHashes)},
-		traceevent.Field{Key: "system_changed", Value: systemChanged},
-		traceevent.Field{Key: "tools_changed", Value: toolsChanged},
-		traceevent.Field{Key: "model_changed", Value: modelChanged},
-		traceevent.Field{Key: "model", Value: model},
-	)
+	if !hit {
+		traceevent.Log(ctx, traceevent.CategoryLLM, "llm_prefix_cache_check",
+			traceevent.Field{Key: "hit", Value: hit},
+			traceevent.Field{Key: "reason", Value: reason},
+			traceevent.Field{Key: "diverge_index", Value: divergeIndex},
+			traceevent.Field{Key: "prev_messages", Value: prevCount},
+			traceevent.Field{Key: "curr_messages", Value: len(curr.MsgHashes)},
+			traceevent.Field{Key: "system_changed", Value: systemChanged},
+			traceevent.Field{Key: "tools_changed", Value: toolsChanged},
+			traceevent.Field{Key: "model_changed", Value: modelChanged},
+			traceevent.Field{Key: "model", Value: model},
+		)
+	}
 }
 
 // fingerprintLLMRequest hashes the cache-relevant parts of an outgoing
