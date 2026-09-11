@@ -7,6 +7,7 @@
 | Generator | `coder` | 实现代码 |
 | Evaluator | `validator` | 独立验证 |
 | Review | `reviewer` | 代码审查 |
+| Orchestrator | 任意（不 spawn 自己） | 加载 pge 技能的 agent 本身，任意 role 均可充当 |
 
 具体的 `ai serve` 参数（`--name`, `--input-file`, `--id-file`, `--timeout` 等）参见 `subagent` 技能。
 
@@ -22,6 +23,7 @@
 ## Context
 {简要项目背景，帮助 Generator 理解代码库}
 **Before starting, read `.pge/state.md` for context from previous tasks.**
+**Read `.pge/tasks/task-{name}.md` — it defines your Files scope, Constraints, and Stop Conditions.**
 
 ## What to Implement
 {具体的实现要求，给 WHAT 不给 HOW}
@@ -41,8 +43,13 @@
 2. MODIFY ONLY WRITE FILES — 不要改动 Write 列表之外的文件
 3. VERIFICATION MUST PASS — Verification 节中的所有命令（build + test）必须通过
 4. Output `DONE: <file list>` when complete (file list: space-separated, relative to project root)
-5. **On DONE, write to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] GENERATOR | {task-name} DONE. Write: <file list>\" >> .pge/progress.md"`
-6. **BLOCKED if stuck** — 如果遇到无法解决的问题（API 不存在、需求矛盾、超出 Write 范围的关键依赖缺失），输出 `BLOCKED: <reason>`，不要猜测实现
+5. **DONE 回传格式** — DONE 之后必须附上结果包（简洁，每项一行）：
+   - `Verified:` 本任务实际运行过的验证命令及结果
+   - `Risks:` 实现中的风险与限制（如未覆盖的边界条件），无则写 `none`
+   - `OpenQuestions:` 仍需 Orchestrator 确认的问题，无则写 `none`
+   - 完整执行轨迹不需要回传，但支撑判断的依据（关键决策对应 spec 哪条）必须说明
+6. **On DONE, write to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] GENERATOR | {task-name} DONE. Write: <file list> | Risks: <...> | Open: <...>\" >> .pge/progress.md"`
+7. **BLOCKED if stuck** — 参考 task 文件的 Stop Conditions 节。遇到停止条件（需求矛盾、API/输入不存在、需要越出 Write 范围的实现文件；按 PGE 规则写 `.pge/` 流程日志不算越界），输出 `BLOCKED: <reason>`，不要猜测实现
 ```
 
 ---
@@ -65,9 +72,10 @@ ai serve --role validator --name eval-{task} --input-file /tmp/eval-{task}.md
 1. cd {project_dir}
 2. For each criterion, run the verification command YOURSELF
 3. For code quality, READ the actual source files
-4. Output verdict in the format defined in your system prompt (✅/❌/⚠️)
+4. Output verdict per the format in `~/.ai/skills/pge/references/eval-report-template.md` (✅/❌ per criterion + PASS/FAIL summary)
 5. Write report to `.pge/eval-{task}.md`
 6. **Append verdict to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] EVALUATOR | {task-name} VERDICT: <PASS|FAIL> — <summary>\" >> .pge/progress.md"`
+```
 
 ---
 
@@ -90,7 +98,7 @@ Output DONE: <file list> when complete.
 写入 `/tmp/review-{phase}.md`，作为 `--input-file` 传入：
 
 ```bash
-ai serve --role reviewer --name review-{task} --input-file /tmp/review-{name}.md
+ai serve --role reviewer --name review-{phase} --input-file /tmp/review-{phase}.md
 ```
 
 ```markdown

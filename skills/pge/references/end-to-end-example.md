@@ -2,7 +2,7 @@
 
 以一个 task 的完整生命周期为例，展示从 spec 到 commit 的全流程。
 
-> 以下命令遵循 `subagent` 技能的 spawn 模式。`RUN_ID` 来自 `<agent:runtime_state>` 的 `run_id` 字段。
+> 以下命令遵循 `subagent` 技能的 spawn 模式。`RUN_ID` 来自 `<agent:runtime_state>` 的 `run_id` 字段。progress.md 中的 `ORCHESTRATOR` 角色名请替换为你实际的 role 大写。
 
 ## 场景
 
@@ -32,7 +32,7 @@ cd /home/user/myproject && go build ./... && go test ./src/middleware/...
 1. READ BEFORE WRITE — grep 确认 API 存在再使用
 2. MODIFY ONLY WRITE FILES — 不要改动 Write 列表之外的文件
 3. BUILD MUST PASS — 实现后必须构建成功
-4. Output DONE: <file list> when complete
+4. Output DONE: <file list> + 结果包（Verified: <验证命令及结果> / Risks: <风险，无则 none> / OpenQuestions: <待确认问题，无则 none>）
 EOF
 
 # 写 progress.md
@@ -93,7 +93,7 @@ ai send --id "$CHILD_ID" --wait --timeout 5m \
   "Kitchen Sink detected. The following files are outside task Write scope:
   $(git status --porcelain --untracked-files=all | sed 's/^...//' | grep -v 'src/middleware/auth.go' | grep -v 'src/routes/router.go')
   Please revert these changes and only modify files in Write scope.
-  Output DONE: <fixed file list> when complete."
+  Output DONE: <fixed file list> + 结果包（Verified/Risks/OpenQuestions）when complete."
 # 回到 Step 3 watch
 ```
 
@@ -160,7 +160,7 @@ ai send --id "$CHILD_ID" --wait --timeout 5m \
 $(grep '❌' .pge/eval-add-jwt-auth.md)
 
 请修复这些问题，eval report 在 .pge/eval-add-jwt-auth.md。
-修复后输出 DONE: <file list>"
+修复后输出 DONE: <file list> + 结果包（Verified/Risks/OpenQuestions）"
 
 # Kill 旧 Evaluator，spawn 新 Evaluator 重新验证
 ai kill --id "$EVAL_ID"
@@ -237,8 +237,7 @@ REVIEW_TMUX="agent-$RUN_ID-review"
 REVIEW_ID_FILE="/tmp/agent-$RUN_ID-review.id"
 
 tmux new-session -d -s "$REVIEW_TMUX" \
-    "ai serve --role coder \
-   --system-prompt @~/.ai/skills/review/reviewer.md \
+    "ai serve --role reviewer \
    --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff \$(cat .pge/phase-start-commit)..HEAD (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
    --name 'rev-phase1' \
    --id-file $REVIEW_ID_FILE \
@@ -249,7 +248,7 @@ REVIEW_ID=$(cat $REVIEW_ID_FILE)
 echo "$REVIEW_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn rev-phase1 (coder)" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn rev-phase1 (reviewer)" >> .pge/progress.md
 
 # Watch Review agent
 ai watch --id "$REVIEW_ID" --follow --pretty
