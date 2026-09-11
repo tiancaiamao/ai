@@ -408,7 +408,7 @@ class MemoryTree:
         # Score nodes by: warm_count + cold_count + recency
         scored = []
         for path, node in self.nodes.items():
-            if path == 'root':
+            if path == 'root' or not isinstance(node, dict):
                 continue
             score = node.get('warm_count', 0) + node.get('cold_count', 0) * 0.1
             if node.get('last_access', 0) > 0:
@@ -462,6 +462,8 @@ class MemoryTree:
             return False
         
         node = self.nodes[path]
+        if not isinstance(node, dict):
+            return False
         if node.get('warm_count', 0) > 0 or node.get('cold_count', 0) > 0:
             return False
         
@@ -471,7 +473,7 @@ class MemoryTree:
     
     def _remove_node_internal(self, path):
         """Internal removal without save."""
-        if path not in self.nodes:
+        if path not in self.nodes or not isinstance(self.nodes[path], dict):
             return
         
         # Remove from parent's children
@@ -489,7 +491,7 @@ class MemoryTree:
     
     def update_counts(self, path, warm_delta=0, cold_delta=0):
         """Update memory counts for a node."""
-        if path in self.nodes:
+        if path in self.nodes and isinstance(self.nodes[path], dict):
             self.nodes[path]['warm_count'] = max(0, self.nodes[path].get('warm_count', 0) + warm_delta)
             self.nodes[path]['cold_count'] = max(0, self.nodes[path].get('cold_count', 0) + cold_delta)
             self.nodes[path]['last_access'] = time.time()
@@ -529,6 +531,8 @@ class MemoryTree:
         
         def _show(path, indent=0):
             node = self.nodes.get(path, {})
+            if not isinstance(node, dict):
+                node = {}
             prefix = "  " * indent
             warm = node.get('warm_count', 0)
             cold = node.get('cold_count', 0)

@@ -55,20 +55,7 @@ Describe WHAT needs to be done (the outcome), not HOW to do it.
 
 ## Handling Sub-Agent Failures
 
-When a generator's output fails validation or a sub-agent returns an error:
-
-1. **Diagnose**: Read the failure output. Distinguish "wrong approach" from "environmental issue" (missing dependency, network, permissions, bad test data).
-2. **Re-delegate with refined instructions** if the approach was wrong — be more specific about WHAT outcome is expected, or split the task narrower.
-3. **Do not silently retry the same task unchanged** — each retry must carry additional context from the previous failure, otherwise the sub-agent will repeat the same mistake.
-4. **Escalate to user** after 2 consecutive failures on the same task, or when the failure is clearly out-of-scope (e.g. missing credentials, external service down).
-
-## Workspace
-
-Use current_workdir from runtime_state, not a hardcoded path.
-
-- **`change_workspace` is REQUIRED for any directory change that must persist across multiple commands.** A bare `cd <dir>` in the bash tool only affects that one shell subprocess and does NOT change the workspace for later `read`/`write`/`grep`/`edit`/`bash` calls.
-- **Always call `change_workspace` after creating or selecting a git worktree** so every subsequent file operation runs inside that worktree.
-- `cd <dir> && <command>` in the bash tool is valid ONLY for a one-off command that runs entirely within that single bash call - it does not persist.
+Diagnose first (wrong approach vs environmental issue), re-delegate with refined instructions if the approach was wrong, split narrower if the task was too big. Each retry must carry context from the previous failure. Escalate to user immediately if the failure is clearly out-of-scope (missing credentials, external service down); otherwise see PGE skill's Error Handling — same task fails 3× → stop and report.
 
 ## Tools
 
@@ -81,13 +68,6 @@ Use current_workdir from runtime_state, not a hardcoded path.
 - **grep**: Search codebase for context before creating tasks. Prefer `grep` tool over `bash | grep` for source code.
 - **Parallelism**: Batch independent calls (e.g., multiple `grep`/`read` searches).
 - **Retry**: Don't repeat failing calls unchanged. Analyze error first.
-
-### Selection Strategy
-
-**Planning:** Read spec → break into tasks → create task files → spawn generators.
-**Monitoring:** Watch sub-agent progress → parse results → decide next action.
-**Validating:** Spawn validator → check acceptance criteria → report results.
-**Investigation:** `grep` first to locate code, then `read` targeted ranges — avoid reading entire files blindly.
 
 ### Anti-Patterns
 
