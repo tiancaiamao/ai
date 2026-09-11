@@ -252,8 +252,10 @@ func TestCheckPrefixCache_TracesAndUpdatesState(t *testing.T) {
 	}
 
 	recorded := events()
-	if len(recorded) != 3 {
-		t.Fatalf("expected 3 llm_prefix_cache_check events, got %d", len(recorded))
+	// The pure-append turn hits the cache and is not recorded as a trace
+	// event; only the two misses (cold start, post-compaction reset) remain.
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 llm_prefix_cache_check events, got %d", len(recorded))
 	}
 
 	expectations := []struct {
@@ -261,7 +263,6 @@ func TestCheckPrefixCache_TracesAndUpdatesState(t *testing.T) {
 		reason string
 	}{
 		{hit: false, reason: prefixCacheColdStart},
-		{hit: true, reason: prefixCacheAppended},
 		{hit: false, reason: "compaction:test"},
 	}
 	for i, want := range expectations {
@@ -273,11 +274,11 @@ func TestCheckPrefixCache_TracesAndUpdatesState(t *testing.T) {
 			t.Errorf("event %d: reason = %q, want %q", i, got, want.reason)
 		}
 	}
-	if got := traceFieldValue(t, recorded[1], "prev_messages").(int); got != 1 {
-		t.Errorf("event 1: prev_messages = %d, want 1", got)
+	if got := traceFieldValue(t, recorded[1], "prev_messages").(int); got != 0 {
+		t.Errorf("event 1: prev_messages = %d, want 0 (fingerprint cleared by reset)", got)
 	}
-	if got := traceFieldValue(t, recorded[1], "curr_messages").(int); got != 2 {
-		t.Errorf("event 1: curr_messages = %d, want 2", got)
+	if got := traceFieldValue(t, recorded[1], "curr_messages").(int); got != 1 {
+		t.Errorf("event 1: curr_messages = %d, want 1", got)
 	}
 }
 
@@ -331,26 +332,19 @@ func TestStreamAssistantResponse_PrefixCacheCheckAcrossTurns(t *testing.T) {
 	}
 
 	recorded := events()
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 llm_prefix_cache_check events, got %d", len(recorded))
+	// The second turn is a pure append of the first request, so it hits the
+	// provider cache and is not recorded as a trace event; only the cold
+	// start miss remains.
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 llm_prefix_cache_check event, got %d", len(recorded))
 	}
 	if reason := traceFieldValue(t, recorded[0], "reason").(string); reason != prefixCacheColdStart {
 		t.Errorf("first event reason = %q, want %q", reason, prefixCacheColdStart)
 	}
-
-	// The second turn is a pure append of the first request: no ephemeral
-	// re-injection shifts mid-history positions anymore, so the provider
-	// prefix chain stays intact across turn boundaries.
-	if hit := traceFieldValue(t, recorded[1], "hit").(bool); !hit {
-		t.Errorf("second event hit = false, want true")
+	if got := traceFieldValue(t, recorded[0], "prev_messages").(int); got != 0 {
+		t.Errorf("first event prev_messages = %d, want 0", got)
 	}
-	if reason := traceFieldValue(t, recorded[1], "reason").(string); reason != prefixCacheAppended {
-		t.Errorf("second event reason = %q, want %q", reason, prefixCacheAppended)
-	}
-	if got := traceFieldValue(t, recorded[1], "prev_messages").(int); got != 1 {
-		t.Errorf("second event prev_messages = %d, want 1", got)
-	}
-	if got := traceFieldValue(t, recorded[1], "curr_messages").(int); got != 3 {
-		t.Errorf("second event curr_messages = %d, want 3", got)
+	if got := traceFieldValue(t, recorded[0], "curr_messages").(int); got != 1 {
+		t.Errorf("first event curr_messages = %d, want 1", got)
 	}
 }
