@@ -3,7 +3,6 @@ package protocol
 import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/command"
-	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
@@ -39,9 +38,4 @@ func (r *testRuntime) InitEventEmitter(emit func(agent.AgentEvent)) (chan struct
 func (r *testRuntime) StartDebugServer()                                    {}
 func (r *testRuntime) SetSession(*session.Session, string, string)          {}
 func (r *testRuntime) LoadSession(string) (*session.Session, string, error) { return nil, "", nil }
-func (r *testRuntime) ModelCatalog() ([]config.ModelSpec, config.ModelInfo, error) {
-	return nil, config.ModelInfo{}, nil
-}
-func (r *testRuntime) ResolveModelOption(string) (string, string, error) { return "", "", nil }
-func (r *testRuntime) SetModel(string, string) error                     { return nil }
-func (r *testRuntime) FormatCommandResult(string, any) string            { return "" }
+func (r *testRuntime) FormatCommandResult(string, any) string               { return "" }

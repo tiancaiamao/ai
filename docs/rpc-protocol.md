@@ -25,7 +25,6 @@ The implemented ACP surface is intentionally minimal:
 | `session/load` | request | Load a persisted session and replay its history as `session/update` notifications. |
 | `session/prompt` | request | Submit a text prompt and wait for its `stopReason`. |
 | `session/cancel` | notification | Cancel the active turn. |
-| `session/set_config_option` | request | Switch the active model; aliases are also accepted. |
 | `session/update` | notification | Server-to-client stream of session updates. |
 
 Unsupported ACP methods, including `fs/*`, `terminal/*`, and MCP transports, return JSON-RPC method-not-found. `mcpServers` in `session/new` is accepted and ignored.
