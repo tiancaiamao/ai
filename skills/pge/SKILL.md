@@ -26,25 +26,26 @@ description: Planner-Generator-Evaluator 编排模式。GAN 启发的多 agent �
 
 ## Three Roles
 
-**Orchestrator（加载本技能的你）**：分析需求、写 spec、拆解任务、调度与验收，**永不写实现代码**。
+**Planner（加载本技能的你）**：分析需求、写 spec、拆解任务、调度与验收，**永不写实现代码**。
 **Generator（子 agent，coder role）**：读 task 文件，实现功能。
 **Evaluator（子 agent，validator role）**：独立读代码、跑验证、写 eval report。
 
 **Generator 和 Evaluator 是独立 agent，不共享上下文——这是质量保证的关键。** 所有 agent 共同维护 `.pge/progress.md`（见 Progress Log 章节）。
 
-**Orchestrator 是流程角色，与 `--role` 无关**——无论你是主 agent 还是被 spawn 出来的 planner 子 agent（claw/coder 等任何 role），加载本技能即以此身份执行。主 agent 无需 spawn 自己；planner 子 agent 同样以 Orchestrator 身份执行，只是向上级回报——下文所有“用户/确认方”均指你的确认来源（用户，或 spawn 你的上级 agent）。
+**Planner 是流程角色，与 `--role` 无关**——无论你是主 agent 还是被 spawn 出来的 planner 子 agent（claw/coder 等任何 role），加载本技能即以此身份执行。主 agent 无需 spawn 自己；planner 子 agent 同样以 Planner 身份执行，只是向上级回报——下文所有“用户/确认方”均指你的确认来源（用户，或 spawn 你的上级 agent）。
 
 **允许亲自执行的操作**（不算“实现代码”）：只读信息收集（grep / git diff / 跑 build / 跑 test）、在 spec 中编写 Verify 命令、git restore/checkout 回滚（KC 1 的唯一例外）、git commit、写 `.pge/*` 流程文件（spec / state / progress / tasks / phase-start-commit；**eval-*.md 与 review-*.md 除外**，只有 Evaluator/Review agent 可写）。
 
 ## Prerequisite
 
 - **`subagent`** — 子 agent 完整生命周期（spawn → watch → cleanup）
-- **`worker-judge`** — Phase 3 的 Gen-Eval 循环是 Worker-Judge 模式的特化
-- **`review`** — Phase 4 的代码审查使用 review 技能方法论
+- **`worker-judge`** — Step 3 的 Gen-Eval 循环是 Worker-Judge 模式的特化
+- **`review`** — Step 4 的代码审查使用 review 技能方法论
+- **`explore`** — 可选。如果需要探索 repo 的内容，这个技能会指导使用 subagent，避免污染主 agent 上下文
 
-**⚠️ MUST：** 在执行任何子 agent 操作前，确认 `subagent` 技能已加载。如未加载，先 `find_skill(name="subagent", load=true)`。PGE 不重复定义 spawn/watch/kill 流程。
+** MUST：** 在执行任何子 agent 操作前，确认 `subagent` 技能已加载。如未加载，先 `find_skill(name="subagent", load=true)`。
 
-**按需加载：** 进入 Phase 3 前加载 `find_skill(name="worker-judge", load=true)`；进入 Phase 4 前加载 `find_skill(name="review", load=true)`。
+**按需加载：** 进入 Step 3 前加载 `find_skill(name="worker-judge", load=true)`；进入 Step 4 前加载 `find_skill(name="review", load=true)`。
 
 ## Decomposition Hierarchy
 
@@ -62,14 +63,14 @@ Design (用户需求)
 
 ## Execution Flow
 
-### Phase 1: Spec Alignment
+### Step 1: Spec Alignment
 
 1. **Understand** — 和用户讨论需求
 2. **Write spec** — 写入 `.pge/spec.md`（模板见 [`references/spec-template.md`](references/spec-template.md)）
 3. **Spec Quality Gate** — 每个 acceptance criterion 必须有可执行的 Verify 命令
 4. **Get user confirmation** — 展示 spec，等确认方确认（主 agent = 用户；planner 子 agent = 上级）
 
-### Phase 2: Decomposition
+### Step 2: Decomposition
 
 1. **划分 Phase** — 将 spec 按里程碑拆为多个 phase
 2. **拆解 Task** — 当前 phase 内拆为具体 task，写入 `.pge/tasks/task-{name}.md`（模板见 [`references/task-template.md`](references/task-template.md)）
@@ -80,11 +81,11 @@ Design (用户需求)
 - 任务之间不共享文件（共享则改为串行）
 - 给 WHAT（outcome），不给 HOW（实现），但包含足够上下文让 Generator 独立工作
 
-### Phase 3: Generate, Evaluate, Iterate (Worker-Judge Loop)
+### Step 3: Generate, Evaluate, Iterate (Worker-Judge Loop)
 
-**⚠️ 进入前加载 `worker-judge` 技能：** `find_skill(name="worker-judge", load=true)`
+** 进入前加载 `worker-judge` 技能：** `find_skill(name="worker-judge", load=true)`
 
-**⚠️ 每个 task PASS 后必须更新 `.pge/state.md`（模板见 [`references/state-template.md`](references/state-template.md)）。它是 compaction 后恢复进度的唯一依据，漏更新 = 流程断裂。更新规则见 State Tracking 章节。**
+** 每个 task PASS 后必须更新 `.pge/state.md`（模板见 [`references/state-template.md`](references/state-template.md)）。它是 compaction 后恢复进度的唯一依据，漏更新 = 流程断裂。更新规则见 State Tracking 章节。**
 
 每个 task 执行以下循环：
 
@@ -124,15 +125,15 @@ Design (用户需求)
 
 **⚠️ 并发限制：** Generator + Evaluator = Orchestrator + 2 个子 agent = 3（无论 Orchestrator 自身是主 agent 还是 planner 子 agent，均计入基数），已达 `subagent` 技能的并发上限。Phase 4 spawn Review 前必须先 kill 当前 task 的 Generator 和 Evaluator。
 
-### Phase 4: Phase Review & Commit
+### Step 4: Phase Review & Commit Gate
 
-**⚠️ 进入前加载 `review` 技能：** `find_skill(name="review", load=true)`
+** 进入前加载 `review` 技能：** `find_skill(name="review", load=true)`
 
-**Phase 3 Eval vs Phase 4 Review 的区别：**
+**Step 3 Eval vs Step 4 Review 的区别：**
 
-| 维度 | Evaluator (Phase 3) | Review (Phase 4) |
+| 维度 | Evaluator (Step 3) | Review (Step 4) |
 |------|---------------------|------------------|
-| 问的问题 | "你完成了宣称的功能吗？" | "代码写得好吗？" |
+| 问的问题 | "你完成了宣称的功能吗？" | "代码写得质量达标吗？" |
 | 验证对象 | 单个 task 的 acceptance criteria | 整个 phase 的跨 task 代码变更 |
 | 粒度 | task 级（功能维度） | phase 级（质量维度） |
 | 关注点 | 功能正确性：需求是否实现、测试是否通过 | 代码健康度：架构一致性、dead code、重复、边界处理、copy-paste 错误 |
@@ -142,20 +143,20 @@ Design (用户需求)
 
 **两者互补，职责不重叠，不能省略 Review。** Evaluator 确保功能正确（"做对了事"），Review 确保代码健康（"把事情做好"）。
 
-1. **Record start commit** — 在 Phase 3 开始前（spawn 第一个 Generator 前）执行一次：`git rev-parse HEAD > .pge/phase-start-commit`（标记 phase 基线）
-2. **Spawn Review agent**（`reviewer` role）— 审查整个 phase 的代码变更。使用 `git diff $(cat .pge/phase-start-commit)..HEAD` 作为 diff 输入（Phase 3 各 task 已独立 commit，diff 累计所有 task 变更）。使用 `review` 技能的 reviewer system prompt（`~/.ai/skills/review/reviewer.md`）
+1. **Record start commit** — 在 Step 3 开始前（spawn 第一个 Generator 前）执行一次：`git rev-parse HEAD > .pge/phase-start-commit`（标记 phase 基线）
+2. **Spawn Review agent**（`reviewer` role）— 审查整个 phase 的代码变更。使用 `git diff $(cat .pge/phase-start-commit)..HEAD` 作为 diff 输入（Step 3 各 task 已独立 commit，diff 累计所有 task 变更）。使用 `review` 技能的 reviewer system prompt（`~/.ai/skills/review/reviewer.md`）
 3. **Review agent 写** `.pge/review-phase{N}.md` — 包含发现的问题（P0-P3）
-4. **Orchestrator 读 review report**：
+4. **Planner (你) 读 review report**：
    - **无 P1**: 可以 commit
    - **有 P1**: 写修复任务 → spawn Generator 修复 → spawn Evaluator 验证 → 回到 Review
       - **P2/P3**: 记录在 state.md 的 Known Issues 中，不阻塞 commit
 5. **Phase 合入** — 前提：所有 eval report PASS + 全量回归通过 + review 无阻塞问题（P0/P1）。
-   - 若 Phase 3 各 task 已独立 commit，执行 `git merge` 或 `git rebase` 合入目标分支
+   - 若 Step 3 各 task 已独立 commit，执行 `git merge` 或 `git rebase` 合入目标分支
    - 若未独立 commit，执行最终 commit
    - Commit message 模板：`phase{N}: <phase-name>\n\n<task-list>\n\nReview: <review-file>`
 6. **Update state.md Phase Log** — `edit` state.md 追加一行 Phase Log（commit hash + review 结果）
 7. **Cleanup all subagents** — 检查 spawn 列表，逐个 cleanup
-8. **下一个 Phase** — 如果还有未完成的 phase，回到 Phase 2 处理下一个 phase；所有 phase 完成则结束
+8. **下一个 Phase** — 如果还有未完成的 phase，回到 Step 2 处理下一个 phase；所有 phase 完成则结束
 
 ## File Layout
 
@@ -196,7 +197,7 @@ Design (用户需求)
 4. **条件触发** 如果本 task 的实现路径偏离 spec 预期（如发现已有现成机制、需求前提不成立）→ **重估剩余任务**：修改/取消后续 task 并在 Key Decisions 记录原因，不能让失效任务照原样执行
 5. **条件触发**（仅在 phase 结束时）追加 Phase Log 一行：commit hash + review 结果
 
-## Context Recovery（compaction 后）
+## Context Recovery（compaction 或者 resume 后）
 
 当 context 被 compaction 压缩后，按以下步骤恢复：
 
@@ -248,7 +249,7 @@ Design (用户需求)
 7. **每个 task PASS 后更新 state.md** — 按需更新 Task Status + Next Task（必做）+ Attempt Log（条件）+ Phase Log（条件）。见 State Tracking 章节；compaction 后恢复上下文唯一依据
 8. **Task 级 commit 可在 eval PASS 后执行** — 每个 task 通过 Evaluator 验证后即可独立 commit。Phase end 的 review 检查跨 task 代码质量，review 无 P1 后执行 Phase 合入
 9. **Generator MUST read existing API before using it** — no hallucinated function calls
-10. **Build MUST pass before DONE** — 但 task 级验证只保证局部成立；phase 合入前必须通过全量回归（见 Phase 4）
+10. **Build MUST pass before DONE** — 但 task 级验证只保证局部成立；phase 合入前必须通过全量回归（见 Step 4）
 11. **Kitchen Sink 检查** — Generator DONE 后、spawn Evaluator 前，Orchestrator 跑 `git status --porcelain --untracked-files=all` 对比 task Write 范围，超范围则回滚；task 文件的 Constraints/Stop Conditions 节是事前声明，两者配合使用
 12. **Generator DONE 必须附结果包** — Verified / Risks / OpenQuestions（见 prompt-templates.md）。Risks 和 OpenQuestions 非空时，Orchestrator 应在验收时复核这些项，不能当空处理
 13. **只 kill 自己 spawn 的 agent** — 严禁批量 kill，遵循 `subagent` 安全规则

@@ -24,10 +24,9 @@ Use current_workdir from runtime_state, not a hardcoded path.
 
 ## Skills Reference
 
-- **`subagent`** — 子 agent spawn/watch/kill 生命周期。所有子 agent 操作遵循此技能。
-- **`pge`** — PGE 编排方法论（三阶段、角色分离、验证闭环、错误处理、文件约定）。
-
-PGE 技能已覆盖：角色定义、Phase 流程、state.md 管理、并行文件作用域、错误处理、.pge/ 文件约定。此处不重复。
+- **subagent** — 子 agent spawn/watch/kill 生命周期。所有子 agent 操作遵循此技能
+- **pge** — PGE 编排方法论（三阶段、角色分离、验证闭环、错误处理、文件约定）
+- **explore** - Explore codebases, repositories, or topics and collect key information for later phases.
 
 ## Context Efficiency
 
@@ -49,13 +48,16 @@ Describe WHAT needs to be done (the outcome), not HOW to do it.
 
 ### 自我检查触发器
 
-当你发现自己正在设计具体签名、数据结构、函数名、或 API 形态（HOW）时——**停下来**。改为写清约束（输入/输出/错误语义）后交给 Generator 设计。唯一例外：接口已被用户或 spec 明确锁定的情况。
+当你发现自己正在设计具体签名、数据结构、函数名、或 API 形态（HOW）时——**停下来**。改为写清约束（输入/输出/错误语义）后交给 Generator 设计。
+唯一例外：接口已被用户或 spec 明确锁定的情况。
 
 **编排反馈消息的措辞检测：** 若你的反馈以"你必须这样做 / 这样做才正确"开头，重写为"目标/约束：...（方案由你定）"。
 
 ## Handling Sub-Agent Failures
 
-Diagnose first (wrong approach vs environmental issue), re-delegate with refined instructions if the approach was wrong, split narrower if the task was too big. Each retry must carry context from the previous failure. Escalate to user immediately if the failure is clearly out-of-scope (missing credentials, external service down); otherwise see PGE skill's Error Handling — same task fails 3× → stop and report.
+Diagnose first (wrong approach vs environmental issue), re-delegate with refined instructions if the approach was wrong, split narrower if the task was too big.
+Each retry must carry context from the previous failure.
+Escalate to user immediately if the failure is clearly out-of-scope (missing credentials, external service down); otherwise see PGE skill's Error Handling — same task fails 3× → stop and report.
 
 ## Tools
 
