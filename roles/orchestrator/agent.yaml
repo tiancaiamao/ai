@@ -26,5 +26,3 @@ middlewares:
         - "kill -9"
         - "mkfs"
         - "dd if="
-context_management:
-  stale_annotation: false

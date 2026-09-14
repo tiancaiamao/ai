@@ -20,15 +20,22 @@ type ToolEntry struct {
 
 // AgentConfig represents the parsed agent.yaml configuration.
 type AgentConfig struct {
-	Version      int               `yaml:"version"`
-	SystemPrompt string            `yaml:"system_prompt"`
-	Memory       string            `yaml:"memory,omitempty"`
-	Model        string            `yaml:"model,omitempty"`
-	Middlewares  []MiddlewareEntry `yaml:"middlewares"`
-	Tools        []ToolEntry       `yaml:"tools,omitempty"`
+	Version       int               `yaml:"version"`
+	SystemPrompt  string            `yaml:"system_prompt"`
+	Memory        string            `yaml:"memory,omitempty"`
+	Model         string            `yaml:"model,omitempty"`
+	ThinkingLevel string            `yaml:"thinking_level,omitempty"`
+	Middlewares   []MiddlewareEntry `yaml:"middlewares"`
+	Tools         []ToolEntry       `yaml:"tools,omitempty"`
 
 	// dir is the directory of the YAML file, used for resolving relative paths.
 	dir string
+}
+
+// ValidThinkingLevels lists the accepted thinking_level values.
+var ValidThinkingLevels = map[string]bool{
+	"off": true, "minimal": true, "low": true,
+	"medium": true, "high": true, "xhigh": true,
 }
 
 // GetEnabledTools returns a list of tool names that should be enabled.
@@ -68,6 +75,14 @@ func Load(path string) (*AgentConfig, error) {
 
 	if cfg.Version != 1 {
 		return nil, fmt.Errorf("unsupported agent config version: %d", cfg.Version)
+	}
+
+	if cfg.ThinkingLevel != "" {
+		level := strings.ToLower(strings.TrimSpace(cfg.ThinkingLevel))
+		if !ValidThinkingLevels[level] {
+			return nil, fmt.Errorf("invalid thinking_level %q in agent config: valid values are off, minimal, low, medium, high, xhigh", cfg.ThinkingLevel)
+		}
+		cfg.ThinkingLevel = level
 	}
 
 	absPath, err := filepath.Abs(path)

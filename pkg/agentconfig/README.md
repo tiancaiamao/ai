@@ -43,6 +43,7 @@ tools:
 | Type | Description |
 |------|-------------|
 | `AgentConfig` | Parsed agent.yaml configuration |
+| `ValidThinkingLevels` | Accepted `thinking_level` values |
 | `ToolEntry` | Single tool reference with enable flag and params |
 | `MiddlewareEntry` | Single middleware reference with enable flag and params |
 
@@ -51,4 +52,4 @@ tools:
 | File | Description |
 |------|-------------|
 | `config.go` | `AgentConfig` struct, `Load()`, `ResolveSystemPrompt()`, `GetEnabledTools()` |
-| `hooks.go` | `BuildHooks()` — creates `agent.HookRegistry` from middleware config |
+| `hooks.go` | `BuildHooks()` — creates `agent.HookRegistry` from middleware config |agent.HookRegistry` from middleware config |
