@@ -788,3 +788,78 @@ func TestFindSkill_MultiTokenDescMatch(t *testing.T) {
 		t.Errorf("Should not match when not all tokens present, got: %s", text2)
 	}
 }
+
+// --- executeLoad location header tests ---
+
+// TestFindSkill_LoadLocationHeader tests that executeLoad prepends a location
+// header with the skill's BaseDir so that `{baseDir}` placeholders are resolvable.
+func TestFindSkill_LoadLocationHeader(t *testing.T) {
+	baseDir := "/home/user/.ai/skills/video-watcher"
+	tool := NewFindSkillTool([]skill.Skill{
+		{
+			Name:        "video-watcher",
+			Description: "Watch videos",
+			BaseDir:     baseDir,
+			FilePath:    filepath.Join(baseDir, "SKILL.md"),
+			Content:     "Watch the video at {baseDir}/input.mp4",
+		},
+	}, nil)
+	tool.SetIndexPath(filepath.Join(t.TempDir(), "nonexistent-index.json"))
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"load": true,
+		"name": "video-watcher",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	text := firstText(result)
+	if !strings.Contains(text, baseDir) {
+		t.Errorf("Expected load output to contain base dir %q, got: %s", baseDir, text)
+	}
+	if !strings.Contains(text, "{baseDir}") {
+		t.Errorf("Expected load output to explain {baseDir} placeholder, got: %s", text)
+	}
+	// Content must still be present after the header
+	if !strings.Contains(text, "Watch the video at {baseDir}/input.mp4") {
+		t.Errorf("Expected original skill content to be preserved, got: %s", text)
+	}
+	if !strings.HasPrefix(text, "> Skill location: ") {
+		t.Errorf("Expected output to start with location header, got: %s", text)
+	}
+}
+
+// TestFindSkill_LoadLocationHeaderDiskFallback verifies the location header is
+// also present when a skill is loaded via the disk fallback path.
+func TestFindSkill_LoadLocationHeaderDiskFallback(t *testing.T) {
+	tmpSkills := t.TempDir()
+	skillDir := filepath.Join(tmpSkills, "my-unloaded-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := "# My Unloaded Skill\n\nPath is {baseDir}/data.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewFindSkillTool([]skill.Skill{}, nil)
+	tool.SetIndexPath("")
+	tool.SetSkillsDir(tmpSkills)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"load": true,
+		"name": "my-unloaded-skill",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	text := firstText(result)
+	if !strings.Contains(text, skillDir) {
+		t.Errorf("Expected load output to contain base dir %q, got: %s", skillDir, text)
+	}
+	if !strings.HasPrefix(text, "> Skill location: ") {
+		t.Errorf("Expected output to start with location header, got: %s", text)
+	}
+}

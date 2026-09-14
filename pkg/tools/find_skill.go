@@ -308,6 +308,10 @@ func (t *FindSkillTool) findLoadedSkill(name string) (skill.Skill, bool) {
 // It first checks loaded skills, then falls back to reading from disk
 // (~/.ai/skills/<name>/SKILL.md) for skills that weren't pre-loaded
 // (e.g., missing frontmatter) but exist on disk.
+//
+// The returned content is prefixed with a location header so that
+// `{baseDir}` placeholders in the skill content are resolvable,
+// matching the behavior of the /skill: command path in pkg/skill/expander.go.
 func (t *FindSkillTool) executeLoad(name string) ([]agentctx.ContentBlock, error) {
 	// Phase 1: check loaded skills
 	for _, s := range t.skills {
@@ -316,7 +320,7 @@ func (t *FindSkillTool) executeLoad(name string) ([]agentctx.ContentBlock, error
 			return []agentctx.ContentBlock{
 				agentctx.TextContent{
 					Type: "text",
-					Text: s.Content,
+					Text: skillLocationHeader(s.BaseDir) + s.Content,
 				},
 			}, nil
 		}
@@ -347,12 +351,19 @@ func (t *FindSkillTool) executeLoad(name string) ([]agentctx.ContentBlock, error
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",
-				Text: string(data),
+				Text: skillLocationHeader(filepath.Dir(path)) + string(data),
 			},
 		}, nil
 	}
 
 	return nil, fmt.Errorf("skill '%s' not found", name)
+}
+
+// skillLocationHeader returns a short header prepended to skill content that
+// tells the model where the skill lives and how to resolve `{baseDir}`
+// placeholders within the content.
+func skillLocationHeader(baseDir string) string {
+	return fmt.Sprintf("> Skill location: %s\n> Replace {baseDir} in the content below with that directory.\n\n", baseDir)
 }
 
 // recordUsage records skill usage in stats if stats is available.
