@@ -279,3 +279,60 @@ func TestLoadErrors(t *testing.T) {
 		t.Error("expected error for version != 1, got nil")
 	}
 }
+
+// --- thinking_level: valid values are accepted and normalized ---
+
+func TestThinkingLevelValid(t *testing.T) {
+	for _, in := range []string{"high", "OFF", "  low  ", "XHigh"} {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "agent.yaml")
+		err := os.WriteFile(cfgPath, []byte("version: 1\nsystem_prompt: sp.md\nthinking_level: \""+in+"\"\n"), 0644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("thinking_level %q should be accepted, got: %v", in, err)
+		}
+		want := strings.ToLower(strings.TrimSpace(in))
+		if cfg.ThinkingLevel != want {
+			t.Fatalf("thinking_level %q should normalize to %q, got %q", in, want, cfg.ThinkingLevel)
+		}
+	}
+}
+
+// --- thinking_level: invalid value is rejected ---
+
+func TestThinkingLevelInvalid(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.yaml")
+	err := os.WriteFile(cfgPath, []byte("version: 1\nsystem_prompt: sp.md\nthinking_level: ultra\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid thinking_level, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid thinking_level") {
+		t.Fatalf("error should mention 'invalid thinking_level', got: %v", err)
+	}
+}
+
+// --- thinking_level: absent field stays empty (global config unchanged) ---
+
+func TestThinkingLevelAbsent(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.yaml")
+	err := os.WriteFile(cfgPath, []byte("version: 1\nsystem_prompt: sp.md\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingLevel != "" {
+		t.Fatalf("thinking_level should be empty when absent, got %q", cfg.ThinkingLevel)
+	}
+}

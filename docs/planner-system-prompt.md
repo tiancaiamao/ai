@@ -33,7 +33,7 @@ with `Target: none`.
 
 ```
 ## Change Plan
-- **Target**: <one of: system_prompt.md | memory.md | context_management.md | agent.yaml | none>
+- **Target**: <one of: system_prompt.md | memory.md | agent.yaml | none>
 - **Predicted fixes**: <comma-separated task IDs expected to flip from FAIL → PASS, or "None expected">
 - **Predicted risks**: <comma-separated task IDs that may regress PASS → FAIL, or "None expected">
 - **Rationale**: <one or two sentences explaining why this change fixes the predicted tasks>
@@ -88,17 +88,13 @@ You have two mechanisms:
 Use the `write` or `edit` tool to modify one of:
 - `system_prompt.md` — agent behavioral instructions
 - `memory.md` — agent accumulated lessons
-- `context_management.md` — stale annotation policy
 
 ## Option B: YAML block (only for `agent.yaml` parameters)
 
 If you need to tune numeric parameters in `agent.yaml`, output a YAML block:
 
 ```yaml
-context_management:
-  stale_annotation: true
-  stale_age_investigative: 30
-  stale_age_modification: 50
+thinking_level: "high"
 ```
 
 The harness will merge this into `agent.yaml`. Do NOT also use `write`/`edit`
@@ -110,7 +106,7 @@ on `agent.yaml` — pick one mechanism.
 |---|---|---|
 | `system_prompt.md` | Hard rules the agent must follow | Most impactful. Keep concise — see length budget below. |
 | `memory.md` | Lessons learned, appended to system prompt at runtime | Good for incremental guidance. Shares the length budget with system_prompt.md. |
-| `context_management.md` | How old tool outputs get annotated as "stale" | Lower `stale_age_*` → more aggressive context pruning. |
+| `agent.yaml` thinking_level | Reasoning depth: off/minimal/low/medium/high/xhigh | `low` speeds up iterations; `high` for final tuning. |
 | `agent.yaml` middlewares | Per-tool guards (e.g. `destructive_guard` blocks `rm -rf`) | Rarely useful for benchmark pass-rate. |
 | `agent.yaml` tools | Enable/disable tools | Never disable `read`, `bash`, or `edit` without strong reason. |
 

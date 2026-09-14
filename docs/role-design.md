@@ -96,7 +96,6 @@ B. 技能库全局共享，使用统计按角色隔离
 ├── orchestrator/                   # 系统角色（git 管理）：--role orchestrator
 │   ├── agent.yaml
 │   ├── system_prompt.md
-│   ├── context_management.md       # (可选)
 │   └── skill-stats.json
 ├── validator/                      # 系统角色（git 管理）：--role validator
 │   ├── agent.yaml

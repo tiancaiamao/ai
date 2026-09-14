@@ -145,6 +145,12 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 		}
 	}
 
+	// Apply agent config's default thinking level (overrides global config).
+	if agentCfg != nil && agentCfg.ThinkingLevel != "" {
+		slog.Info("Applying agent config thinking level", "level", agentCfg.ThinkingLevel)
+		cfg.ThinkingLevel = agentCfg.ThinkingLevel
+	}
+
 	// --- Model override from CLI (highest priority) ---
 	if params.ModelOverride != "" {
 		applyModelOverride(cfg, params.ModelOverride)
