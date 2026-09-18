@@ -341,6 +341,87 @@ This is the skill content.`
 	}
 }
 
+func TestLoadProjectSkillsFromAgentsDir(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := t.TempDir()
+
+	skillContent := `---
+name: project-skill
+description: A project skill
+---
+Project skill content.`
+
+	// .agents/skills/ is loaded as project skills
+	agentsSkillDir := filepath.Join(cwd, ".agents", "skills", "project-skill")
+	if err := os.MkdirAll(agentsSkillDir, 0755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsSkillDir, "SKILL.md"), []byte(skillContent), 0644); err != nil {
+		t.Fatalf("failed to write skill file: %v", err)
+	}
+
+	loader := NewLoader(agentDir)
+	result := loader.Load(&LoadOptions{CWD: cwd, AgentDir: agentDir})
+
+	var found *Skill
+	for i := range result.Skills {
+		if result.Skills[i].Name == "project-skill" {
+			found = &result.Skills[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected project-skill to be loaded from .agents/skills, got %d skills", len(result.Skills))
+	}
+	if found.Source != "project" {
+		t.Errorf("expected source 'project', got %q", found.Source)
+	}
+	for _, d := range result.Diagnostics {
+		if d.Type == "warning" {
+			t.Errorf("unexpected warning diagnostic: %v", d)
+		}
+	}
+}
+
+func TestLoadLegacyAiSkillsWarns(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := t.TempDir()
+
+	skillContent := `---
+name: legacy-skill
+description: A legacy skill
+---
+Legacy skill content.`
+
+	legacySkillDir := filepath.Join(cwd, ".ai", "skills", "legacy-skill")
+	if err := os.MkdirAll(legacySkillDir, 0755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacySkillDir, "SKILL.md"), []byte(skillContent), 0644); err != nil {
+		t.Fatalf("failed to write skill file: %v", err)
+	}
+
+	loader := NewLoader(agentDir)
+	result := loader.Load(&LoadOptions{CWD: cwd, AgentDir: agentDir})
+
+	// Legacy .ai/skills skills are not loaded
+	for _, s := range result.Skills {
+		if s.Name == "legacy-skill" {
+			t.Errorf("legacy skill from .ai/skills should not be loaded")
+		}
+	}
+
+	// But a warning diagnostic is emitted
+	var warned bool
+	for _, d := range result.Diagnostics {
+		if d.Type == "warning" && strings.Contains(d.Message, ".ai/skills") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected legacy .ai/skills warning diagnostic, got: %v", result.Diagnostics)
+	}
+}
+
 func TestResolvePath(t *testing.T) {
 	loader := NewLoader("/tmp")
 

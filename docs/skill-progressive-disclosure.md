@@ -20,7 +20,7 @@
 ### ai (coding agent)
 
 - Skill loading: `cmd/ai/rpc_handlers.go` L224 — `skill.NewLoader(agentDir)` with `LoadOptions{CWD, AgentDir: "~/.ai"}`
-- Loads from `~/.ai/skills/` (user) + `.ai/skills/` (project)
+- Loads from `~/.ai/skills/` (user) + `.agents/skills/` (project)
 - 21 skills in `~/.ai/skills/`
 - `FormatForPrompt()` in `pkg/skill/formatter.go` renders ALL skills into system prompt (up to 24, description capped at 220 runes)
 - Current system prompt `pkg/prompt/prompt.md` has `%SKILLS%` placeholder that gets replaced

@@ -173,7 +173,7 @@ Config file: `~/.ai/config.json`
 
 Skills are Markdown files (with optional YAML frontmatter) loaded from:
 - `~/.ai/skills/` — Global skills
-- `.ai/skills/` — Project skills
+- `.agents/skills/` — Project skills
 
 Skills extend the agent's capabilities with domain-specific instructions, prompts, and scripts. Use the `find_skill` tool to search for relevant skills during a session.
 
@@ -188,7 +188,7 @@ See [skills/](skills/) for available skill packages.
 | `~/.ai/ai-{pid}.log` | Per-process logs |
 | `~/.ai/sessions/--<cwd>--/` | Session data (per working directory) |
 | `~/.ai/skills/` | Global skills |
-| `.ai/skills/` | Project skills |
+| `.agents/skills/` | Project skills |
 | `~/.ai/traces/` | Perfetto-compatible trace files |
 | `~/.ai/runs/` | Run metadata for `ai serve`/`ai run` |
 
