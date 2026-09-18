@@ -94,6 +94,38 @@ func TestBuilderWithSkills(t *testing.T) {
 	}
 }
 
+func TestBuilderSkillWarnings(t *testing.T) {
+	cwd := "/workspace"
+	warning := "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills"
+
+	// Warnings alongside skills
+	b := NewBuilder("", cwd)
+	b.SetSkills([]skill.Skill{{Name: "test", Description: "A test skill"}})
+	b.SetSkillWarnings([]string{warning})
+	msg := b.BuildSkillsMessage()
+	if !contains(msg, "A test skill") {
+		t.Error("skill description missing when warnings present")
+	}
+		if !contains(msg, "Skill loading warnings:") || !contains(msg, warning) {
+		t.Errorf("skill warning missing from BuildSkillsMessage(): %q", msg)
+	}
+
+	// Warnings only, no skills — still surfaced (skills silently dropped is
+	// exactly the case the warning exists for)
+	b2 := NewBuilder("", cwd)
+	b2.SetSkillWarnings([]string{warning})
+	msg2 := b2.BuildSkillsMessage()
+	if !contains(msg2, "agent:skills") || !contains(msg2, warning) {
+		t.Errorf("warnings-only BuildSkillsMessage() missing warning: %q", msg2)
+	}
+
+	// Nothing at all
+	b3 := NewBuilder("", cwd)
+	if got := b3.BuildSkillsMessage(); got != "" {
+		t.Errorf("expected empty message with no skills and no warnings, got %q", got)
+	}
+}
+
 func TestBuilderSkillsRendering(t *testing.T) {
 	cwd := "/workspace"
 	skills := []skill.Skill{

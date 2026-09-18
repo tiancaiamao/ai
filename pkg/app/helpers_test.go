@@ -5,6 +5,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/session"
+	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
 func TestHelpers_Wrappers(t *testing.T) {
@@ -70,6 +71,27 @@ func TestTreeEntryLabel(t *testing.T) {
 	// Should delegate to session.TreeEntryLabel
 	if role == "" && text == "" {
 		t.Errorf("treeEntryLabel returned empty for message entry")
+	}
+}
+
+func TestSkillLoadWarnings(t *testing.T) {
+	if got := skillLoadWarnings(nil); got != nil {
+		t.Errorf("nil result should return nil warnings, got %v", got)
+	}
+
+	legacy := skill.Diagnostic{
+		Type:    "warning",
+		Message: "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills",
+		Path:    "/proj/.ai/skills",
+	}
+	other := skill.Diagnostic{Type: "warning", Message: "unknown frontmatter field \"tools\"", Path: "/x/SKILL.md"}
+
+	if got := skillLoadWarnings(&skill.LoadResult{Diagnostics: []skill.Diagnostic{other}}); len(got) != 0 {
+		t.Errorf("non-legacy warnings should be filtered out, got %v", got)
+	}
+	got := skillLoadWarnings(&skill.LoadResult{Diagnostics: []skill.Diagnostic{other, legacy}})
+	if len(got) != 1 || got[0] != legacy.Message {
+		t.Errorf("expected only the legacy warning, got %v", got)
 	}
 }
 

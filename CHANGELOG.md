@@ -8,7 +8,9 @@ Not a git log mirror — focus on what changed at the design level, not just wha
 **What changed**: The project-local skill directory is now `.agents/skills/`
 under the working directory; `.ai/skills/` is no longer loaded. If a legacy
 `.ai/skills/` exists, the loader emits a warning diagnostic pointing to the
-new location instead of silently dropping those skills. `find_skill`
+new location; the warning is also surfaced in the per-turn
+`<agent:skills>` injection so the agent sees it and can prompt the user to
+migrate (not just the server log). `find_skill`
 discovery needed no changes — it searches the loader's loaded skills, and
 loaded skills feed both the `<agent:skills>` prompt injection and
 `find_skill` search/load.
