@@ -37,10 +37,16 @@ type LoadResult struct {
 // Diagnostic represents a validation warning or error.
 type Diagnostic struct {
 	Type      string         `json:"type"` // "warning", "error", "collision"
+	Code      string         `json:"code,omitempty"`
 	Message   string         `json:"message"`
 	Path      string         `json:"path,omitempty"`
 	Collision *CollisionInfo `json:"collision,omitempty"`
 }
+
+// Diagnostic codes for warnings that callers may need to handle programmatically.
+const (
+	DiagnosticCodeLegacyProjectSkills = "legacy_project_skills"
+)
 
 // CollisionInfo represents a skill name collision.
 type CollisionInfo struct {

@@ -413,7 +413,7 @@ Legacy skill content.`
 	// But a warning diagnostic is emitted
 	var warned bool
 	for _, d := range result.Diagnostics {
-		if d.Type == "warning" && strings.Contains(d.Message, ".ai/skills") {
+		if d.Type == "warning" && d.Code == DiagnosticCodeLegacyProjectSkills {
 			warned = true
 		}
 	}

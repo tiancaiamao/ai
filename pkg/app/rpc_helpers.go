@@ -67,7 +67,7 @@ func skillLoadWarnings(result *skill.LoadResult) []string {
 	}
 	var warnings []string
 	for _, d := range result.Diagnostics {
-		if d.Type == "warning" && strings.Contains(d.Message, "legacy project skills directory") {
+		if d.Type == "warning" && d.Code == skill.DiagnosticCodeLegacyProjectSkills {
 			warnings = append(warnings, d.Message)
 		}
 	}

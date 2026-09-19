@@ -2,7 +2,7 @@
 
 ## Goals
 
-- Progressive disclosure: only top-N high-frequency skills in system prompt, rest discoverable via `find_skill` tool
+- Progressive disclosure: only top-N high-frequency skills in the per-turn agent context prefix, rest discoverable via `find_skill` tool
 - Usage tracking with time decay to auto-rank skills by relevance
 - LLM-generated search index for semantic skill discovery (aliases, use-when, categories)
 
@@ -22,16 +22,15 @@
 - Skill loading: `cmd/ai/rpc_handlers.go` L224 — `skill.NewLoader(agentDir)` with `LoadOptions{CWD, AgentDir: "~/.ai"}`
 - Loads from `~/.ai/skills/` (user) + `.agents/skills/` (project)
 - 21 skills in `~/.ai/skills/`
-- `FormatForPrompt()` in `pkg/skill/formatter.go` renders ALL skills into system prompt (up to 24, description capped at 220 runes)
-- Current system prompt `pkg/prompt/prompt.md` has `%SKILLS%` placeholder that gets replaced
+- `BuildSkillsMessage()` in `pkg/prompt/builder.go` renders the selected skill summaries as a per-turn user-role message, rather than putting them in the system prompt
+- The system prompt stays stable for caching; the agent context prefix injects `<agent:skills>` and `<agent:instructions>` before each user message
 - Tool registry in `pkg/tools/registry.go`, interface `Tool` in `pkg/context/context.go` L60: `Name()`, `Description()`, `Parameters()`, `Execute()`
 - `/skill:name` expansion in `pkg/skill/expander.go` — looks up skill by name, injects full content inline
 
-### Token cost of current approach
+### Token cost of the former approach
 
-- 21 skill summaries in system prompt: ~4000 chars of name+description text
-- Plus the `## Skills` header block (~300 chars)
-- As the skill set grows, this balloons token usage just for skill listings
+- Before progressive disclosure, 21 skill summaries occupied roughly 4000 characters in the system prompt
+- The current per-turn injection is ranked and limited, while the system prompt remains cache-friendly
 
 ---
 
@@ -64,7 +63,7 @@
 
 **Choice**: Single JSON file `~/.ai/skill-stats.json`. Write contention is acceptable — two agents rarely update the exact same skill at the exact same millisecond, and a lost update just means one +1 is missed.
 
-### Decision 3: How many skills in system prompt
+### Decision 3: How many skills in the per-turn context prefix
 
 Top **7** skills by decay score. This covers the typical "always needed" set (e.g., `ag`, `implement`, `plan`, `bash` usage patterns) while keeping the skill section under ~500 tokens. The number is configurable via the stats file if needed later.
 
@@ -109,7 +108,7 @@ type SkillStat struct {
 // SkillStatsFile is the on-disk format.
 // Path: ~/.ai/skill-stats.json
 type SkillStatsFile struct {
-    // TopN: how many skills to show in system prompt (default 7)
+    // TopN: how many skills to show in the per-turn context prefix (default 7)
     TopN int                  `json:"top_n,omitempty"`
     Stats map[string]SkillStat `json:"stats"`
 }

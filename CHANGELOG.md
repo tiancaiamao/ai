@@ -564,7 +564,7 @@ Archived: `docs/archive/plan-format-analysis.md`, `docs/archive/tasks.yml`.
 
 **Problem**: All skills loaded into system prompt — at 20+ skills, this consumed too many tokens.
 
-**Design**: Top-N high-frequency skills shown in system prompt; rest discoverable via `find_skill` tool. Usage tracking with time decay (168-hour half-life) auto-ranks skills. Cold start shows all visible skills capped at topN.
+**Design**: Top-N high-frequency skills are injected into the per-turn agent context prefix; the stable system prompt remains cache-friendly. Remaining skills are discoverable via the `find_skill` tool. Usage tracking with time decay (168-hour half-life) auto-ranks skills. Cold start shows all visible skills capped at topN.
 
 The `find_skill` tool accepts keyword search across name, description, aliases, use-when triggers, and categories.
 

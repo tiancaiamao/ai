@@ -51,6 +51,7 @@ func TestSkillLoadWarnings(t *testing.T) {
 
 	legacy := skill.Diagnostic{
 		Type:    "warning",
+		Code:    skill.DiagnosticCodeLegacyProjectSkills,
 		Message: "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills",
 		Path:    "/proj/.ai/skills",
 	}
@@ -62,6 +63,21 @@ func TestSkillLoadWarnings(t *testing.T) {
 	got := skillLoadWarnings(&skill.LoadResult{Diagnostics: []skill.Diagnostic{other, legacy}})
 	if len(got) != 1 || got[0] != legacy.Message {
 		t.Errorf("expected only the legacy warning, got %v", got)
+	}
+}
+
+func TestBuildAgentContextPrefixIncludesSkillWarnings(t *testing.T) {
+	app := &App{
+		skillResult: &skill.LoadResult{Diagnostics: []skill.Diagnostic{{
+			Type:    "warning",
+			Code:    skill.DiagnosticCodeLegacyProjectSkills,
+			Message: "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills",
+		}}},
+	}
+
+	prefix := app.buildAgentContextPrefix()
+	if !contains(prefix, "<agent:skills>") || !contains(prefix, "legacy project skills directory") {
+		t.Fatalf("expected legacy warning in agent context prefix, got %q", prefix)
 	}
 }
 

@@ -104,6 +104,7 @@ func (l *Loader) Load(opts *LoadOptions) *LoadResult {
 		if info, err := os.Stat(legacyProjectDir); err == nil && info.IsDir() {
 			allDiagnostics = append(allDiagnostics, Diagnostic{
 				Type:    "warning",
+				Code:    DiagnosticCodeLegacyProjectSkills,
 				Message: "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills",
 				Path:    legacyProjectDir,
 			})

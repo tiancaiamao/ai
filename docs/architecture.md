@@ -139,12 +139,13 @@ and `ai send` are local ACP clients of that socket.
 2. ACP server receives it → Agent.Prompt()
 3. Agent acquires lock → Appends user message to context
 4. Agent.RunLoop():
-   a. Build system prompt (Builder: tools + skills + project context + telemetry)
-   b. Convert context to LLM messages (with visibility filtering)
-   c. Call LLM API (streaming, with retry on rate limit)
-   d. Stream response: emit text_delta / toolcall_delta events
-   e. If tool calls: execute via ExecutorPool → append results → repeat from (a)
-   f. Emit turn_end event
+   a. Build the stable system prompt (Builder: tools, project context, and telemetry)
+   b. Build the per-turn agent context prefix (selected skills, skill warnings, and AGENTS.md instructions)
+   c. Convert context to LLM messages (with visibility filtering)
+   d. Call LLM API (streaming, with retry on rate limit)
+   e. Stream response: emit text_delta / toolcall_delta events
+   f. If tool calls: execute via ExecutorPool → append results → repeat from (a)
+   g. Emit turn_end event
 5. Auto-compact check: if token threshold exceeded, trigger compaction
 6. Session persistence: append entries to messages.jsonl
 7. Checkpoint: periodic snapshot for fast recovery

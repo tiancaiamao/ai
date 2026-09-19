@@ -45,7 +45,6 @@ Trims `s` to at most `limit` runes (Unicode code points). If `limit <= 0`, `s` i
 ```go
 func ApproxTokenCount(text string) int   // ~4 chars per token
 func CharsToTokens(chars int) int        // Convert char count to token count
-func TokensToChars(tokens int) int       // Convert token count to char count
 ```
 
 ## UTF-8 Safety
@@ -63,4 +62,4 @@ If a split would land inside a multi-byte character, it backs up to the previous
 | File | Description |
 |------|-------------|
 | `truncate.go` | `Truncate()`, `TruncateString()`, `TrimRunes()`, `splitString()` |
-| `estimate.go` | `ApproxTokenCount()`, `CharsToTokens()`, `TokensToChars()`, `ApproxBytesPerToken` |
+| `estimate.go` | `ApproxTokenCount()`, `CharsToTokens()`, `ApproxBytesPerToken` |
