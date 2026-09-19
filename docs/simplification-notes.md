@@ -23,4 +23,10 @@ revisit condition is met.
 
 ## Entries
 
-(none yet)
+## auth no-proxy wrappers + llm parseProxyURL — deferred
+
+- **Status**: deferred
+- **Date**: 2026-09-19
+- **Surface**: `pkg/auth/codex_oauth.go` (`RefreshCodexToken`, `LoadCodexCredentials` — the no-proxy variants shadowed by `*WithProxy`), `pkg/llm/openai_responses.go` (`parseProxyURL`, self-documented as "retained for compatibility with proxy configuration tests")
+- **Evidence**: zero production consumers found (deadcode + full-repo grep); `pkg/auth/netutil.go` has its own live `parseProxyURL`. Deferred because they cross into auth territory (trust-boundary caution in this skill) and the llm one is test-only — should follow the "test-only API" rule (move to `_test.go`), but was outside the requested batch.
+- **Revisit when**: next entropy pass on `pkg/auth`/`pkg/llm`, or when the proxy tests are reworked.

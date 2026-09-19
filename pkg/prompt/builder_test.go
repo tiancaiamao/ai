@@ -19,10 +19,10 @@ type mockTool struct {
 func (m mockTool) Name() string        { return m.name }
 func (m mockTool) Description() string { return m.description }
 
-func TestNewBuilder(t *testing.T) {
+func TestBuilderInit(t *testing.T) {
 	cwd := "/test/workspace"
 
-	b := NewBuilder("", cwd)
+	b := newBuilder("", cwd)
 
 	if b == nil {
 		t.Fatal("NewBuilder returned nil")
@@ -50,7 +50,7 @@ func TestBuilderBuild(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := NewBuilder("", tt.cwd)
+			b := newBuilder("", tt.cwd)
 			result := b.Build()
 
 			if result == "" {
@@ -76,7 +76,7 @@ func TestBuilderWithSkills(t *testing.T) {
 		{Name: "test", Description: "A test skill"},
 	}
 
-	b := NewBuilder("", cwd)
+	b := newBuilder("", cwd)
 	b.SetSkills(skills)
 
 	// Skills are now in BuildSkillsMessage(), not Build()
@@ -99,20 +99,20 @@ func TestBuilderSkillWarnings(t *testing.T) {
 	warning := "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills"
 
 	// Warnings alongside skills
-	b := NewBuilder("", cwd)
+	b := newBuilder("", cwd)
 	b.SetSkills([]skill.Skill{{Name: "test", Description: "A test skill"}})
 	b.SetSkillWarnings([]string{warning})
 	msg := b.BuildSkillsMessage()
 	if !contains(msg, "A test skill") {
 		t.Error("skill description missing when warnings present")
 	}
-		if !contains(msg, "Skill loading warnings:") || !contains(msg, warning) {
+	if !contains(msg, "Skill loading warnings:") || !contains(msg, warning) {
 		t.Errorf("skill warning missing from BuildSkillsMessage(): %q", msg)
 	}
 
 	// Warnings only, no skills — still surfaced (skills silently dropped is
 	// exactly the case the warning exists for)
-	b2 := NewBuilder("", cwd)
+	b2 := newBuilder("", cwd)
 	b2.SetSkillWarnings([]string{warning})
 	msg2 := b2.BuildSkillsMessage()
 	if !contains(msg2, "agent:skills") || !contains(msg2, warning) {
@@ -120,7 +120,7 @@ func TestBuilderSkillWarnings(t *testing.T) {
 	}
 
 	// Nothing at all
-	b3 := NewBuilder("", cwd)
+	b3 := newBuilder("", cwd)
 	if got := b3.BuildSkillsMessage(); got != "" {
 		t.Errorf("expected empty message with no skills and no warnings, got %q", got)
 	}
@@ -133,7 +133,7 @@ func TestBuilderSkillsRendering(t *testing.T) {
 		{Name: "subagent", Description: "subagent workflow", FilePath: "/tmp/subagent/SKILL.md"},
 	}
 
-	b := NewBuilder("", cwd)
+	b := newBuilder("", cwd)
 	b.SetSkills(skills)
 	skillsMsg := b.BuildSkillsMessage()
 
@@ -245,7 +245,7 @@ func TestBuildInstructionsMessage(t *testing.T) {
 			t.Fatalf("write AGENTS.md: %v", err)
 		}
 
-		b := NewBuilder("", cwd)
+		b := newBuilder("", cwd)
 		got := b.BuildInstructionsMessage()
 
 		if !strings.HasPrefix(got, "<agent:instructions>\n") {
@@ -275,7 +275,7 @@ func TestBuildInstructionsMessage(t *testing.T) {
 			t.Fatalf("write AGENTS.md: %v", err)
 		}
 
-		b := NewBuilder("", cwd)
+		b := newBuilder("", cwd)
 		got := b.BuildInstructionsMessage()
 
 		if !contains(got, "local override") {
@@ -288,7 +288,7 @@ func TestBuildInstructionsMessage(t *testing.T) {
 
 	t.Run("returns empty when no AGENTS.md exists", func(t *testing.T) {
 		cwd := t.TempDir()
-		b := NewBuilder("", cwd)
+		b := newBuilder("", cwd)
 		got := b.BuildInstructionsMessage()
 		if got != "" {
 			t.Fatalf("expected empty string, got: %q", got)
@@ -303,7 +303,7 @@ func TestWorkspaceSectionPresent(t *testing.T) {
 	tools := []ToolInfo{mockTool{name: "read", description: "Read files"}}
 
 	// The Workspace section is hardcoded in the prompt template.
-	builder := NewBuilder("", cwd)
+	builder := newBuilder("", cwd)
 	builder.SetTools(tools)
 	result := builder.Build()
 	if !contains(result, "## Workspace") {
@@ -335,7 +335,7 @@ func TestBuilderWithSkillStats(t *testing.T) {
 		},
 	}
 
-	b := NewBuilder("", cwd)
+	b := newBuilder("", cwd)
 	b.SetSkills(skills)
 	b.SetSkillStats(stats)
 	skillsMsg := b.BuildSkillsMessage()
@@ -369,7 +369,7 @@ func TestBuilderWithSkillStatsNil(t *testing.T) {
 		{Name: "test", Description: "A test skill", FilePath: "/tmp/test/SKILL.md"},
 	}
 
-	b := NewBuilder("", cwd)
+	b := newBuilder("", cwd)
 	b.SetSkills(skills)
 	// SetSkillStats not called → skillStats is nil → backward compat
 	skillsMsg := b.BuildSkillsMessage()
@@ -402,14 +402,17 @@ func findSubstring(s, substr string) bool {
 
 func TestNewBuilderWithWorkspaceAndGetCWD(t *testing.T) {
 	// With workspace: GetCWD should delegate to workspace.GetCWD()
-	ws := tools.MustNewWorkspace("/custom/cwd")
+	ws, err := tools.NewWorkspace("/custom/cwd")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
 	b := NewBuilderWithWorkspace("ignored", ws)
 	if got := b.GetCWD(); got != "/custom/cwd" {
 		t.Errorf("GetCWD with workspace = %q, want %q", got, "/custom/cwd")
 	}
 
 	// Without workspace: GetCWD should fall back to b.cwd
-	b2 := NewBuilder("", "/fallback/cwd")
+	b2 := newBuilder("", "/fallback/cwd")
 	if got := b2.GetCWD(); got != "/fallback/cwd" {
 		t.Errorf("GetCWD without workspace = %q, want %q", got, "/fallback/cwd")
 	}

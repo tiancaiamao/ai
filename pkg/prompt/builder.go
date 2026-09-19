@@ -73,14 +73,6 @@ type Builder struct {
 	tokensPercent float64
 }
 
-// NewBuilder creates a new prompt builder.
-func NewBuilder(_, cwd string) *Builder {
-	return &Builder{
-		cwd:     cwd,
-		minimal: false,
-	}
-}
-
 // NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
 func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder {
 	return &Builder{

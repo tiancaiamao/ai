@@ -27,7 +27,7 @@ func TestBasePromptsAreDefined(t *testing.T) {
 // states that persistent directory switches require change_workspace while
 // cd <dir> && <command> is only for one-off commands.
 func TestPromptWorkspaceGuidance(t *testing.T) {
-	prompt := NewBuilder("You are a test assistant.", "/workspace").Build()
+	prompt := newBuilder("You are a test assistant.", "/workspace").Build()
 	for _, want := range []string{
 		"change_workspace",
 		"REQUIRED",
@@ -42,7 +42,7 @@ func TestPromptWorkspaceGuidance(t *testing.T) {
 }
 
 func TestPromptActionableTaskGuidance(t *testing.T) {
-	prompt := NewBuilder("You are a test assistant.", "/workspace").Build()
+	prompt := newBuilder("You are a test assistant.", "/workspace").Build()
 	for _, want := range []string{
 		"For actionable tasks, act—not just explain",
 		"verify the result before stopping",
@@ -84,8 +84,8 @@ func TestABPromptMetricsSmoke(t *testing.T) {
 		})
 	}
 
-	oldPrompt := NewBuilder(legacyRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
-	newPrompt := NewBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
+	oldPrompt := newBuilder(legacyRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
+	newPrompt := newBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
 
 	oldChars := len(oldPrompt)
 	newChars := len(newPrompt)
@@ -100,7 +100,7 @@ func TestABPromptMetricsSmoke(t *testing.T) {
 	// Skills are no longer in Build() output — they are injected separately via
 	// BuildSkillsMessage() as a user message before the first user input.
 	// Verify skills are available via BuildSkillsMessage instead.
-	skillsMsg := NewBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).BuildSkillsMessage()
+	skillsMsg := newBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).BuildSkillsMessage()
 	if !strings.Contains(skillsMsg, "- **skill-00**:") {
 		t.Fatalf("expected full skill entries in skills message, got: %s", skillsMsg)
 	}

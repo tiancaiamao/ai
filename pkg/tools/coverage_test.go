@@ -498,10 +498,10 @@ func TestChangeWorkspaceTool_InvalidPathType(t *testing.T) {
 	}
 }
 
-// ----- Workspace: MustNewWorkspace + GetRelativePath + edge cases ----------
+// ----- Workspace: mustNewWorkspace + GetRelativePath + edge cases ----------
 
-func TestMustNewWorkspace_Success(t *testing.T) {
-	ws := MustNewWorkspace(t.TempDir())
+func TestMustWorkspace_Success(t *testing.T) {
+	ws := mustNewWorkspace(t.TempDir())
 	if ws == nil {
 		t.Fatal("expected non-nil workspace")
 	}

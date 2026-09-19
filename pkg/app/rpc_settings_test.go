@@ -31,37 +31,6 @@ func TestParseToggleValue(t *testing.T) {
 	}
 }
 
-func TestParseModeFromInput(t *testing.T) {
-	valid := map[string]bool{"auto": true, "manual": true, "off": true}
-	tests := []struct {
-		name    string
-		value   string
-		jsonKey string
-		valid   map[string]bool
-		want    string
-		wantErr bool
-	}{
-		{"plain valid", "auto", "mode", valid, "auto", false},
-		{"plain invalid", "bogus", "mode", valid, "", true},
-		{"json valid", `{"mode":"manual"}`, "mode", valid, "manual", false},
-		{"json invalid", `{"mode":"nope"}`, "mode", valid, "", true},
-		{"json wrong key", `{"other":"auto"}`, "mode", valid, "", true},
-		{"empty", "", "mode", valid, "", true},
-		{"whitespace", "  auto  ", "mode", valid, "auto", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseModeFromInput(tt.value, tt.jsonKey, tt.valid)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseModeFromInput(%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
-			}
-			if got != tt.want {
-				t.Errorf("ParseModeFromInput(%q) = %q, want %q", tt.value, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseBoolFromInput(t *testing.T) {
 	tests := []struct {
 		value   string
