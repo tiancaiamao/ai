@@ -8,21 +8,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 )
 
-// TruncateText truncates text to at most limit bytes, appending "..." if truncation occurs.
-// Returns "" if limit <= 0.
-func TruncateText(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(text) <= limit {
-		return text
-	}
-	if limit <= 3 {
-		return text[:limit]
-	}
-	return text[:limit-3] + "..."
-}
-
 // FormatIntOrUnknown returns the integer as a string, or "unknown" if value <= 0.
 func FormatIntOrUnknown(value int) string {
 	if value <= 0 {

@@ -6,34 +6,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 )
 
-func TestTruncateText(t *testing.T) {
-	tests := []struct {
-		name  string
-		text  string
-		limit int
-		want  string
-	}{
-		{"empty limit", "hello", 0, ""},
-		{"negative limit", "hello", -1, ""},
-		{"no truncation", "hi", 10, "hi"},
-		{"exact limit", "hello", 5, "hello"},
-		{"limit 1", "hello", 1, "h"},
-		{"limit 2", "hello", 2, "he"},
-		{"limit 3", "hello", 3, "hel"},
-		{"limit 4", "hello", 4, "h..."},
-		{"limit 5 with ellipsis", "hello world", 8, "hello..."},
-		{"empty string", "", 5, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := TruncateText(tt.text, tt.limit)
-			if got != tt.want {
-				t.Errorf("TruncateText(%q, %d) = %q, want %q", tt.text, tt.limit, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestFormatIntOrUnknown(t *testing.T) {
 	tests := []struct {
 		value int

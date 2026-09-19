@@ -39,7 +39,6 @@ The registry maps tool names to implementations. `ToLLMTools()` converts all reg
 type Workspace struct { ... }
 
 func NewWorkspace(initialCwd string) (*Workspace, error)
-func MustNewWorkspace(initialCwd string) *Workspace
 
 func (w *Workspace) GetCWD() string
 func (w *Workspace) SetCWD(cwd string) error

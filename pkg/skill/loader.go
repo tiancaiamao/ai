@@ -94,9 +94,21 @@ func (l *Loader) Load(opts *LoadOptions) *LoadResult {
 		userSkillsDir := filepath.Join(opts.AgentDir, "skills")
 		addSkills(l.loadFromDir(userSkillsDir, "user", true))
 
-		// Project skills: .ai/skills/
-		projectSkillsDir := filepath.Join(opts.CWD, ".ai", "skills")
+		// Project skills: .agents/skills/
+		projectSkillsDir := filepath.Join(opts.CWD, ".agents", "skills")
 		addSkills(l.loadFromDir(projectSkillsDir, "project", true))
+
+		// Legacy .ai/skills/ is no longer loaded. Warn if it exists so
+		// existing project skills are not lost silently.
+		legacyProjectDir := filepath.Join(opts.CWD, ".ai", "skills")
+		if info, err := os.Stat(legacyProjectDir); err == nil && info.IsDir() {
+			allDiagnostics = append(allDiagnostics, Diagnostic{
+				Type:    "warning",
+				Code:    DiagnosticCodeLegacyProjectSkills,
+				Message: "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills",
+				Path:    legacyProjectDir,
+			})
+		}
 	}
 
 	// Load from explicit paths
@@ -365,7 +377,7 @@ func (l *Loader) resolvePath(p string, cwd string) string {
 func (l *Loader) getSource(resolvedPath string, opts *LoadOptions) string {
 	if !opts.IncludeDefaults {
 		userSkillsDir := filepath.Join(opts.AgentDir, "skills")
-		projectSkillsDir := filepath.Join(opts.CWD, ".ai", "skills")
+		projectSkillsDir := filepath.Join(opts.CWD, ".agents", "skills")
 
 		if isUnderPath(resolvedPath, userSkillsDir) {
 			return "user"

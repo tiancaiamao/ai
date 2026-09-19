@@ -3,6 +3,28 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Project skills move from `.ai/skills/` to `.agents/skills/` (2026-09)
+
+**What changed**: The project-local skill directory is now `.agents/skills/`
+under the working directory; `.ai/skills/` is no longer loaded. If a legacy
+`.ai/skills/` exists, the loader emits a warning diagnostic pointing to the
+new location; the warning is also surfaced in the per-turn
+`<agent:skills>` injection so the agent sees it and can prompt the user to
+migrate (not just the server log). `find_skill`
+discovery needed no changes — it searches the loader's loaded skills, and
+loaded skills feed both the `<agent:skills>` prompt injection and
+`find_skill` search/load.
+
+**Why**: `.agents/` is the cross-tool convention for repo-local agent
+configuration (used by the Claude Code ecosystem and other agent harnesses),
+so repo-specific skills placed there are visible to other tools without a
+per-tool path. Keeping a private `.ai/skills/` convention meant
+repo-scoped skills were invisible everywhere else and duplicated a directory
+that only the `~/.ai/` home layout needed. The skill system also gained a
+repo-scoped workflow: the `reclaim-entropy` skill (in
+`.agents/skills/`) plus an append-only `docs/simplification-notes.md` log for
+rejected/deferred simplification candidates.
+
 ## Frozen runtime_state snapshots: append-only requests for prefix caching (2026-09)
 
 **What changed**: `runtime_state` is no longer re-injected as an ephemeral
@@ -542,7 +564,7 @@ Archived: `docs/archive/plan-format-analysis.md`, `docs/archive/tasks.yml`.
 
 **Problem**: All skills loaded into system prompt — at 20+ skills, this consumed too many tokens.
 
-**Design**: Top-N high-frequency skills shown in system prompt; rest discoverable via `find_skill` tool. Usage tracking with time decay (168-hour half-life) auto-ranks skills. Cold start shows all visible skills capped at topN.
+**Design**: Top-N high-frequency skills are injected into the per-turn agent context prefix; the stable system prompt remains cache-friendly. Remaining skills are discoverable via the `find_skill` tool. Usage tracking with time decay (168-hour half-life) auto-ranks skills. Cold start shows all visible skills capped at topN.
 
 The `find_skill` tool accepts keyword search across name, description, aliases, use-when triggers, and categories.
 

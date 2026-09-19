@@ -135,17 +135,8 @@ func buildTreeEntries(entries []session.SessionEntry, leafID *string) []TreeEntr
 	return result
 }
 
-func treeEntryLabel(entry session.SessionEntry) (string, string) {
-	return session.TreeEntryLabel(entry)
-}
-
-// truncateText delegates to TruncateText.
-func truncateText(text string, limit int) string { return TruncateText(text, limit) }
-
 func formatIntOrUnknown(value int) string                    { return FormatIntOrUnknown(value) }
-func formatLimit(value int) string                           { return FormatLimit(value) }
 func formatTokenLimit(state *compact.CompactionState) string { return FormatTokenLimit(state) }
-func formatTokenLimitSource(value string) string             { return FormatTokenLimitSource(value) }
 
 func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, SessionTokenStats, float64) {
 	u := session.CollectSessionUsage(messages)

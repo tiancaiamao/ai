@@ -796,15 +796,6 @@ func getSessionRoot(cwd string) string {
 	return cwd
 }
 
-// GetDefaultSessionPath returns the default session file path for a working directory.
-func GetDefaultSessionPath(cwd string) (string, error) {
-	dir, err := GetDefaultSessionsDir(cwd)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "session.jsonl"), nil
-}
-
 func sanitizeSessionPath(cwd string) string {
 	clean := filepath.Clean(cwd)
 	trimmed := strings.TrimPrefix(clean, string(os.PathSeparator))

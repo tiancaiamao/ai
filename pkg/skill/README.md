@@ -53,10 +53,12 @@ description: Guidelines for creating React components
 Skills are loaded from three sources in priority order:
 
 1. **User skills** — `~/.ai/skills/` (global, personal)
-2. **Project skills** — `.ai/skills/` (project-specific)
+2. **Project skills** — `.agents/skills/` (project-specific)
 3. **Path skills** — Explicit file paths passed at load time
 
 When skills with the same name exist in multiple sources, the first-loaded skill wins. Collisions are recorded as diagnostics.
+
+Legacy `.ai/skills/` is no longer loaded; if it exists, a warning diagnostic is emitted pointing to `.agents/skills/`.
 
 ## Validation
 

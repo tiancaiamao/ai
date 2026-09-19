@@ -17,6 +17,7 @@ These documents describe the **current** codebase and must stay in sync.
 | [`context-management.md`](context-management.md) | Compaction, LLMDecide, token estimation | Compaction strategy changed; context management refactored |
 | [`test-strategy.md`](test-strategy.md) | Test pyramid, test files, regression tests | Test structure changed; new test layer added |
 | [`skill-progressive-disclosure.md`](skill-progressive-disclosure.md) | Skill ranking, topN selection, find_skill discovery | Skill formatting/usage tracking changed |
+| [`simplification-notes.md`](simplification-notes.md) | Rejected/deferred simplification candidates (append-only log) | Entropy-reclamation audit produced rejected or deferred candidates |
 | [`ai-agent-control.md`](ai-agent-control.md) | Agent-controlling-agent via CLI (steer/watch/send) | RPC slash commands or watch modes changed |
 | [`agent-harness-evolution.md`](agent-harness-evolution.md) | Kernel/shell separation, hook system design | Hook system or harness config changed |
 | [`evolve-directions.md`](evolve-directions.md) | Auto-evolution methodology and stages | Evolve loop or pipeline changed |

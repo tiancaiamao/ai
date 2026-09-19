@@ -97,5 +97,5 @@ Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):
 ## Runtime Notes
 
 - Sessions: `~/.ai/sessions/--<cwd>--/`
-- Skills: `~/.ai/skills/` + `.ai/skills/`
+- Skills: `~/.ai/skills/` + `.agents/skills/`
 - Traces: `~/.ai/traces/` (Perfetto-compatible, see `pkg/traceevent/config.go`)

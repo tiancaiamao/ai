@@ -9,7 +9,7 @@ func TestGetSource(t *testing.T) {
 	l := NewLoader(t.TempDir())
 	base := t.TempDir()
 	userSkills := filepath.Join(base, "agent", "skills")
-	projectSkills := filepath.Join(base, "project", ".ai", "skills")
+	projectSkills := filepath.Join(base, "project", ".agents", "skills")
 
 	opts := &LoadOptions{
 		CWD:             filepath.Join(base, "project"),

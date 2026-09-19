@@ -4,7 +4,6 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -201,24 +200,5 @@ func TestSessionPersistence(t *testing.T) {
 
 	if loadedMessages[2].ExtractText() != "Message 2" {
 		t.Errorf("Expected 'Message 2', got '%s'", loadedMessages[2].ExtractText())
-	}
-}
-
-// TestGetDefaultSessionPath tests getting default session path.
-func TestGetDefaultSessionPath(t *testing.T) {
-	cwd := filepath.Join(os.TempDir(), "ai-session-test", "project")
-	path, err := GetDefaultSessionPath(cwd)
-	if err != nil {
-		t.Fatalf("Failed to get default session path: %v", err)
-	}
-
-	if path == "" {
-		t.Error("Path should not be empty")
-	}
-
-	// Should contain .ai/sessions
-	expected := filepath.Join(".ai", "sessions")
-	if !strings.Contains(path, expected) {
-		t.Errorf("Expected path to contain %s, got %s", expected, path)
 	}
 }

@@ -32,15 +32,6 @@ func NewWorkspace(initialCwd string) (*Workspace, error) {
 	return ws, nil
 }
 
-// MustNewWorkspace is like NewWorkspace but panics on error. Useful for initialization.
-func MustNewWorkspace(initialCwd string) *Workspace {
-	ws, err := NewWorkspace(initialCwd)
-	if err != nil {
-		panic(err)
-	}
-	return ws
-}
-
 // GetCWD returns the current working directory.
 func (w *Workspace) GetCWD() string {
 	w.mu.RLock()

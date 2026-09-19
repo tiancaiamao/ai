@@ -27,25 +27,6 @@ func TestCharsToTokens(t *testing.T) {
 	}
 }
 
-func TestTokensToChars(t *testing.T) {
-	tests := []struct {
-		tokens   int
-		expected int
-	}{
-		{0, 0},
-		{1, 4},
-		{2, 8},
-		{25, 100},
-	}
-
-	for _, tt := range tests {
-		result := TokensToChars(tt.tokens)
-		if result != tt.expected {
-			t.Errorf("TokensToChars(%d) = %d, want %d", tt.tokens, result, tt.expected)
-		}
-	}
-}
-
 func TestApproxTokenCount(t *testing.T) {
 	tests := []struct {
 		text     string

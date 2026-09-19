@@ -26,12 +26,21 @@ func TestNewWorkspace(t *testing.T) {
 	}
 }
 
-func TestMustNewWorkspace(t *testing.T) {
+func TestMustWorkspace(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 	if ws == nil {
-		t.Fatal("MustNewWorkspace should return non-nil")
+		t.Fatal("mustNewWorkspace should return non-nil")
 	}
+}
+
+// mustNewWorkspace is a test-only convenience wrapper around NewWorkspace.
+func mustNewWorkspace(initialCwd string) *Workspace {
+	ws, err := NewWorkspace(initialCwd)
+	if err != nil {
+		panic(err)
+	}
+	return ws
 }
 
 // ---------------------------------------------------------------------------
@@ -40,7 +49,7 @@ func TestMustNewWorkspace(t *testing.T) {
 
 func TestWorkspace_SetCWD(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	newDir := filepath.Join(dir, "subdir")
 	os.MkdirAll(newDir, 0755)
@@ -56,7 +65,7 @@ func TestWorkspace_SetCWD(t *testing.T) {
 
 func TestWorkspace_SetCWD_NonExistent(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	err := ws.SetCWD("/nonexistent/path/xyz")
 	if err == nil {
@@ -66,7 +75,7 @@ func TestWorkspace_SetCWD_NonExistent(t *testing.T) {
 
 func TestWorkspace_SetCWD_UpdatesGitRoot(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	sub := filepath.Join(dir, "child")
 	os.MkdirAll(sub, 0755)
@@ -85,7 +94,7 @@ func TestWorkspace_SetCWD_UpdatesGitRoot(t *testing.T) {
 
 func TestWorkspace_ResolvePath_Relative(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	resolved := ws.ResolvePath("foo/bar.txt")
 	expected := filepath.Join(dir, "foo", "bar.txt")
@@ -96,7 +105,7 @@ func TestWorkspace_ResolvePath_Relative(t *testing.T) {
 
 func TestWorkspace_ResolvePath_Absolute(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	abs := "/absolute/path/file.txt"
 	resolved := ws.ResolvePath(abs)
@@ -111,7 +120,7 @@ func TestWorkspace_ResolvePath_Absolute(t *testing.T) {
 
 func TestWorkspace_GetRelativePath(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	rel, err := ws.GetRelativePath(filepath.Join(dir, "sub", "file.txt"))
 	if err != nil {
@@ -130,7 +139,7 @@ func TestWorkspace_GetRelativePath(t *testing.T) {
 func TestWorkspace_IsGitRepository_TempDir(t *testing.T) {
 	// Temp dirs are not git repos
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	// In CI/local, temp dir may or may not be in a git repo
 	// Just verify it doesn't panic
@@ -143,7 +152,7 @@ func TestWorkspace_IsGitRepository_TempDir(t *testing.T) {
 
 func TestWorkspace_GetGitRoot(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	root := ws.GetGitRoot()
 	// Not in a git repo, should fall back to initial cwd
@@ -164,7 +173,7 @@ func TestWorkspace_DetectGitRoot_InRepo(t *testing.T) {
 	}
 	root := strings.TrimSpace(string(repoRoot))
 
-	ws := MustNewWorkspace(root)
+	ws := mustNewWorkspace(root)
 	if got := ws.GetGitRoot(); got != root {
 		t.Errorf("GetGitRoot() = %q; want %q", got, root)
 	}
@@ -185,7 +194,7 @@ func TestWorkspace_DetectGitRoot_InRepo(t *testing.T) {
 
 func TestWorkspace_GetRelativePath_Cases(t *testing.T) {
 	dir := t.TempDir()
-	ws := MustNewWorkspace(dir)
+	ws := mustNewWorkspace(dir)
 
 	rel, err := ws.GetRelativePath(filepath.Join(dir, "sub", "file.txt"))
 	if err != nil {

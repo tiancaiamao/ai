@@ -343,38 +343,6 @@ func renderContextCompact(raw []byte) string {
 	return b.String()
 }
 
-// renderTokenUsageLine renders one line of token usage from session stats,
-// appending the share of the context window when both numbers are known.
-func renderTokenUsageLine(state *SessionState, stats *SessionStats) string {
-	t := stats.Tokens
-	line := fmt.Sprintf("Tokens: in %d · out %d · cache %d/%d · total %d",
-		t.Input, t.Output, t.CacheRead, t.CacheWrite, t.Total)
-	if t.ActiveWindowTokens > 0 && state.Compaction != nil && state.Compaction.ContextWindow > 0 {
-		line += fmt.Sprintf(" (%d%% of window)",
-			100*t.ActiveWindowTokens/state.Compaction.ContextWindow)
-	}
-	return line
-}
-
-// sessionStatusLine is the shared one-line summary:
-// "Model: <model> · Session: <id[:8]> · Streaming: <status>".
-func sessionStatusLine(state *SessionState) string {
-	return fmt.Sprintf("Model: %s · Session: %s · Streaming: %s",
-		modelDisplayName(state.Model), shortID(state.SessionID), streamingStatus(state))
-}
-
-// streamingStatus describes the streaming state in one word.
-func streamingStatus(state *SessionState) string {
-	switch {
-	case state.IsStreaming:
-		return "active"
-	case state.IsCompacting:
-		return "compacting"
-	default:
-		return "idle"
-	}
-}
-
 // renderResumeText renders both /resume shapes: a session switch confirmation
 // or the no-arg session list table.
 func renderResumeText(raw []byte) string {
@@ -789,18 +757,6 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
-}
-
-// modelDisplayName formats a model as "provider/id" (or just "id" when the
-// provider is unset); unknown/nil models degrade to "unknown".
-func modelDisplayName(m *config.ModelInfo) string {
-	if m == nil || m.ID == "" {
-		return "unknown"
-	}
-	if m.Provider == "" {
-		return m.ID
-	}
-	return m.Provider + "/" + m.ID
 }
 
 // orUnknown maps empty strings to "unknown" for display.

@@ -21,7 +21,6 @@ The package uses Go's `embed` directive to bundle markdown templates:
 ```go
 type Builder struct { ... }
 
-func NewBuilder(_, cwd string) *Builder
 func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder
 
 func (b *Builder) GetCWD() string
@@ -29,6 +28,7 @@ func (b *Builder) SetMinimal(minimal bool) *Builder
 func (b *Builder) SetTools(tools interface{}) *Builder
 func (b *Builder) SetSkills(skills []skill.Skill) *Builder
 func (b *Builder) SetSkillStats(stats *skill.SkillStatsFile) *Builder
+func (b *Builder) SetSkillWarnings(warnings []string) *Builder
 func (b *Builder) SetTemplate(t string) *Builder
 func (b *Builder) SetContextMeta(meta string) *Builder
 func (b *Builder) SetTokensPercent(pct float64) *Builder

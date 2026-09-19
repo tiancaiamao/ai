@@ -41,7 +41,8 @@ func (app *App) buildAgentContextPrefix() string {
 
 	// Skills section
 	promptBuilderForSkills := prompt.NewBuilderWithWorkspace("", app.ws)
-	promptBuilderForSkills.SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
+	promptBuilderForSkills.SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats).
+		SetSkillWarnings(skillLoadWarnings(app.skillResult))
 	if skills := promptBuilderForSkills.BuildSkillsMessage(); skills != "" {
 		parts = append(parts, skills)
 	}
@@ -55,6 +56,22 @@ func (app *App) buildAgentContextPrefix() string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// skillLoadWarnings extracts user-actionable skill loading warnings from the
+// loader diagnostics — currently the legacy .ai/skills deprecation notice —
+// so they reach the agent via the <agent:skills> block, not just the log.
+func skillLoadWarnings(result *skill.LoadResult) []string {
+	if result == nil {
+		return nil
+	}
+	var warnings []string
+	for _, d := range result.Diagnostics {
+		if d.Type == "warning" && d.Code == skill.DiagnosticCodeLegacyProjectSkills {
+			warnings = append(warnings, d.Message)
+		}
+	}
+	return warnings
 }
 
 func (app *App) createBaseContext() *agentctx.AgentContext {

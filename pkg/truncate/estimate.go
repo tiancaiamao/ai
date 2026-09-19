@@ -15,14 +15,6 @@ func CharsToTokens(chars int) int {
 	return (chars + ApproxBytesPerToken - 1) / ApproxBytesPerToken
 }
 
-// TokensToChars converts token count to character count.
-func TokensToChars(tokens int) int {
-	if tokens <= 0 {
-		return 0
-	}
-	return tokens * ApproxBytesPerToken
-}
-
 // ApproxTokenCount estimates the token count of a text.
 func ApproxTokenCount(text string) int {
 	if text == "" {

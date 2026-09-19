@@ -60,6 +60,9 @@ type Builder struct {
 	// Skill usage stats (optional, for progressive disclosure)
 	skillStats *skill.SkillStatsFile
 
+	// Skill loading warnings (optional, surfaced in the skills block)
+	skillWarnings []string
+
 	// Custom template (if empty, uses embedded promptTemplate)
 	template string
 
@@ -68,14 +71,6 @@ type Builder struct {
 
 	// Token usage percent (for hint message generation)
 	tokensPercent float64
-}
-
-// NewBuilder creates a new prompt builder.
-func NewBuilder(_, cwd string) *Builder {
-	return &Builder{
-		cwd:     cwd,
-		minimal: false,
-	}
 }
 
 // NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
@@ -127,20 +122,37 @@ func (b *Builder) SetSkillStats(stats *skill.SkillStatsFile) *Builder {
 	return b
 }
 
+// SetSkillWarnings sets skill loading warnings (e.g. the legacy .ai/skills
+// deprecation notice) that are surfaced in the skills block so the agent
+// sees them instead of only the server log.
+func (b *Builder) SetSkillWarnings(warnings []string) *Builder {
+	b.skillWarnings = warnings
+	return b
+}
+
 // BuildSkillsMessage formats the skills list as a user message wrapped in
 // <agent:skills> tags, ready for injection as a user message before the
-// last user input on each LLM call. Returns empty string when no skills
-// are available or minimal mode is enabled.
+// last user input on each LLM call. Returns empty string when there are
+// no skills and no warnings, or when minimal mode is enabled.
 //
 // This replaces the former %SKILLS% placeholder in the system prompt template.
 // Skills are now injected per-LLM-call as a user-role message (similar to
 // AgentInstructions), keeping the system prompt stable for caching while still
 // providing skill context on every turn.
 func (b *Builder) BuildSkillsMessage() string {
-	if b.minimal || len(b.skills) == 0 {
+	if b.minimal {
 		return ""
 	}
-	skillsText := skill.FormatForPrompt(b.skills, b.skillStats)
+	skillsText := ""
+	if len(b.skills) > 0 {
+		skillsText = skill.FormatForPrompt(b.skills, b.skillStats)
+	}
+	if len(b.skillWarnings) > 0 {
+		if skillsText != "" {
+			skillsText += "\n"
+		}
+		skillsText += "Skill loading warnings:\n- " + strings.Join(b.skillWarnings, "\n- ")
+	}
 	if skillsText == "" {
 		return ""
 	}

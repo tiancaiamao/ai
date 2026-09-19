@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
@@ -126,27 +125,6 @@ func ParseBoolFromInput(value string, jsonKey string) bool {
 	}
 	lower := strings.ToLower(strings.TrimSpace(value))
 	return lower == "true" || lower == "1" || lower == "on"
-}
-
-// ParseModeFromInput extracts a mode string from JSON {"key": "mode"} or plain text,
-// then validates it against the valid set.
-func ParseModeFromInput(value string, jsonKey string, valid map[string]bool) (string, error) {
-	mode := strings.ToLower(strings.TrimSpace(value))
-	var jsonData map[string]any
-	trimmed := strings.TrimSpace(value)
-	if len(trimmed) > 0 && trimmed[0] == '{' {
-		if json.Unmarshal([]byte(value), &jsonData) == nil {
-			if v, ok := jsonData[jsonKey]; ok {
-				if s, ok := v.(string); ok {
-					mode = strings.ToLower(strings.TrimSpace(s))
-				}
-			}
-		}
-	}
-	if !valid[mode] {
-		return "", fmt.Errorf("invalid mode %q: must be one of the valid options", mode)
-	}
-	return mode, nil
 }
 
 func boolStr(b bool) string {
