@@ -34,6 +34,7 @@ func TestFormatCommandResultSession(t *testing.T) {
 		Model:                 &config.ModelInfo{ID: "glm-4.6", Provider: "zai", Name: "GLM-4.6"},
 		SessionID:             "abcdefgh12345678",
 		SessionName:           "fix-bug",
+		Role:                  "reviewer",
 		AIWorkingDir:          "/home/user/proj",
 		ThinkingLevel:         "medium",
 		MessageCount:          12,
@@ -42,12 +43,18 @@ func TestFormatCommandResultSession(t *testing.T) {
 	}
 	out = formatData("session", enriched)
 	for _, want := range []string{
-		"name: fix-bug", "ai-cwd: /home/user/proj", "thinking-level: medium",
+		"name: fix-bug", "role: reviewer", "ai-cwd: /home/user/proj", "thinking-level: medium",
 		"messages: 12", "pending: 2", "auto-compaction: off",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
 		}
+	}
+
+	// Empty role means the embedded default persona.
+	out = formatData("session", &SessionState{SessionID: "abcdefgh12345678"})
+	if !strings.Contains(out, "role: default") {
+		t.Errorf("output missing %q, got:\n%s", "role: default", out)
 	}
 
 	// Shape mismatch → no render (caller falls back to JSON).
