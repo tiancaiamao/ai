@@ -346,6 +346,7 @@ func (app *App) handleSessionGetState() (any, error) {
 		SessionFile:           app.sess.GetPath(),
 		SessionID:             currentSessionID,
 		SessionName:           currentSessionName,
+		Role:                  app.role,
 		AIPid:                 os.Getpid(),
 		AILogPath:             aiLogPath,
 		AIWorkingDir:          app.ws.GetCWD(),
