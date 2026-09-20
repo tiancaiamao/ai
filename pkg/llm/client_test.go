@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,6 +102,85 @@ func TestStreamLLMHandlesLargeSSELine(t *testing.T) {
 
 	if len(doneContent) != len(largeText) {
 		t.Fatalf("unexpected done content length: got %d want %d", len(doneContent), len(largeText))
+	}
+}
+
+// TestStreamLLMCapturesTrailingUsageChunk covers the OpenAI streaming
+// convention (induced by stream_options.include_usage) where the token usage
+// arrives in a final chunk whose `choices` array is empty, *after* the chunk
+// carrying finish_reason. Servers like llama.cpp only report usage this way;
+// a parser that finalizes on finish_reason loses it and the host's
+// context-usage indicator stays empty.
+func TestStreamLLMCapturesTrailingUsageChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		// Usage-only trailing chunk with an empty choices array.
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":5,\"total_tokens\":125}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	model := Model{ID: "test-model", Provider: "test", BaseURL: server.URL, API: "openai-completions"}
+	llmCtx := LLMContext{Messages: []LLMMessage{{Role: "user", Content: "ping"}}}
+
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
+
+	var done *LLMDoneEvent
+	for item := range stream.Iterator(context.Background()) {
+		switch event := item.Value.(type) {
+		case LLMDoneEvent:
+			e := event
+			done = &e
+		case LLMErrorEvent:
+			t.Fatalf("unexpected error event: %v", event.Error)
+		}
+	}
+
+	if done == nil {
+		t.Fatal("expected a done event")
+	}
+	if done.StopReason != "stop" {
+		t.Fatalf("expected stop reason %q, got %q", "stop", done.StopReason)
+	}
+	if done.Usage.TotalTokens != 125 {
+		t.Fatalf("trailing usage chunk not captured: got total_tokens=%d want 125", done.Usage.TotalTokens)
+	}
+	if done.Message == nil || done.Message.Content != "hi" {
+		t.Fatalf("unexpected message content: %+v", done.Message)
+	}
+}
+
+// TestStreamLLMRequestsStreamUsage asserts the request opts into usage
+// reporting via stream_options.include_usage — without it, OpenAI-compatible
+// servers may omit the usage chunk entirely.
+func TestStreamLLMRequestsStreamUsage(t *testing.T) {
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	model := Model{ID: "test-model", Provider: "test", BaseURL: server.URL, API: "openai-completions"}
+	llmCtx := LLMContext{Messages: []LLMMessage{{Role: "user", Content: "ping"}}}
+
+	for range StreamLLM(context.Background(), model, llmCtx, "test-key", 0).Iterator(context.Background()) {
+	}
+
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("invalid request body: %v", err)
+	}
+	opts, ok := req["stream_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("request missing stream_options: %v", req)
+	}
+	if opts["include_usage"] != true {
+		t.Fatalf("expected stream_options.include_usage=true, got %v", opts)
 	}
 }
 

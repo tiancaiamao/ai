@@ -88,6 +88,11 @@ func StreamLLM(
 			"model":    model.ID,
 			"messages": messages,
 			"stream":   true,
+			// Ask the server to emit a final usage-only chunk. Many
+			// OpenAI-compatible servers (llama.cpp, vLLM, ...) only report
+			// prompt/total tokens when this is set; without it the token usage
+			// — and therefore the host's context-usage indicator — stays empty.
+			"stream_options": map[string]any{"include_usage": true},
 		}
 
 		// Set max_tokens if the model specifies one; otherwise omit and let the
@@ -215,6 +220,7 @@ func StreamLLM(
 		chunkIndex := 0
 		lastUsage := Usage{}
 		var lastTimings *Timings
+		finishReason := ""
 
 		for scanner.Scan() {
 			// Update read deadline for each chunk, capped by context deadline.
@@ -252,10 +258,14 @@ func StreamLLM(
 				// chunk that includes finish_reason. Emit a synthetic done event so
 				// upper layers can continue the loop instead of ending silently.
 				finalMsg := partial.ToLLMMessage()
+				stopReason := finishReason
+				if stopReason == "" {
+					stopReason = "stop"
+				}
 				stream.Push(LLMDoneEvent{
 					Message:    &finalMsg,
 					Usage:      lastUsage,
-					StopReason: "stop",
+					StopReason: stopReason,
 					Timings:    lastTimings,
 				})
 				return
@@ -294,16 +304,26 @@ func StreamLLM(
 				return
 			}
 
-			if len(chunk.Choices) == 0 {
-				continue
-			}
-
-			choice := chunk.Choices[0]
+			// Capture usage/timings before the choices guard: with
+			// stream_options.include_usage the server sends a trailing
+			// usage-only chunk whose `choices` array is empty.
 			if chunk.Usage != nil {
 				lastUsage = *chunk.Usage
 			}
 			if chunk.Timings != nil {
 				lastTimings = chunk.Timings
+			}
+
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+
+			choice := chunk.Choices[0]
+
+			// The model already reported a stop reason; ignore any stray
+			// content that trails it (the remaining chunks carry usage only).
+			if finishReason != "" {
+				continue
 			}
 
 			// Text delta
@@ -364,20 +384,28 @@ func StreamLLM(
 
 			// Finish
 			if choice.FinishReason != nil {
-				finalMsg := partial.ToLLMMessage()
-				usage := lastUsage
-
-				stream.Push(LLMDoneEvent{
-					Message:    &finalMsg,
-					Usage:      usage,
-					StopReason: *choice.FinishReason,
-					Timings:    chunk.Timings, // Use current chunk's timings
-				})
-				return
+				// Do not finalize here: OpenAI-compatible servers send the
+				// token usage in a separate chunk *after* the finish_reason
+				// chunk. Record the reason and keep reading until [DONE] or
+				// EOF so the usage numbers are captured.
+				finishReason = *choice.FinishReason
 			}
 		}
 
 		if err := scanner.Err(); err != nil {
+			// A read error after the model already reported a stop reason is a
+			// post-finish transport hiccup (the server closed the stream or a
+			// keep-alive stalled), not a failed turn — finalize normally.
+			if finishReason != "" {
+				finalMsg := partial.ToLLMMessage()
+				stream.Push(LLMDoneEvent{
+					Message:    &finalMsg,
+					Usage:      lastUsage,
+					StopReason: finishReason,
+					Timings:    lastTimings,
+				})
+				return
+			}
 			stream.Push(LLMErrorEvent{Error: fmt.Errorf("LLM stream read error: %w", err)})
 			return
 		}
@@ -392,10 +420,14 @@ func StreamLLM(
 		// Clean EOF with some chunks but no DoneEvent was ever pushed. This
 		// means the stream was truncated before the finish_reason was sent.
 		finalMsg := partial.ToLLMMessage()
+		stopReason := finishReason
+		if stopReason == "" {
+			stopReason = "stop"
+		}
 		stream.Push(LLMDoneEvent{
 			Message:    &finalMsg,
 			Usage:      lastUsage,
-			StopReason: "stop",
+			StopReason: stopReason,
 			Timings:    lastTimings,
 		})
 	}()
