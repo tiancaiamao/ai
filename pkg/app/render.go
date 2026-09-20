@@ -204,6 +204,7 @@ func renderSessionStateEnriched(raw []byte) string {
 	text := fmt.Sprintf(`Session:
   id: %s
   name: %s
+  role: %s
   file: %s
   ai-pid: %s
   ai-log: %s
@@ -222,6 +223,7 @@ func renderSessionStateEnriched(raw []byte) string {
   compacting: %s`,
 		orUnknown(state.SessionID),
 		orUnknown(state.SessionName),
+		orDefault(state.Role),
 		orUnknown(state.SessionFile),
 		aiPID,
 		aiLogPath,
@@ -763,6 +765,15 @@ func shortID(id string) string {
 func orUnknown(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "unknown"
+	}
+	return s
+}
+
+// orDefault maps an empty agent role to "default" for display. An empty role
+// means the session runs the embedded default persona (see session.SessionMeta).
+func orDefault(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "default"
 	}
 	return s
 }

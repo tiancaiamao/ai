@@ -590,7 +590,7 @@ func TestACPCommandRenderersOverACP(t *testing.T) {
 		command  string
 		contains []string
 	}{
-		{command: "/session", contains: []string{"model:", "id:", "streaming:"}},
+		{command: "/session", contains: []string{"model:", "id:", "role:", "streaming:"}},
 		{command: "/context", contains: []string{"Context Usage", "Session Stats"}},
 		{command: "/show settings", contains: []string{"model"}},
 		{command: "/help", contains: []string{"Commands:", "[slash] help"}},
