@@ -218,6 +218,11 @@ func TestFormatCommandResultUnnamedShapes(t *testing.T) {
 		{"trace events", map[string]any{"events": []string{"e1", "e2"}}, "trace events set to: e1, e2"},
 		{"tree", map[string]any{"entries": []TreeEntry{{EntryID: "e1", Depth: 0, Text: "root"}}}, "[e1] root"},
 		{"new session skipped", map[string]any{"sessionId": "abc", "cancelled": false}, ""},
+		{"fork via sniff", map[string]any{"cancelled": false, "text": "do the thing", "sessionId": "617f108c1111", "sessionName": "fork-20260101-120000"}, "Forked to fork-20260101-120000 (617f108c)"},
+		{"fork without text via sniff", map[string]any{"cancelled": false, "sessionId": "617f108c1111", "sessionName": "fork-20260101-120000"}, "Forked to fork-20260101-120000 (617f108c)"},
+
+		{"rewind via sniff", map[string]any{"switched": true, "entryId": "e1234567"}, "Rewound to entry e1234567"},
+		{"rewind root via sniff", map[string]any{"switched": true, "entryId": "root"}, "Rewound to the start of the session"},
 		{"resume switch via sniff", map[string]any{"sessionId": "1111222233334444", "sessionName": "fix-bug"}, "Switched to session fix-bug (11112222)"},
 		{"session stats", SessionStats{SessionID: "s1", TotalMessages: 10, UserMessages: 4, AssistantMessages: 5}, "messages: 10 (user 4, assistant 5)"},
 	}

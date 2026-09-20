@@ -128,9 +128,10 @@ func pathToLeaf(entries []*SessionEntry, leafID *string, byID map[string]*Sessio
 	var leaf *SessionEntry
 	if leafID != nil {
 		leaf = byID[*leafID]
-	} else {
-		leaf = entries[len(entries)-1]
 	}
+	// A nil leafID means "before any entries" (see ResetLeaf); the resulting
+	// path is empty. This matches getBranchLocked and makes "/rewind root"
+	// clear the conversation instead of resolving to the last entry.
 	if leaf == nil {
 		return nil
 	}
