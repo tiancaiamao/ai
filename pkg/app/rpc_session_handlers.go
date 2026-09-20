@@ -207,10 +207,14 @@ func (app *App) handleRewind(args string) (any, error) {
 		}
 	}
 
-	// Resolve index-based reference (e.g. "/rewind 5" → message at index 5 in /messages).
+	// Resolve index-based reference (e.g. "/rewind 5" → message at index 5 in
+	// /messages). An exact entry id wins over the index reading: entry ids are
+	// 8 hex characters, so roughly 2% of them are all digits.
 	if entryID != "root" {
-		if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
-			entryID = resolved
+		if _, ok := app.sess.GetEntry(entryID); !ok {
+			if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
+				entryID = resolved
+			}
 		}
 	}
 
@@ -286,19 +290,22 @@ func (app *App) handleFork(args string) (any, error) {
 		return nil, err
 	}
 
-	// Resolve index-based reference (e.g. "/fork 5" → message at index 5 in /messages).
+	// Resolve the target. An exact entry id wins over the /messages index
+	// reading: entry ids are 8 hex characters, so roughly 2% of them are all
+	// digits and would otherwise be rejected as an out-of-range index.
 	target := entryID
-	if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
-		entryID = resolved
-	} else if idx, err := strconv.Atoi(entryID); err == nil {
-		// A numeric target is an index into /messages, which lists
-		// ag.GetMessages() in order. Failing to resolve it means there is no
-		// session entry to branch from.
-		messages := app.ag.GetMessages()
-		if idx < 0 || idx >= len(messages) {
-			return nil, fmt.Errorf("index %d out of range: session has %d messages", idx, len(messages))
+	if _, ok := app.sess.GetEntry(target); !ok {
+		if resolved, ok := resolveMessageIndex(app.ag, app.sess, target); ok {
+			entryID = resolved
+		} else if idx, err := strconv.Atoi(target); err == nil {
+			// A numeric target is an index into /messages, which lists
+			// ag.GetMessages() in order. Failing to resolve it means there is
+			// no session entry to branch from.
+			if n := len(app.ag.GetMessages()); idx < 0 || idx >= n {
+				return nil, fmt.Errorf("index %d out of range: session has %d messages", idx, n)
+			}
+			return nil, fmt.Errorf("index %d has no session entry (compacted summary or unsaved message); pick another index or pass an entryId", idx)
 		}
-		return nil, fmt.Errorf("index %d has no session entry (compacted summary or unsaved message); pick another index or pass an entryId", idx)
 	}
 
 	entry, ok := app.sess.GetEntry(entryID)

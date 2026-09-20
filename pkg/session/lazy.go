@@ -262,6 +262,9 @@ func loadFromEnd(f *os.File, sess *Session) error {
 				}
 				sess.addEntry(entry)
 			}
+			// The whole file has been read, so every persisted entry is in
+			// memory: EnsureFullyLoaded must not read the file again.
+			sess.fullyLoaded = true
 			return nil
 		}
 

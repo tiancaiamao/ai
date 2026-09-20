@@ -23,6 +23,17 @@ no visible session change, which read as the command being ignored. The
 `/fork` result also had no field naming the new session, so even a successful
 fork was indistinguishable from a no-op in those clients.
 
+**Follow-up hardening**: entry ids are 8 hex characters, so roughly 2% of them
+are decimal digits only, and `/fork`/`/rewind` read a numeric target as an
+index first. A target that exactly matches a session entry id now wins over
+the index reading (and a numeric id no longer fails with "index out of
+range"). Telling `/fork` from `/new` in the renderers now keys on the
+`sessionName` that `/fork` always sets, not on the optional `text` field,
+which is absent when the fork point is a message without text blocks. A
+session without a compaction entry is read in full by the lazy loader, so
+`EnsureFullyLoaded` no longer re-reads such files.
+
+
 ## Project skills move from `.ai/skills/` to `.agents/skills/` (2026-09)
 
 **What changed**: The project-local skill directory is now `.agents/skills/`

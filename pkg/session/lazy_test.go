@@ -515,3 +515,87 @@ func serializeSessionForTest(s *Session) []byte {
 
 	return data
 }
+
+// TestEnsureFullyLoadedSkipsReloadWithoutCompaction pins an optimization: when
+// a session has no compaction entry, the lazy loader scans the whole file, so
+// every persisted entry is already in memory and EnsureFullyLoaded (called by
+// /rewind and /fork) must not read the file a second time.
+func TestEnsureFullyLoadedSkipsReloadWithoutCompaction(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "no-compaction")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	writer := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	writer.header = newSessionHeader("no-compaction", "/test", "")
+	for i := 0; i < 3; i++ {
+		require.NoError(t, writer.AddMessages(agentctx.NewUserMessage("msg")))
+	}
+
+	loaded, err := LoadSession(sessionDir)
+	require.NoError(t, err)
+	assert.True(t, loaded.fullyLoaded, "LoadSession reads a session without compaction in full")
+
+	// Append an entry behind the loaded session's back. A second read of the
+	// file would see it, so not seeing it proves the file was not read again.
+	extra := *writer.entries[0]
+	extra.ID = "deadbeef"
+	line, err := json.Marshal(&extra)
+	require.NoError(t, err)
+	f, err := os.OpenFile(filepath.Join(sessionDir, "messages.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.Write(append(line, '\n'))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	require.NoError(t, loaded.EnsureFullyLoaded())
+	for _, entry := range loaded.entries {
+		if entry.ID == "deadbeef" {
+			t.Fatal("EnsureFullyLoaded re-read the file although every entry was already in memory")
+		}
+	}
+	assert.Len(t, loaded.entries, 3)
+}
+
+// TestEnsureFullyLoadedReloadsAfterCompaction is the counterpart: a compacted
+// session is loaded from the compaction point forward, so the pre-compaction
+// entries are only on disk and EnsureFullyLoaded must still read them.
+func TestEnsureFullyLoadedReloadsAfterCompaction(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "compacted")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	writer := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	writer.header = newSessionHeader("compacted", "/test", "")
+	for i := 0; i < 10; i++ {
+		require.NoError(t, writer.AddMessages(agentctx.NewUserMessage("old message")))
+	}
+	writer.addEntry(&SessionEntry{
+		Type:      EntryTypeCompaction,
+		ID:        "compaction-1",
+		Timestamp: "2024-01-01T00:00:00Z",
+		Summary:   "Previous conversation summary",
+	})
+	for i := 0; i < 5; i++ {
+		require.NoError(t, writer.AddMessages(agentctx.NewUserMessage("recent message")))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "messages.jsonl"), serializeSessionForTest(writer), 0o644))
+
+	loaded, err := LoadSession(sessionDir)
+	require.NoError(t, err)
+	assert.False(t, loaded.fullyLoaded, "a compacted session is loaded lazily from the compaction point")
+	assert.Less(t, len(loaded.entries), len(writer.entries), "lazy load must not read the pre-compaction entries")
+
+	require.NoError(t, loaded.EnsureFullyLoaded())
+	assert.True(t, loaded.fullyLoaded)
+	assert.Len(t, loaded.entries, len(writer.entries))
+}

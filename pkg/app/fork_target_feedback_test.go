@@ -1,9 +1,12 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tiancaiamao/ai/pkg/session"
 )
 
 // These tests pin the user-visible contract of /fork targets: a successful fork
@@ -187,5 +190,107 @@ func TestHandleFork_CompactedSessionDiagnostics(t *testing.T) {
 	}
 	if fork.SessionID == "" {
 		t.Errorf("fork must report the new session id: %+v", fork)
+	}
+}
+
+// seedPersistedConversation writes the standard 3-message conversation to disk
+// (rather than keeping it in memory) so a test can rewrite entry ids on disk
+// and reload the session the way "/resume" does.
+func seedPersistedConversation(t *testing.T, sessionsDir, sessionID string) []string {
+	t.Helper()
+	sessDir := filepath.Join(sessionsDir, sessionID)
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	return seedConversation(t, session.NewSession(sessDir))
+}
+
+// renameEntryIDs rewrites entry ids in messages.jsonl, both the "id" field and
+// every "parentId" referencing it. Entry ids are 8 hex characters, so roughly
+// 2% of generated ids are all decimal digits: renameEntryIDs lets a test pin
+// that case deterministically.
+func renameEntryIDs(t *testing.T, sessDir string, renames map[string]string) {
+	t.Helper()
+	path := filepath.Join(sessDir, "messages.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	content := string(data)
+	for oldID, newID := range renames {
+		if !strings.Contains(content, oldID) {
+			t.Fatalf("entry id %q not found in %s", oldID, path)
+		}
+		content = strings.ReplaceAll(content, oldID, newID)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestHandleFork_NumericEntryID covers entry ids that look like /messages
+// indexes. A numeric target must only be read as an index when the session has
+// no entry with that exact id, otherwise the ~2% of ids made up of decimal
+// digits alone are unusable:
+//   - "12345678" is out of range as an index (3 messages) and used to be
+//     rejected with "index 12345678 out of range";
+//   - "00000001" is a valid index (the assistant reply) and used to be read as
+//     one, rejecting a fork of the user message it actually names.
+func TestHandleFork_NumericEntryID(t *testing.T) {
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
+	ids := seedPersistedConversation(t, sessionsDir, "numeric-fork")
+	renameEntryIDs(t, filepath.Join(sessionsDir, "numeric-fork"), map[string]string{
+		ids[0]: "12345678", // "hello", first user message
+		ids[2]: "00000001", // "second", second user message
+	})
+
+	app := lazyAppForDir(t, sessionsDir, "numeric-fork")
+	for _, id := range []string{"12345678", "00000001"} {
+		if _, ok := app.sess.GetEntry(id); !ok {
+			t.Fatalf("precondition: entry %q missing after reload", id)
+		}
+	}
+
+	// Out-of-range numeric id: must fork at the user message, not report an index.
+	forkApp := lazyAppForDir(t, sessionsDir, "numeric-fork")
+	result, err := forkApp.handleFork("12345678")
+	if err != nil {
+		t.Fatalf("handleFork(12345678) should resolve the entry id: %v", err)
+	}
+	if fork := result.(*ForkResult); fork.Text != "hello" {
+		t.Errorf("ForkResult.Text = %q, want %q", fork.Text, "hello")
+	}
+
+	// In-range numeric id: the exact entry id wins over the index reading.
+	forkApp = lazyAppForDir(t, sessionsDir, "numeric-fork")
+	result, err = forkApp.handleFork("00000001")
+	if err != nil {
+		t.Fatalf("handleFork(00000001) should resolve the entry id: %v", err)
+	}
+	if fork := result.(*ForkResult); fork.Text != "second" {
+		t.Errorf("ForkResult.Text = %q, want %q (index 1 is the assistant reply)", fork.Text, "second")
+	}
+}
+
+// TestHandleRewind_NumericEntryID mirrors TestHandleFork_NumericEntryID for
+// /rewind, which shares the target resolution.
+func TestHandleRewind_NumericEntryID(t *testing.T) {
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
+	ids := seedPersistedConversation(t, sessionsDir, "numeric-rewind")
+	renameEntryIDs(t, filepath.Join(sessionsDir, "numeric-rewind"), map[string]string{
+		ids[0]: "00000001", // "hello": index 1 is the assistant reply
+	})
+
+	app := lazyAppForDir(t, sessionsDir, "numeric-rewind")
+	if _, err := app.handleRewind("00000001"); err != nil {
+		t.Fatalf("handleRewind(00000001) should resolve the entry id: %v", err)
+	}
+	msgs := app.sess.GetMessages()
+	if len(msgs) != 1 || msgs[0].ExtractText() != "hello" {
+		t.Fatalf("after rewind to the numeric id, messages = %v", texts(msgs))
+	}
+	leaf := app.sess.GetLeafID()
+	if leaf == nil || *leaf != "00000001" {
+		t.Fatalf("leaf = %v, want the numeric entry id 00000001", leaf)
 	}
 }

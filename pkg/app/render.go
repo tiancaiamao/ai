@@ -108,9 +108,11 @@ func renderResponseByShape(m map[string]any, raw []byte) string {
 	if _, ok := m["sessions"]; ok {
 		return renderSessionsTable(raw)
 	}
-	// /fork → {cancelled, text, sessionId} and /new → {sessionId, cancelled}
-	// share the cancelled marker; the fork-only text field disambiguates.
-	if _, hasText := m["text"]; hasText {
+	// /fork → {cancelled, text, sessionId, sessionName} and /new →
+	// {sessionId, cancelled} share the cancelled marker; the sessionName that
+	// /fork always sets disambiguates. (Keying on the optional text field would
+	// misread a fork of a message without text blocks as /new.)
+	if _, hasName := m["sessionName"]; hasName {
 		if _, hasCancelled := m["cancelled"]; hasCancelled {
 			return renderForkResult(raw)
 		}

@@ -283,15 +283,12 @@ Session loading reconstructs the conversation from the entry tree:
 
 ### Lazy Loading
 
-For large sessions, lazy loading avoids reading the entire JSONL file:
+For large sessions, lazy loading avoids reading the entire JSONL file. There is
+no separate API: `LoadSession` uses lazy loading and falls back to a full load
+when there is no compaction entry to start from.
 
 ```go
-opts := session.LoadOptions{
-    MaxMessages:    0,    // 0=auto, -1=all, N>0=limit
-    IncludeSummary: true, // Include compaction summary
-    Lazy:           true, // Enable lazy loading
-}
-sess, err := session.LoadSessionLazy(dir, opts)
+sess, err := session.LoadSession(dir)
 ```
 
 The loader scans backwards from the end of the file to find the most recent compaction entry, then loads only from that point forward.
