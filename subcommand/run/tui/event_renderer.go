@@ -29,11 +29,13 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	}
 
 	// /new → {sessionId, cancelled} — not displayed; the session_switch event
-	// that follows handles it. /fork also carries {cancelled} without
-	// {sessionId}, so check both fields.
+	// that follows handles it. /fork also carries {cancelled} and now a
+	// {sessionId}, so require the absence of the fork-only {text} field.
 	if _, hasCancelled := dataRaw["cancelled"]; hasCancelled {
 		if _, hasSessionID := dataRaw["sessionId"]; hasSessionID {
-			return nil
+			if _, hasText := dataRaw["text"]; !hasText {
+				return nil
+			}
 		}
 	}
 

@@ -53,6 +53,10 @@ func renderNamedCommand(command string, raw []byte) string {
 	switch command {
 	case "context":
 		return renderContextCompact(raw)
+	case "fork":
+		return renderForkResult(raw)
+	case "rewind":
+		return renderRewindResult(raw)
 	case "help", "skills", "get_commands":
 		return renderSkillsTable(raw)
 	case "messages":
@@ -104,8 +108,19 @@ func renderResponseByShape(m map[string]any, raw []byte) string {
 	if _, ok := m["sessions"]; ok {
 		return renderSessionsTable(raw)
 	}
-	// /new → {sessionId, cancelled}: not a displayable state dump. Check both
-	// fields so /fork ({cancelled} but no {sessionId}) still falls through.
+	// /fork → {cancelled, text, sessionId} and /new → {sessionId, cancelled}
+	// share the cancelled marker; the fork-only text field disambiguates.
+	if _, hasText := m["text"]; hasText {
+		if _, hasCancelled := m["cancelled"]; hasCancelled {
+			return renderForkResult(raw)
+		}
+	}
+	// /rewind → {switched, entryId}
+	if _, ok := m["switched"]; ok {
+		return renderRewindResult(raw)
+	}
+	// /new → {sessionId, cancelled}: not a displayable state dump; the caller
+	// signals the switch separately.
 	if _, hasCancelled := m["cancelled"]; hasCancelled {
 		if _, hasSessionID := m["sessionId"]; hasSessionID {
 			return ""
@@ -604,6 +619,45 @@ func renderModelSwitched(raw []byte) string {
 		result.Model = *payload.Model
 	}
 	return fmt.Sprintf("Model: %s/%s (%s)", result.Model.Provider, result.Model.Name, result.Model.ID)
+}
+
+// renderForkResult renders a /fork confirmation. text is the user message the
+// new branch starts from; sessionId/sessionName identify the new session so
+// the switch is observable to the user.
+func renderForkResult(raw []byte) string {
+	var result ForkResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return ""
+	}
+	target := "new session"
+	switch {
+	case result.SessionName != "" && result.SessionID != "":
+		target = fmt.Sprintf("%s (%s)", result.SessionName, shortID(result.SessionID))
+	case result.SessionName != "":
+		target = result.SessionName
+	case result.SessionID != "":
+		target = shortID(result.SessionID)
+	}
+	if text := strings.TrimSpace(result.Text); text != "" {
+		return fmt.Sprintf("Forked to %s, starting from your message:\n  %s", target, truncpkg.TruncateString(text, 120))
+	}
+	return fmt.Sprintf("Forked to %s", target)
+}
+
+// renderRewindResult renders a /rewind confirmation. The root rewind carries
+// no entry id because it clears the leaf pointer.
+func renderRewindResult(raw []byte) string {
+	var payload struct {
+		Switched bool   `json:"switched"`
+		EntryID  string `json:"entryId"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	if payload.EntryID == "" || payload.EntryID == "root" {
+		return "Rewound to the start of the session"
+	}
+	return fmt.Sprintf("Rewound to entry %s", payload.EntryID)
 }
 
 // renderMessagesText renders /messages output (new MessagesResult shape,

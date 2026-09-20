@@ -287,13 +287,30 @@ func (app *App) handleFork(args string) (any, error) {
 	}
 
 	// Resolve index-based reference (e.g. "/fork 5" → message at index 5 in /messages).
+	target := entryID
 	if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
 		entryID = resolved
+	} else if idx, err := strconv.Atoi(entryID); err == nil {
+		// A numeric target is an index into /messages, which lists
+		// ag.GetMessages() in order. Failing to resolve it means there is no
+		// session entry to branch from.
+		messages := app.ag.GetMessages()
+		if idx < 0 || idx >= len(messages) {
+			return nil, fmt.Errorf("index %d out of range: session has %d messages", idx, len(messages))
+		}
+		return nil, fmt.Errorf("index %d has no session entry (compacted summary or unsaved message); pick another index or pass an entryId", idx)
 	}
 
 	entry, ok := app.sess.GetEntry(entryID)
-	if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
-		return nil, fmt.Errorf("invalid entryId: %s", entryID)
+	if !ok {
+		return nil, fmt.Errorf("entryId %s not found in session", target)
+	}
+
+	if entry.Type != session.EntryTypeMessage || entry.Message == nil {
+		return nil, fmt.Errorf("entryId %s is not a message; /fork needs a user message", target)
+	}
+	if entry.Message.Role != "user" {
+		return nil, fmt.Errorf("%s is not a user message (role: %s); /fork needs a user message (see /messages)", describeTarget(target, entryID), entry.Message.Role)
 	}
 
 	text := entry.Message.ExtractText()
@@ -316,7 +333,16 @@ func (app *App) handleFork(args string) (any, error) {
 	app.setSession(newSess, newSessionID, name)
 
 	slog.Info("Forked to new session", "name", name, "id", newSessionID)
-	return &ForkResult{Cancelled: false, Text: text}, nil
+	return &ForkResult{Cancelled: false, Text: text, SessionID: newSessionID, SessionName: name}, nil
+}
+
+// describeTarget names the user-supplied fork target together with the entry id
+// it resolved to, so "invalid target" errors stay traceable to what was typed.
+func describeTarget(target, entryID string) string {
+	if target == entryID {
+		return fmt.Sprintf("entryId %s", target)
+	}
+	return fmt.Sprintf("index %s (entryId %s)", target, entryID)
 }
 
 func (app *App) handleSessionGetState() (any, error) {

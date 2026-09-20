@@ -83,10 +83,14 @@ type TreeEntry struct {
 	Leaf      bool    `json:"leaf,omitempty"`
 }
 
-// ForkResult represents the result of a fork operation.
+// ForkResult represents the result of a fork operation. SessionID and
+// SessionName identify the newly created session so clients can report (and
+// resume) it; Text is the user message the new branch starts from.
 type ForkResult struct {
-	Cancelled bool   `json:"cancelled"`
-	Text      string `json:"text,omitempty"`
+	Cancelled   bool   `json:"cancelled"`
+	Text        string `json:"text,omitempty"`
+	SessionID   string `json:"sessionId,omitempty"`
+	SessionName string `json:"sessionName,omitempty"`
 }
 
 // CycleModelResult represents a cycle_model response payload.

@@ -644,3 +644,50 @@ func TestACPCommandRenderersOverACP(t *testing.T) {
 		}
 	}
 }
+
+// TestACPCommandFailureIsVisibleOverACP pins the failure contract of slash
+// commands: the reason must reach the client as an agent_message_chunk (the
+// update kind clients actually render), not only as a JSON-RPC error, which
+// interactive clients drop. Otherwise a failed command looks like no output.
+func TestACPCommandFailureIsVisibleOverACP(t *testing.T) {
+	msgs := runACPSmokeSession(t, t.TempDir(), func(sessionID string) []string {
+		return []string{fmt.Sprintf(
+			`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"/set not-a-setting 1"}]}}`,
+			sessionID)}
+	})
+	// initialize result, session/new result, command advertisement, then the
+	// failure chunk and the error response.
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d: %v", len(msgs), msgs)
+	}
+
+	chunk := msgs[3]
+	if _, hasID := chunk["id"]; hasID {
+		t.Errorf("failure chunk must be a notification, got id field: %v", chunk["id"])
+	}
+	if m, _ := chunk["method"].(string); m != "session/update" {
+		t.Fatalf("expected session/update chunk, got %q: %v", m, chunk)
+	}
+	params, _ := chunk["params"].(map[string]any)
+	upd, _ := params["update"].(map[string]any)
+	if got, _ := upd["sessionUpdate"].(string); got != "agent_message_chunk" {
+		t.Fatalf("expected agent_message_chunk, got %v", upd)
+	}
+	content, _ := upd["content"].(map[string]any)
+	text, _ := content["text"].(string)
+	for _, want := range []string{"/set failed:", "unknown setting"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("failure text missing %q, got:\n%s", want, text)
+		}
+	}
+
+	resp := msgs[4]
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj == nil {
+		t.Fatalf("expected a JSON-RPC error response, got %v", resp)
+	}
+	msg, _ := errObj["message"].(string)
+	if !strings.Contains(msg, "unknown setting") {
+		t.Errorf("error message should carry the reason, got %q", msg)
+	}
+}

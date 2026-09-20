@@ -3,6 +3,26 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Slash-command failures are visible to clients (2026-09)
+
+**What changed**: A slash command that fails now emits its reason as an
+`agent_message_chunk` session update (rendered as text), in addition to the
+JSON-RPC error response it already returned. `/fork` and `/rewind` also
+produce rendered confirmations instead of raw JSON: `/fork` reports the
+session it switched to (`sessionName` / `sessionId` in `ForkResult` plus the
+user message the new branch starts from), and `/rewind` names its target.
+Rejections identify the target that failed (index, resolved entry id, role)
+instead of the generic `invalid entryId`, and index targets distinguish
+"out of range" from "in range but not backed by a session entry"
+(pre-compaction summary).
+
+**Why**: Only JSON-RPC errors carried the failure, and interactive clients
+(the `ai run` TUI, AionUi) render `agent_message_chunk` updates but drop
+request errors. A failed `/fork 115` therefore produced no output at all and
+no visible session change, which read as the command being ignored. The
+`/fork` result also had no field naming the new session, so even a successful
+fork was indistinguishable from a no-op in those clients.
+
 ## Project skills move from `.ai/skills/` to `.agents/skills/` (2026-09)
 
 **What changed**: The project-local skill directory is now `.agents/skills/`

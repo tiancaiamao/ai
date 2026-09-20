@@ -277,6 +277,12 @@ func TestParseEvent_Response_DataTypes(t *testing.T) {
 	if r != nil {
 		t.Errorf("expected nil for /new response, got %+v", r)
 	}
+	// /fork — carries {cancelled} and {sessionId} too, but must be displayed:
+	// the {text} field marks it as a fork confirmation, not a bare switch.
+	r = ParseEvent(`{"type":"response","success":true,"command":"fork","data":{"cancelled":false,"text":"do the thing","sessionId":"617f108c11112222","sessionName":"fork-20260101-120000"}}`)
+	if r == nil || !strings.Contains(r.Text, "Forked to fork-20260101-120000 (617f108c)") {
+		t.Errorf("expected /fork confirmation to be displayed, got %+v", r)
+	}
 	// Fallback pretty-print
 	r = ParseEvent(`{"type":"response","success":true,"data":{"unknown":"data","x":1}}`)
 	if r == nil || !strings.Contains(r.Text, "unknown") {
