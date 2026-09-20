@@ -481,6 +481,10 @@ func TestRewindRoot(t *testing.T) {
 	// ResetLeaf should work (this is what "root" rewind does)
 	loaded.ResetLeaf()
 	assert.Nil(t, loaded.leafID)
+	// Regression: a nil leaf must yield an empty context ("/rewind root" clears
+	// the conversation), not the whole conversation. pathToLeaf used to fall
+	// back to the last entry when leafID was nil.
+	assert.Empty(t, loaded.GetMessages())
 }
 
 // Helper to serialize session to bytes (matches actual file format)

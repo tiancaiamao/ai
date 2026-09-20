@@ -360,6 +360,13 @@ func (app *App) handleSessionGetState() (any, error) {
 func (app *App) handleGetForkMessages(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_fork_messages")
+	// Lazy loading may leave pre-compaction messages represented by synthetic
+	// entries whose IDs are discarded by EnsureFullyLoaded. Load the full
+	// session so every entryId handed to the client is stable and usable by
+	// /fork and /rewind.
+	if err := app.sess.EnsureFullyLoaded(); err != nil {
+		return nil, err
+	}
 	forkMessages := app.sess.GetUserMessagesForForking()
 	result := make([]ForkMessage, 0, len(forkMessages))
 	for _, msg := range forkMessages {
@@ -374,6 +381,13 @@ func (app *App) handleGetForkMessages(args string) (any, error) {
 func (app *App) handleGetTree(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_tree")
+	// Lazy loading may leave pre-compaction messages represented by synthetic
+	// entries whose IDs are discarded by EnsureFullyLoaded. Load the full
+	// session so every entryId handed to the client is stable and usable by
+	// /fork and /rewind.
+	if err := app.sess.EnsureFullyLoaded(); err != nil {
+		return nil, err
+	}
 	entries := app.sess.GetEntries()
 	tree := buildTreeEntries(entries, app.sess.GetLeafID())
 	return map[string]any{"entries": tree}, nil

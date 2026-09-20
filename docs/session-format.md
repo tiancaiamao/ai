@@ -296,6 +296,20 @@ sess, err := session.LoadSessionLazy(dir, opts)
 
 The loader scans backwards from the end of the file to find the most recent compaction entry, then loads only from that point forward.
 
+**Synthetic entries and stable IDs.** Pre-compaction messages are not read from the
+JSONL during a lazy load; instead the compaction snapshot is replayed into the
+in-memory entry list with freshly generated IDs (synthetic entries). These IDs are
+not persisted and do not survive a full load, so they must never leave the process.
+Any handler that exposes entry IDs to a client (`get_tree`, `get_fork_messages`) or
+resolves a client-supplied ID (`rewind`, `fork`) calls `Session.EnsureFullyLoaded()`
+first; that discards the synthetic entries and replaces them with the real,
+persisted ones. `EnsureFullyLoaded` is a no-op once a session is fully loaded
+(`fullyLoaded` flag), so the extra disk read happens at most once per resume.
+
+Because a `nil` leaf means "before the first entry" (see `ResetLeaf`), both
+`pathToLeaf` (used by `GetMessages`) and `getBranchLocked` (used by `GetBranch`)
+return an empty path when the leaf is `nil`.
+
 ## AgentState Persistence
 
 `AgentState` is an in-memory struct only; it is not persisted. Token counts and
