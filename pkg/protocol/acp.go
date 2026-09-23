@@ -551,7 +551,15 @@ func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
 	handler, _ := s.app.Commands().Get(name)
 	result, err := handler(args)
 	if err != nil {
-		s.sendError(id, acpErrInvalidParams, fmt.Sprintf("/%s failed: %v", name, err))
+		msg := fmt.Sprintf("/%s failed: %v", name, err)
+		// Report the failure as visible text as well as a JSON-RPC error.
+		// Interactive clients render agent_message_chunk content but drop
+		// request errors, so an error-only answer looks like no output at all.
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "agent_message_chunk",
+			Content:       map[string]string{"type": "text", "text": msg},
+		})
+		s.sendError(id, acpErrInvalidParams, msg)
 		return
 	}
 	if text := formatACPCommandResult(s.app, name, result); text != "" {

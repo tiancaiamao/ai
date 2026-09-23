@@ -277,6 +277,24 @@ func TestParseEvent_Response_DataTypes(t *testing.T) {
 	if r != nil {
 		t.Errorf("expected nil for /new response, got %+v", r)
 	}
+	// /fork — carries {cancelled} and {sessionId} too, but must be displayed:
+	// the {sessionName} field marks it as a fork confirmation, not a bare switch.
+	r = ParseEvent(`{"type":"response","success":true,"command":"fork","data":{"cancelled":false,"text":"do the thing","sessionId":"617f108c11112222","sessionName":"fork-20260101-120000"}}`)
+	if r == nil || !strings.Contains(r.Text, "Forked to fork-20260101-120000 (617f108c)") {
+		t.Errorf("expected /fork confirmation to be displayed, got %+v", r)
+	}
+	// A fork of a message without text blocks still reports the new session and
+	// must not be mistaken for /new (its {text} field is empty/absent).
+	r = ParseEvent(`{"type":"response","success":true,"command":"fork","data":{"cancelled":false,"sessionId":"617f108c11112222","sessionName":"fork-20260101-120000"}}`)
+	if r == nil || !strings.Contains(r.Text, "Forked to fork-20260101-120000") {
+		t.Errorf("expected text-less /fork confirmation to be displayed, got %+v", r)
+	}
+	// Same when the client omits the command name (shape detection only).
+	r = ParseEvent(`{"type":"response","success":true,"data":{"cancelled":false,"sessionId":"617f108c11112222","sessionName":"fork-20260101-120000"}}`)
+	if r == nil || !strings.Contains(r.Text, "Forked to fork-20260101-120000") {
+		t.Errorf("expected text-less /fork shape to be displayed, got %+v", r)
+	}
+
 	// Fallback pretty-print
 	r = ParseEvent(`{"type":"response","success":true,"data":{"unknown":"data","x":1}}`)
 	if r == nil || !strings.Contains(r.Text, "unknown") {

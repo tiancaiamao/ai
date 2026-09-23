@@ -46,6 +46,10 @@ type Session struct {
 	leafID     *string
 	flushed    bool
 	persist    bool
+	// fullyLoaded reports whether every entry from disk is present in memory.
+	// It is true for brand-new sessions and after loadSessionFull; lazy loading
+	// leaves it false so EnsureFullyLoaded can complete the load exactly once.
+	fullyLoaded bool
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -57,10 +61,11 @@ type ForkMessage struct {
 // NewSession creates a new session with the given directory path.
 func NewSession(sessionDir string) *Session {
 	sess := &Session{
-		sessionDir: sessionDir,
-		entries:    make([]*SessionEntry, 0),
-		byID:       make(map[string]*SessionEntry),
-		persist:    sessionDir != "",
+		sessionDir:  sessionDir,
+		entries:     make([]*SessionEntry, 0),
+		byID:        make(map[string]*SessionEntry),
+		persist:     sessionDir != "",
+		fullyLoaded: true,
 	}
 
 	id := sessionIDFromDirPath(sessionDir)
@@ -87,10 +92,11 @@ func LoadSession(sessionDir string) (*Session, error) {
 // loadSessionFull loads the entire session file (original LoadSession implementation).
 func loadSessionFull(sessionDir string) (*Session, error) {
 	sess := &Session{
-		sessionDir: sessionDir,
-		entries:    make([]*SessionEntry, 0),
-		byID:       make(map[string]*SessionEntry),
-		persist:    sessionDir != "",
+		sessionDir:  sessionDir,
+		entries:     make([]*SessionEntry, 0),
+		byID:        make(map[string]*SessionEntry),
+		persist:     sessionDir != "",
+		fullyLoaded: true,
 	}
 
 	if sessionDir == "" {
@@ -325,6 +331,11 @@ func (s *Session) EnsureFullyLoaded() error {
 		return nil
 	}
 
+	// Already fully loaded — every entry is already in memory.
+	if s.fullyLoaded {
+		return nil
+	}
+
 	// Load full session from disk (non-lazy)
 	full, err := loadSessionFull(s.sessionDir)
 	if err != nil {
@@ -338,6 +349,7 @@ func (s *Session) EnsureFullyLoaded() error {
 	// Preserve leafID — it may have been changed by the caller.
 	// Preserve header — should be the same.
 	s.flushed = true
+	s.fullyLoaded = true
 
 	return nil
 }
