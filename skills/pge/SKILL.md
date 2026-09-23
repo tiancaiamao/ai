@@ -123,7 +123,7 @@ Design (用户需求)
 
 **One task at a time.** 不要在 Task 1 通过前启动 Task 2。
 
-**⚠️ 并发限制：** Generator + Evaluator = Orchestrator + 2 个子 agent = 3（无论 Orchestrator 自身是主 agent 还是 planner 子 agent，均计入基数），已达 `subagent` 技能的并发上限。Phase 4 spawn Review 前必须先 kill 当前 task 的 Generator 和 Evaluator。
+**⚠️ 并发限制：** 存活子 agent 总数不得超过 Orchestrator 实际能 watch 的数量——标准配置下 Generator + Evaluator + Orchestrator = 3（无论 Orchestrator 自身是主 agent 还是 planner 子 agent，均计入基数），已达 `subagent` 技能的并发上限。Phase 4 spawn Review 前必须先 kill 当前 task 的 Generator 和 Evaluator。
 
 ### Step 4: Phase Review & Commit Gate
 
@@ -228,7 +228,7 @@ Design (用户需求)
 
 | Scenario | Action |
 |----------|--------|
-| Generator 无响应 | 连续两轮 watch 无输出且 `git diff` 无变化 → kill → 有产出+build 通过: spawn Evaluator; 否则: 报告确认方 |
+| Generator 无响应（hung） | 连续两轮 watch 无输出且 `git diff` 无变化 → kill（hung 即 kill，不等硬超时）→ 有产出+build 通过: spawn Evaluator; 否则: 报告确认方 |
 | Generator outputs BLOCKED | Kill → address reason → respawn once |
 | Agent crash | Check rpc.log → retry with modified instructions |
 | Same task fails 3× | **Stop. Report to user.** |

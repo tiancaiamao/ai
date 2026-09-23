@@ -14,25 +14,50 @@
 mkdir -p .pge/tasks
 cat > .pge/tasks/task-add-jwt-auth.md << 'EOF'
 ## Task: Add JWT Auth Middleware
-## Context
-Go backend, gin framework. User model in src/models/user.go.
-**Before starting, read `.pge/state.md` for context from previous tasks.**
-## What to Implement
-JWT auth middleware that validates token from Authorization header,
-sets user context on success, returns 401 on failure.
-## Files
+
+## Goal
+JWT auth middleware: validate token from Authorization header, set user context
+on success, return 401 on failure. (Go backend, gin framework.)
+
+## Scope
 ### Read (context, do not modify)
 - src/models/user.go
 ### Write (expected changes)
 - src/middleware/auth.go (create)
 - src/routes/router.go (modify — add middleware to protected routes)
-## Verification
-cd /home/user/myproject && go build ./... && go test ./src/middleware/...
+
+## Estimated Size
+M
+
+## Dependencies
+none
+
+## Constraints
+no commit / no dependency install
+
+## Stop Conditions
+BLOCKED if: spec 与代码现实冲突 / 依赖的 API 不存在 / 需改动 Write 列表以外的文件
+
+## Acceptance
+cd /home/user/myproject && go build ./... && go test ./src/middleware/... (linked to spec criterion: 未认证请求返回 401)
+EOF
+
+cat > /tmp/task-add-jwt-auth.md << 'EOF'
+## Task: Add JWT Auth Middleware
+
+Project: Go backend, gin framework.
+
+**Your single source of truth is `.pge/tasks/task-add-jwt-auth.md` — read it first: Goal, Scope (Read/Write), Constraints, Stop Conditions, Acceptance.**
+**Before starting, also read `.pge/state.md` for context from previous tasks.**
+
 ## Rules
 1. READ BEFORE WRITE — grep 确认 API 存在再使用
-2. MODIFY ONLY WRITE FILES — 不要改动 Write 列表之外的文件
-3. BUILD MUST PASS — 实现后必须构建成功
-4. Output DONE: <file list> + 结果包（Verified: <验证命令及结果> / Risks: <风险，无则 none> / OpenQuestions: <待确认问题，无则 none>）
+2. STAY IN SCOPE — 只改动 task 文件 Scope.Write 列表内的文件
+3. ACCEPTANCE MUST PASS — task 文件 Acceptance 节中的所有命令必须通过
+4. Output `DONE: <file list>` when complete
+5. **DONE 回传格式** — `Verified:` / `Risks:` / `OpenQuestions:`（无则 none），依据必须说明
+6. **On DONE, write to `.pge/progress.md`**（追加）
+7. **BLOCKED if stuck** — 命中 Stop Conditions 时输出 `BLOCKED: <reason>`，不要猜测实现
 EOF
 
 # 写 progress.md
@@ -48,7 +73,7 @@ ID_FILE="/tmp/agent-$RUN_ID-gen-jwt.id"
 
 tmux new-session -d -s "$TMUX_SESSION" \
   "ai serve --role coder \
-   --input-file .pge/tasks/task-add-jwt-auth.md \
+   --input-file /tmp/task-add-jwt-auth.md \
    --name 'gen-jwt' \
    --id-file $ID_FILE \
    --timeout 10m"
