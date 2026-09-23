@@ -5,7 +5,7 @@ Reply "confirm" to compact now, or "reject" to continue.
 Choose "reject" only if you need specific details from earlier messages for your very next action.
 
 If you reject, you may add a second line with a brief reason.
-If you have been using planning-related tools or skills, this is a good time to review and update progress before rejecting.
+If you have been using planning-related tools or skills (like todo-writer), this is a good time to review and update progress before rejecting.
 Even after compaction, full message history remains queryable via the session-history skill (ai history), so compacting does not destroy the details.
 
 Reply with a single word on the first line: confirm or reject. Do not use any tools. Do not reply in any other language.
