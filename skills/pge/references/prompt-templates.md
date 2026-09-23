@@ -15,33 +15,20 @@
 
 ## Generator Prompt 模板
 
-写入 `/tmp/task-{name}.md`，作为 `--input-file` 传入：
+写入 `/tmp/task-{name}.md`，作为 `--input-file` 传入。内容是**纯 wrapper**——task 文件（`.pge/tasks/task-{name}.md`）是唯一内容来源，wrapper 不复述 Goal/Scope/Acceptance，只引用它并附加流程规则，避免两处内容漂移：
 
 ```markdown
 ## Task: {title}
 
-## Context
-{简要项目背景，帮助 Generator 理解代码库}
-**Before starting, read `.pge/state.md` for context from previous tasks.**
-**Read `.pge/tasks/task-{name}.md` — it defines your Files scope, Constraints, and Stop Conditions.**
+Project: {一句话项目背景 — 框架/语言/关键路径}
 
-## What to Implement
-{具体的实现要求，给 WHAT 不给 HOW}
-
-## Files
-### Read (context, do not modify)
-{文件列表 — You may grep the entire codebase for API verification}
-
-### Write (expected changes)
-{文件列表 — Kitchen Sink 检查会对比此范围}
-
-## Verification
-{构建命令 + 测试命令 — 所有命令必须通过}
+**Your single source of truth is `.pge/tasks/task-{name}.md` — read it first: Goal, Scope (Read/Write), Constraints, Stop Conditions, Acceptance.**
+**Before starting, also read `.pge/state.md` for context from previous tasks.**
 
 ## Rules
 1. READ BEFORE WRITE — grep 确认 API 存在再使用
-2. MODIFY ONLY WRITE FILES — 不要改动 Write 列表之外的文件
-3. VERIFICATION MUST PASS — Verification 节中的所有命令（build + test）必须通过
+2. STAY IN SCOPE — 只改动 task 文件 Scope.Write 列表内的文件
+3. ACCEPTANCE MUST PASS — task 文件 Acceptance 节中的所有命令必须通过
 4. Output `DONE: <file list>` when complete (file list: space-separated, relative to project root)
 5. **DONE 回传格式** — DONE 之后必须附上结果包（简洁，每项一行）：
    - `Verified:` 本任务实际运行过的验证命令及结果
@@ -49,7 +36,7 @@
    - `OpenQuestions:` 仍需 Orchestrator 确认的问题，无则写 `none`
    - 完整执行轨迹不需要回传，但支撑判断的依据（关键决策对应 spec 哪条）必须说明
 6. **On DONE, write to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] GENERATOR | {task-name} DONE. Write: <file list> | Risks: <...> | Open: <...>\" >> .pge/progress.md"`
-7. **BLOCKED if stuck** — 参考 task 文件的 Stop Conditions 节。遇到停止条件（需求矛盾、API/输入不存在、需要越出 Write 范围的实现文件；按 PGE 规则写 `.pge/` 流程日志不算越界），输出 `BLOCKED: <reason>`，不要猜测实现
+7. **BLOCKED if stuck** — 命中 task 文件 Stop Conditions 节列出的任一条件（需求矛盾、API/输入不存在、需要改动 Scope.Write 之外的文件）时，输出 `BLOCKED: <reason>`，不要猜测实现。写 `.pge/` 流程日志不算越界
 ```
 
 ---
@@ -107,7 +94,7 @@ ai serve --role reviewer --name review-{phase} --input-file /tmp/review-{phase}.
 Review all code changes in this phase:
 cd {project_dir} && git diff $(cat .pge/phase-start-commit)
 
-(Phase 3 各 task 已独立 commit，`git diff $(cat .pge/phase-start-commit)` 显示相位基线以来的累计变更)
+(Step 3 各 task 已独立 commit，`git diff $(cat .pge/phase-start-commit)` 显示相位基线以来的累计变更)
 
 Look for: memory safety, GC correctness, error handling, type safety, dead code.
 Write findings to .pge/review-phase{N}.md with priority levels (P0-P3).
