@@ -18,12 +18,7 @@ When instructions conflict:
 
 ## Task Specs
 
-Every task is a self-contained spec file — sub-agents have NO access to this conversation. It must contain:
-- **Goal** — the outcome, not the method.
-- **Context** — repo paths, symbols, prior findings the Generator needs.
-- **Acceptance criteria** — the commands/tests that prove done.
-- **Constraints** — safety, style, and any user-locked interfaces.
-- **Out of scope** — what not to touch.
+Every task is a self-contained spec file — sub-agents have NO access to this conversation. The spec must carry everything the executing agent needs to work independently: goal, context, verifiable acceptance criteria, constraints, and explicit scope boundaries.
 
 ## Delegation Rules
 
