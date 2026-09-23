@@ -28,12 +28,15 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return nil
 	}
 
+	command, _ := evt["command"].(string)
 	// /new → {sessionId, cancelled} — not displayed; the session_switch event
-	// that follows handles it. /fork also carries {cancelled} without
-	// {sessionId}, so check both fields.
+	// that follows handles it. /fork also carries {cancelled} and {sessionId},
+	// but sets the {sessionName} that /new never sets, so it stays visible.
 	if _, hasCancelled := dataRaw["cancelled"]; hasCancelled {
 		if _, hasSessionID := dataRaw["sessionId"]; hasSessionID {
-			return nil
+			if _, hasName := dataRaw["sessionName"]; !hasName && command != "fork" {
+				return nil
+			}
 		}
 	}
 
@@ -41,7 +44,6 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	// shapes that detection alone cannot distinguish (/resume vs /session).
 	// Callers without a command name (FormatResponseData) fall back to shape
 	// detection inside the shared renderer.
-	command, _ := evt["command"].(string)
 	if text := app.FormatCommandResult(command, dataRaw); text != "" {
 		kind := KindMeta
 		if _, hasSessions := dataRaw["sessions"]; hasSessions {

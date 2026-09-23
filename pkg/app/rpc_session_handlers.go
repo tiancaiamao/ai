@@ -207,10 +207,14 @@ func (app *App) handleRewind(args string) (any, error) {
 		}
 	}
 
-	// Resolve index-based reference (e.g. "/rewind 5" → message at index 5 in /messages).
+	// Resolve index-based reference (e.g. "/rewind 5" → message at index 5 in
+	// /messages). An exact entry id wins over the index reading: entry ids are
+	// 8 hex characters, so roughly 2% of them are all digits.
 	if entryID != "root" {
-		if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
-			entryID = resolved
+		if _, ok := app.sess.GetEntry(entryID); !ok {
+			if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
+				entryID = resolved
+			}
 		}
 	}
 
@@ -286,14 +290,34 @@ func (app *App) handleFork(args string) (any, error) {
 		return nil, err
 	}
 
-	// Resolve index-based reference (e.g. "/fork 5" → message at index 5 in /messages).
-	if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
-		entryID = resolved
+	// Resolve the target. An exact entry id wins over the /messages index
+	// reading: entry ids are 8 hex characters, so roughly 2% of them are all
+	// digits and would otherwise be rejected as an out-of-range index.
+	target := entryID
+	if _, ok := app.sess.GetEntry(target); !ok {
+		if resolved, ok := resolveMessageIndex(app.ag, app.sess, target); ok {
+			entryID = resolved
+		} else if idx, err := strconv.Atoi(target); err == nil {
+			// A numeric target is an index into /messages, which lists
+			// ag.GetMessages() in order. Failing to resolve it means there is
+			// no session entry to branch from.
+			if n := len(app.ag.GetMessages()); idx < 0 || idx >= n {
+				return nil, fmt.Errorf("index %d out of range: session has %d messages", idx, n)
+			}
+			return nil, fmt.Errorf("index %d has no session entry (compacted summary or unsaved message); pick another index or pass an entryId", idx)
+		}
 	}
 
 	entry, ok := app.sess.GetEntry(entryID)
-	if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
-		return nil, fmt.Errorf("invalid entryId: %s", entryID)
+	if !ok {
+		return nil, fmt.Errorf("entryId %s not found in session", target)
+	}
+
+	if entry.Type != session.EntryTypeMessage || entry.Message == nil {
+		return nil, fmt.Errorf("entryId %s is not a message; /fork needs a user message", target)
+	}
+	if entry.Message.Role != "user" {
+		return nil, fmt.Errorf("%s is not a user message (role: %s); /fork needs a user message (see /messages)", describeTarget(target, entryID), entry.Message.Role)
 	}
 
 	text := entry.Message.ExtractText()
@@ -316,7 +340,16 @@ func (app *App) handleFork(args string) (any, error) {
 	app.setSession(newSess, newSessionID, name)
 
 	slog.Info("Forked to new session", "name", name, "id", newSessionID)
-	return &ForkResult{Cancelled: false, Text: text}, nil
+	return &ForkResult{Cancelled: false, Text: text, SessionID: newSessionID, SessionName: name}, nil
+}
+
+// describeTarget names the user-supplied fork target together with the entry id
+// it resolved to, so "invalid target" errors stay traceable to what was typed.
+func describeTarget(target, entryID string) string {
+	if target == entryID {
+		return fmt.Sprintf("entryId %s", target)
+	}
+	return fmt.Sprintf("index %s (entryId %s)", target, entryID)
 }
 
 func (app *App) handleSessionGetState() (any, error) {
@@ -361,6 +394,13 @@ func (app *App) handleSessionGetState() (any, error) {
 func (app *App) handleGetForkMessages(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_fork_messages")
+	// Lazy loading may leave pre-compaction messages represented by synthetic
+	// entries whose IDs are discarded by EnsureFullyLoaded. Load the full
+	// session so every entryId handed to the client is stable and usable by
+	// /fork and /rewind.
+	if err := app.sess.EnsureFullyLoaded(); err != nil {
+		return nil, err
+	}
 	forkMessages := app.sess.GetUserMessagesForForking()
 	result := make([]ForkMessage, 0, len(forkMessages))
 	for _, msg := range forkMessages {
@@ -375,6 +415,13 @@ func (app *App) handleGetForkMessages(args string) (any, error) {
 func (app *App) handleGetTree(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_tree")
+	// Lazy loading may leave pre-compaction messages represented by synthetic
+	// entries whose IDs are discarded by EnsureFullyLoaded. Load the full
+	// session so every entryId handed to the client is stable and usable by
+	// /fork and /rewind.
+	if err := app.sess.EnsureFullyLoaded(); err != nil {
+		return nil, err
+	}
 	entries := app.sess.GetEntries()
 	tree := buildTreeEntries(entries, app.sess.GetLeafID())
 	return map[string]any{"entries": tree}, nil

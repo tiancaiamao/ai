@@ -100,6 +100,12 @@ when a live prompt has finished.
 
 Operational commands such as `/model`, `/compact`, `/help`, `/resume`, and `/fork` are sent as text through `session/prompt`. See `pkg/command` for the registry.
 
+A command answers with one `agent_message_chunk` carrying its rendered result,
+followed by `stopReason` `end_turn`; no agent turn runs. A command that fails
+answers with a JSON-RPC error *and* an `agent_message_chunk` carrying the same
+reason as text, because interactive clients render chunks but drop request
+errors.
+
 ## Error handling
 
 Errors use standard JSON-RPC error responses. Streaming failures and diagnostics are exposed through the `_error` ACP session update.
