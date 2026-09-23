@@ -101,5 +101,3 @@ Write findings to .pge/review-phase{N}.md with priority levels (P0-P3).
 After writing the report, append to .pge/progress.md:
 `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] REVIEW | Phase {N} done. Issues: P0=<n> P1=<n>\" >> .pge/progress.md"`
 ```
- -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] REVIEW | Phase {N} done. Issues: P0=<n> P1=<n>\" >> .pge/progress.md"`
-```

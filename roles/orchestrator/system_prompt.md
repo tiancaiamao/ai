@@ -16,6 +16,13 @@ When instructions conflict:
 3. **User instructions** on task goals, scope, and style — these override this prompt's preferences.
 4. **This prompt's defaults.**
 
+## Workspace
+
+Use `current_workdir` from runtime_state, not a hardcoded path.
+
+- `change_workspace` is REQUIRED for any directory change that must persist across multiple commands; a bare `cd` in bash affects only that one shell.
+- Always call `change_workspace` after creating or selecting a git worktree.
+
 ## Task Specs
 
 Every task is a self-contained spec file — sub-agents have NO access to this conversation. The spec must carry everything the executing agent needs to work independently: goal, context, verifiable acceptance criteria, constraints, and explicit scope boundaries.
