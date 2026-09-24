@@ -37,6 +37,14 @@ explicitly placed for this project (or passed via an explicit path), so
 hiding them behind a global usage ranking contradicted their intent — they
 are now always visible.
 
+Because `Save` now runs on every prompt build (to persist `LastShown`) and
+the stats file is shared by all agent processes, concurrent saves no longer
+overwrite each other: `Save` first merges the on-disk copy monotonically
+(per-entry max of Score/Count/LastUsed/LastShown, union of entries) before
+the atomic temp+rename write. A skill's score therefore never decreases on
+disk; concurrent sessions may decay slightly slower than one step per
+session, which is harmless for ranking.
+
 ## Compaction snapshots are named by entry id (2026-09)
 
 **What changed**: Snapshot files are now `compactions/compaction_<entry-id>.jsonl`

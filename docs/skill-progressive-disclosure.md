@@ -303,9 +303,9 @@ Pass it through to `FormatForPrompt(skills, skillStats)`.
 - After a few sessions, stats accumulate and auto-ranking kicks in
 
 ### Concurrent access to skill-stats.json
-- Two agent processes writing simultaneously → possible data loss (last-write-wins on the overwritten field)
-- **Mitigation**: Use `os.OpenFile` with `O_WRONLY|O_CREATE|O_TRUNC` and keep writes small
-- **Acceptable risk**: Losing a single +1 is inconsequential for ranking
+- Multiple agent processes share one `~/.ai/skill-stats.json` and each holds an in-memory copy
+- **Mitigation**: `Save` merges the on-disk copy monotonically before writing (per-entry max of Score/Count/LastUsed/LastShown, union of entries), then writes atomically via temp file + rename
+- **Residual effect**: a stale process can't delete or lower another process's updates; scores never decrease on disk, so concurrent sessions decay slightly slower than one step per session — harmless for ranking
 
 ### find_skill with no results
 - Return helpful message: `"No skills found matching 'xyz'. Use find_skill with a different keyword."`

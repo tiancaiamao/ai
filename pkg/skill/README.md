@@ -114,7 +114,9 @@ is called once per session start and multiplies every score by
 `0.5^(1/4)` (half-life = 4 agent sessions), while `RecordUsage` adds +1 on top
 of the decayed score. Idle time never decays scores. `RecordShown` marks which
 skills appeared in the prompt (LastShown), which drives the exploration
-rotation; `Save` is a no-op when no file path is set.
+rotation; `Save` is a no-op when no file path is set, and otherwise merges
+the on-disk copy monotonically (per-entry max, union of entries) before the
+atomic write, so concurrent agent processes don't clobber each other's updates.
 
 ```go
 func (s *SkillStatsFile) SortByScore(names []string) []string // Rank names by decayed usage; unknown names last, stable order

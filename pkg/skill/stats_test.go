@@ -316,3 +316,67 @@ func TestStatsSaveLoadRoundtrip(t *testing.T) {
 		t.Fatalf("saved file is not valid JSON: %v", err)
 	}
 }
+
+// TestStatsSaveMergesConcurrentEntries verifies that Save merges with the
+// on-disk copy (per-entry max, union of entries) instead of last-write-wins,
+// so concurrent agent processes don't clobber each other's updates.
+func TestStatsSaveMergesConcurrentEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+
+	// Another process's state on disk: newer "a" values, plus "c" we don't know about.
+	diskState := &SkillStatsFile{
+		Version: statsVersion,
+		TopN:    DefaultTopN,
+		Entries: map[string]*SkillUsageEntry{
+			"a": {Name: "a", Count: 5, Score: 10, LastUsed: time.Now().Add(time.Hour), LastShown: time.Now().Add(2 * time.Hour)},
+			"c": {Name: "c", Count: 1, Score: 1},
+		},
+		FilePath: path,
+	}
+	if err := diskState.Save(); err != nil {
+		t.Fatalf("seed Save failed: %v", err)
+	}
+
+	// Our process loaded the file earlier (stale "a"), recorded "b" in the meantime.
+	ours := &SkillStatsFile{
+		Version: statsVersion,
+		TopN:    DefaultTopN,
+		Entries: map[string]*SkillUsageEntry{
+			"a": {Name: "a", Count: 3, Score: 8, LastUsed: time.Now().Add(-time.Hour)},
+			"b": {Name: "b", Count: 2, Score: 4, LastUsed: time.Now()},
+		},
+		FilePath: path,
+	}
+	if err := ours.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	merged := LoadStats(path)
+	if len(merged.Entries) != 3 {
+		t.Fatalf("expected 3 entries after merge, got %d", len(merged.Entries))
+	}
+
+	a := merged.Entries["a"]
+	if a == nil {
+		t.Fatal("a not found")
+	}
+	if a.Score != 10 {
+		t.Errorf("a.Score: expected max 10, got %v", a.Score)
+	}
+	if a.Count != 5 {
+		t.Errorf("a.Count: expected max 5, got %d", a.Count)
+	}
+	if a.LastUsed.IsZero() {
+		t.Errorf("a.LastUsed: expected newer timestamp from disk, got zero")
+	}
+	if a.LastShown.IsZero() {
+		t.Errorf("a.LastShown: expected newer timestamp from disk, got zero")
+	}
+
+	if b := merged.Entries["b"]; b == nil || b.Score != 4 {
+		t.Errorf("b: expected our entry to survive merge, got %+v", b)
+	}
+	if c := merged.Entries["c"]; c == nil || c.Score != 1 {
+		t.Errorf("c: expected disk-only entry to be merged in, got %+v", c)
+	}
+}

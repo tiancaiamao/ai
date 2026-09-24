@@ -152,12 +152,55 @@ func (s *SkillStatsFile) LastShownOf(name string) time.Time {
 	return time.Time{}
 }
 
+// mergeWithDisk folds the on-disk entries into s so a Save from a concurrent
+// process doesn't overwrite updates that happened since s loaded the file.
+// The merge is monotonic: per-entry max of Score/Count/LastUsed/LastShown,
+// union of entries. Consequence: a skill's score never decreases on disk, so
+// concurrent sessions decay slightly slower than one step per session —
+// harmless for ranking. A missing or unreadable file is ignored (fresh start).
+func (s *SkillStatsFile) mergeWithDisk() {
+	data, err := os.ReadFile(s.FilePath)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	var existing SkillStatsFile
+	if err := json.Unmarshal(data, &existing); err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, e := range existing.Entries {
+		ours, ok := s.Entries[name]
+		if !ok {
+			s.Entries[name] = e
+			continue
+		}
+		if e.Score > ours.Score {
+			ours.Score = e.Score
+		}
+		if e.Count > ours.Count {
+			ours.Count = e.Count
+		}
+		if e.LastUsed.After(ours.LastUsed) {
+			ours.LastUsed = e.LastUsed
+		}
+		if e.LastShown.After(ours.LastShown) {
+			ours.LastShown = e.LastShown
+		}
+	}
+}
+
 // Save writes the stats to s.FilePath atomically using write-to-temp + rename.
-// The caller must NOT hold s.mu; Save acquires it internally.
+// Before writing, it merges the on-disk copy (mergeWithDisk) so concurrent
+// agent processes sharing the same stats file don't clobber each other's
+// updates with a stale in-memory snapshot. The caller must NOT hold s.mu;
+// Save acquires it internally.
 func (s *SkillStatsFile) Save() error {
 	if s.FilePath == "" {
 		return nil // nothing to persist (e.g. stats built in tests)
 	}
+	s.mergeWithDisk()
+
 	s.mu.Lock()
 	data, err := json.MarshalIndent(s, "", "  ")
 	s.mu.Unlock()
