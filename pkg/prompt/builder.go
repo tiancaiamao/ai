@@ -146,6 +146,11 @@ func (b *Builder) BuildSkillsMessage() string {
 	skillsText := ""
 	if len(b.skills) > 0 {
 		skillsText = skill.FormatForPrompt(b.skills, b.skillStats)
+		if b.skillStats != nil {
+			// Persist LastShown (set by FormatForPrompt for the exploration
+			// rotation) so the next session ranks rotation correctly.
+			_ = b.skillStats.Save()
+		}
 	}
 	if len(b.skillWarnings) > 0 {
 		if skillsText != "" {

@@ -3,6 +3,51 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Skill score decay is measured in agent sessions, not wall-clock (2026-09)
+
+**What changed**: `SkillStatsFile` no longer computes
+`Score = Count * 0.5^(hours_since_last_use / 168)` at ranking time. Instead,
+`DecayForNewSession()` multiplies every entry's stored score by `0.5^(1/4)`
+(half-life = 4 agent sessions), and `RecordUsage` adds +1 on top of the
+decayed score. `pkg/app` calls the decay step exactly once per session start
+(right after `LoadStats`), and `TopSkills`/`SortByScore` rank by the stored
+score directly.
+
+The top-N prompt selection now also reserves 2 exploration slots: the
+exploitation slots take the highest decayed scores, and the remaining slots
+are filled by the least recently *shown* skills (`LastShown`, recorded via
+`RecordShown` on every prompt build). Pinned skills and project-local skills
+(`.agents/skills/` source `project`, explicit `path`) are always listed and
+no longer compete in the ranking.
+
+**Why**: The wall-clock formula only decayed against `LastUsed` on a
+cumulative `Count`, so a single 50-use burst dominated the top-N for months,
+and long idle gaps made every previously used skill decay to ~0 — while the
+agent sat unused, the ranking kept drifting away from reality. Decay that only
+counts agent sessions matches how the ranking is actually consumed: the
+top-N prompt injection happens per session, so one decay step per session
+start is the natural clock. Idle time is now a no-op, and burst usage fades in
+a bounded number of sessions.
+
+Pure exploitation also starved long-tail skills: a skill that lost the
+top-N once would never re-enter the prompt (no exposure → no usage → no
+score). The exploration slots rotate the least recently shown skills through,
+so every skill keeps a chance to be picked up again. And project skills were
+explicitly placed for this project (or passed via an explicit path), so
+hiding them behind a global usage ranking contradicted their intent — they
+are now always visible.
+
+Because `Save` now runs on every prompt build (to persist `LastShown`) and
+the stats file is shared by all agent processes, concurrent saves no longer
+overwrite each other: `Save` first merges the on-disk copy monotonically —
+effective scores compared at the larger of the two files' decay steps,
+per-entry max of Count/LastUsed/LastShown, union of entries — before the
+atomic temp+rename write. An entry's effective value therefore never
+decreases across saves, and the merge stays correct even when the two sides
+are at different decay steps. This also fixes a subtle bug in the original
+implementation, where the in-place decay mutated stored scores and the
+per-entry max merge then restored the pre-decay value from disk on every
+save, nullifying decay entirely.
 ## Truncated tool output is offloaded to a file (2026-09)
 
 **What changed**: When a tool's text output exceeds the 10,000-char truncation

@@ -290,3 +290,92 @@ func TestFormatForPromptPinnedColdStart(t *testing.T) {
 		t.Errorf("unpinned skills beyond topN should still be cut, got: %s", out)
 	}
 }
+
+func TestFormatForPromptProjectSkillAlwaysListed(t *testing.T) {
+	// 12 user skills plus one project skill with no usage stats: the project
+	// skill must be listed even though it loses every ranking.
+	skills := make([]Skill, 0, 13)
+	for i := 0; i < 12; i++ {
+		skills = append(skills, Skill{
+			Name: fmt.Sprintf("skill-%d", i), Description: "d", FilePath: "/tmp/s", Source: "user",
+		})
+	}
+	skills = append(skills, Skill{Name: "proj-skill", Description: "d", FilePath: "/tmp/p", Source: "project"})
+
+	stats := &SkillStatsFile{
+		Version: 1,
+		TopN:    10,
+		Entries: map[string]*SkillUsageEntry{},
+	}
+	for i := 0; i < 12; i++ {
+		name := fmt.Sprintf("skill-%d", i)
+		stats.Entries[name] = &SkillUsageEntry{Name: name, Count: i + 1, LastUsed: time.Now(), Score: float64(i + 1)}
+	}
+
+	out := FormatForPrompt(skills, stats)
+	if !strings.Contains(out, "- **proj-skill**") {
+		t.Errorf("project skill should always be listed, got: %s", out)
+	}
+	// skill-11 (highest score) stays; skill-2 (low score, recently shown
+	// rotation lost to proj-skill/skill-0) is cut by topN.
+	if !strings.Contains(out, "- **skill-11**") {
+		t.Errorf("highest-ranked user skill should be listed, got: %s", out)
+	}
+	if strings.Contains(out, "- **skill-2**") {
+		t.Errorf("low-ranked user skill should be cut, got: %s", out)
+	}
+	// No duplication.
+	if n := strings.Count(out, "- **proj-skill**"); n != 1 {
+		t.Errorf("project skill should appear exactly once, got %d", n)
+	}
+}
+
+func TestFormatForPromptExplorationPicksLeastRecentlyShown(t *testing.T) {
+	// topN=3: 1 exploitation + 2 exploration. Exploration must prefer the
+	// never-shown skill over the recently shown one.
+	skills := []Skill{
+		{Name: "hot", Description: "d", FilePath: "/tmp/h"},
+		{Name: "shown-1h", Description: "d", FilePath: "/tmp/s1"},
+		{Name: "never-shown", Description: "d", FilePath: "/tmp/n"},
+		{Name: "shown-2h", Description: "d", FilePath: "/tmp/s2"},
+	}
+
+	now := time.Now()
+	stats := &SkillStatsFile{
+		Version: 1,
+		TopN:    3,
+		Entries: map[string]*SkillUsageEntry{
+			"hot":         {Name: "hot", Count: 50, LastUsed: now, Score: 50},
+			"shown-1h":    {Name: "shown-1h", Count: 3, LastUsed: now, Score: 3, LastShown: now.Add(-1 * time.Hour)},
+			"shown-2h":    {Name: "shown-2h", Count: 2, LastUsed: now, Score: 2, LastShown: now.Add(-2 * time.Hour)},
+			"never-shown": {Name: "never-shown", Count: 0, LastUsed: now, Score: 0},
+		},
+	}
+
+	out := FormatForPrompt(skills, stats)
+
+	// hot (exploit) + never-shown + shown-2h (2 exploration slots, least
+	// recently shown first).
+	if !strings.Contains(out, "- **hot**") {
+		t.Error("expected hot (top ranked) in output")
+	}
+	if !strings.Contains(out, "- **never-shown**") {
+		t.Errorf("expected never-shown skill in exploration slot, got: %s", out)
+	}
+	if !strings.Contains(out, "- **shown-2h**") {
+		t.Errorf("expected shown-2h (older than shown-1h) in exploration slot, got: %s", out)
+	}
+	if strings.Contains(out, "- **shown-1h**") {
+		t.Errorf("shown-1h is the most recently shown and should be cut, got: %s", out)
+	}
+
+	// RecordShown must have marked the selected skills.
+	for _, name := range []string{"hot", "never-shown", "shown-2h"} {
+		if stats.LastShownOf(name).IsZero() {
+			t.Errorf("expected LastShown recorded for %s", name)
+		}
+	}
+	if !stats.LastShownOf("shown-1h").Before(stats.LastShownOf("hot")) {
+		t.Errorf("shown-1h LastShown must stay older than the freshly recorded one")
+	}
+}
