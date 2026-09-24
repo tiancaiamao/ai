@@ -13,14 +13,17 @@ import (
 func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
 	cfg := &Config{AutoCompact: true}
 	compactor := NewCompactor(cfg, llm.Model{}, "", "", 100_000, "")
+	if cfg.LLMDecide != nil {
+		t.Fatal("expected caller config to remain unchanged")
+	}
+	if compactor.config.LLMDecide == nil {
+		t.Fatal("expected compactor to use default LLMDecide config")
+	}
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage(strings.Repeat("x", 2000))},
 	}
 	if compactor.ShouldCompact(context.Background(), agentCtx) {
 		t.Fatal("expected default soft threshold to avoid compaction")
-	}
-	if cfg.LLMDecide == nil {
-		t.Fatal("expected default LLMDecide config to be initialized")
 	}
 
 	agentCtx.RecentMessages = []agentctx.AgentMessage{

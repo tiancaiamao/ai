@@ -165,7 +165,12 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 	if config == nil {
 		config = DefaultConfig()
 	}
-	if config.LLMDecide == nil {
+	cfgCopy := *config
+	config = &cfgCopy
+	if cfgCopy.LLMDecide != nil {
+		llmCfg := *cfgCopy.LLMDecide
+		config.LLMDecide = &llmCfg
+	} else {
 		defaults := DefaultLLMDecideConfig(contextWindow)
 		config.LLMDecide = &defaults
 	}
