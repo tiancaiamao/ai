@@ -442,6 +442,14 @@ func loadSkills(agentDir string, cwd string, registry *tools.Registry, statsPath
 	}
 
 	skillStats := skill.LoadStats(statsPath)
+	// Skill "time" advances per agent session, not wall-clock time: apply
+	// one decay step at session start so idle time does not decay scores.
+	if len(skillStats.Entries) > 0 {
+		skillStats.DecayForNewSession()
+		if err := skillStats.Save(); err != nil {
+			slog.Warn("Failed to save skill stats", "error", err)
+		}
+	}
 	registry.Register(tools.NewFindSkillTool(skillResult.Skills, skillStats))
 
 	return skillResult, skillStats

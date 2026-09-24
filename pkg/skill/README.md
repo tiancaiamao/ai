@@ -101,11 +101,16 @@ type SkillStatsFile struct { ... }
 
 func LoadStats(path string) *SkillStatsFile
 func (s *SkillStatsFile) RecordUsage(skillName string)
+func (s *SkillStatsFile) DecayForNewSession()
 func (s *SkillStatsFile) Save() error
 func (s *SkillStatsFile) TopSkills(n int) []string
 ```
 
-Tracks skill usage with half-life decay (168 hours) for progressive disclosure ranking.
+Tracks skill usage with session-based decay for progressive disclosure ranking.
+"Time" advances in agent sessions, not wall-clock time: `DecayForNewSession`
+is called once per session start and multiplies every score by
+`0.5^(1/4)` (half-life = 4 agent sessions), while `RecordUsage` adds +1 on top
+of the decayed score. Idle time never decays scores.
 
 ```go
 func (s *SkillStatsFile) SortByScore(names []string) []string // Rank names by decayed usage; unknown names last, stable order

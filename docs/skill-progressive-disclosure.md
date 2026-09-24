@@ -3,7 +3,7 @@
 ## Goals
 
 - Progressive disclosure: only top-N high-frequency skills in the per-turn agent context prefix, rest discoverable via `find_skill` tool
-- Usage tracking with time decay to auto-rank skills by relevance
+- Usage tracking with session-based decay to auto-rank skills by relevance (one decay step per agent session start, not wall-clock)
 - LLM-generated search index for semantic skill discovery (aliases, use-when, categories)
 
 ## Non-Goals
@@ -117,21 +117,24 @@ type SkillStatsFile struct {
 // Returns empty stats with defaults if file doesn't exist.
 func LoadStats(path string) (*SkillStatsFile, error)
 
-// RecordUsage increments count and updates last_used for a skill.
-// Writes to disk immediately.
-func (s *SkillStatsFile) RecordUsage(skillName string) error
+// RecordUsage records one use: Count++ and Score += 1 on top of the
+// session-decayed value.
+func (s *SkillStatsFile) RecordUsage(skillName string)
 
-// TopSkills returns the top N skill names by decay score.
-// Score = count * exp(-0.1 * days_since_last_use)
-// 7-day half-life: skills not used in ~7 days drop significantly.
+// DecayForNewSession applies one decay step (Score *= 0.5^(1/4)) to all
+// entries. Called once per agent session start.
+func (s *SkillStatsFile) DecayForNewSession()
+
+// TopSkills returns the top N skill names by (session-decayed) score.
 func (s *SkillStatsFile) TopSkills(n int) []string
 ```
 
-**Decay formula**: `score = count * e^(-0.1 * days_since_last_use)`
-- Used today (0 days): score = count × 1.0
-- Used 7 days ago: score = count × 0.5
-- Used 30 days ago: score = count × 0.05
-- A skill used 10 times 30 days ago (score 0.5) loses to a skill used once today (score 1.0)
+**Decay formula** (session-based): each agent session start multiplies every
+score by `0.5^(1/4)`; each use adds +1. Half-life = 4 agent sessions. Wall
+clock does not matter — a skill kept unused while the agent is idle keeps its
+score, and a skill used 50 times in one burst fades out after ~40 idle sessions
+rather than dominating for months. (Originally designed as a wall-clock
+half-life; revised so decay only counts sessions where the agent actually ran.)
 
 ### 4.2 New file: `~/.ai/skill-index.json` — LLM-generated search index
 
@@ -317,7 +320,7 @@ Pass it through to `FormatForPrompt(skills, skillStats)`.
 
 | File | Purpose |
 |------|---------|
-| `pkg/skill/stats.go` | Usage tracking with time decay |
+| `pkg/skill/stats.go` | Usage tracking with session-based decay |
 | `pkg/skill/stats_test.go` | Unit tests for stats |
 | `pkg/tools/find_skill.go` | Discovery tool implementation |
 | `pkg/tools/find_skill_test.go` | Tool tests |

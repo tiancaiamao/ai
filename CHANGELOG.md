@@ -3,6 +3,25 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Skill score decay is measured in agent sessions, not wall-clock (2026-09)
+
+**What changed**: `SkillStatsFile` no longer computes
+`Score = Count * 0.5^(hours_since_last_use / 168)` at ranking time. Instead,
+`DecayForNewSession()` multiplies every entry's stored score by `0.5^(1/4)`
+(half-life = 4 agent sessions), and `RecordUsage` adds +1 on top of the
+decayed score. `pkg/app` calls the decay step exactly once per session start
+(right after `LoadStats`), and `TopSkills`/`SortByScore` rank by the stored
+score directly.
+
+**Why**: The wall-clock formula only decayed against `LastUsed` on a
+cumulative `Count`, so a single 50-use burst dominated the top-N for months,
+and long idle gaps made every previously used skill decay to ~0 — while the
+agent sat unused, the ranking kept drifting away from reality. Decay that only
+counts agent sessions matches how the ranking is actually consumed: the
+top-N prompt injection happens per session, so one decay step per session
+start is the natural clock. Idle time is now a no-op, and burst usage fades in
+a bounded number of sessions.
+
 ## Compaction snapshots are named by entry id (2026-09)
 
 **What changed**: Snapshot files are now `compactions/compaction_<entry-id>.jsonl`

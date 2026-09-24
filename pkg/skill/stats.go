@@ -29,10 +29,14 @@ type SkillStatsFile struct {
 }
 
 const (
-	statsVersion       = 1
-	DefaultTopN        = 10
-	decayHalfLifeHours = 168.0 // 1 week
+	statsVersion          = 1
+	DefaultTopN           = 10
+	decayHalfLifeSessions = 4.0 // score halves every 4 agent sessions
 )
+
+// sessionDecayFactor is the multiplier applied to every score once per
+// agent session start.
+var sessionDecayFactor = math.Pow(0.5, 1/decayHalfLifeSessions)
 
 // LoadStats reads skill usage statistics from a JSON file at path.
 // If the file is missing or contains invalid JSON, it returns an empty
@@ -87,20 +91,24 @@ func LoadStats(path string) *SkillStatsFile {
 	return s
 }
 
-// RecordUsage increments the usage count for skillName, updates LastUsed,
-// and recomputes Score using half-life decay:
-//
-//	Score = Count * 0.5^(hours_since_last_use / 168)
-//
-// For a new entry, hours_since_last_use is 0 so Score = Count.
-// For an existing entry, the previous LastUsed determines decay before
-// the increment. After incrementing Count and setting LastUsed to now,
-// Score is recomputed as the new Count (since hours since new LastUsed = 0).
-func (s *SkillStatsFile) RecordUsage(skillName string) {
+// DecayForNewSession applies one decay step to all skill scores. Call it
+// exactly once per agent session start, before the first usage record.
+// Time is measured in agent sessions, not wall-clock time: while the agent
+// is idle, scores do not decay.
+func (s *SkillStatsFile) DecayForNewSession() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
+	for _, entry := range s.Entries {
+		entry.Score *= sessionDecayFactor
+	}
+}
+
+// RecordUsage records one use of skillName: Count is incremented and Score
+// gains +1 on top of the session-decayed value.
+func (s *SkillStatsFile) RecordUsage(skillName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	entry, ok := s.Entries[skillName]
 	if !ok {
@@ -109,8 +117,8 @@ func (s *SkillStatsFile) RecordUsage(skillName string) {
 	}
 
 	entry.Count++
-	entry.LastUsed = now
-	entry.Score = float64(entry.Count)
+	entry.LastUsed = time.Now()
+	entry.Score++
 }
 
 // Save writes the stats to s.FilePath atomically using write-to-temp + rename.
@@ -146,20 +154,17 @@ func (s *SkillStatsFile) Save() error {
 	return os.Rename(tmpPath, s.FilePath)
 }
 
-// SortByScore returns the given names sorted by descending time-decayed score
-// (same decay as TopSkills). Names without a stats entry sort last, in input
-// order. Used to rank omitted skill names for the find_skill keyword hint.
+// SortByScore returns the given names sorted by descending score.
+// Names without a stats entry sort last, in input order. Used to rank
+// omitted skill names for the find_skill keyword hint.
 func (s *SkillStatsFile) SortByScore(names []string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
-
 	scores := make([]float64, len(names))
 	for i, name := range names {
 		if entry, ok := s.Entries[name]; ok {
-			hoursSince := now.Sub(entry.LastUsed).Hours()
-			scores[i] = entry.Score * math.Pow(0.5, hoursSince/decayHalfLifeHours)
+			scores[i] = entry.Score
 		}
 	}
 
@@ -178,14 +183,10 @@ func (s *SkillStatsFile) SortByScore(names []string) []string {
 	return result
 }
 
-// TopSkills returns up to n skill names sorted by descending time-decayed score.
-// The effective score for ranking applies decay based on time elapsed since
-// each skill's LastUsed:
-//
-//	effectiveScore = Score * 0.5^(hours_since_last_use / 168)
-//
-// which equals Count * 0.5^(hours_since_last_use / 168).
-// If n <= 0, it returns an empty slice.
+// TopSkills returns up to n skill names sorted by descending score. Scores
+// are session-decayed: DecayForNewSession is applied once per agent session
+// start, so idle time does not decay scores. If n <= 0, it returns an empty
+// slice.
 func (s *SkillStatsFile) TopSkills(n int) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,8 +195,6 @@ func (s *SkillStatsFile) TopSkills(n int) []string {
 		return nil
 	}
 
-	now := time.Now()
-
 	type scored struct {
 		name  string
 		score float64
@@ -203,9 +202,7 @@ func (s *SkillStatsFile) TopSkills(n int) []string {
 
 	candidates := make([]scored, 0, len(s.Entries))
 	for name, entry := range s.Entries {
-		hoursSince := now.Sub(entry.LastUsed).Hours()
-		effectiveScore := entry.Score * math.Pow(0.5, hoursSince/decayHalfLifeHours)
-		candidates = append(candidates, scored{name: name, score: effectiveScore})
+		candidates = append(candidates, scored{name: name, score: entry.Score})
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {

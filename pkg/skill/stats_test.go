@@ -135,7 +135,7 @@ func TestStatsRecordUsageIncrementsCount(t *testing.T) {
 	}
 }
 
-func TestStatsTimeDecayOldEntryLowerScore(t *testing.T) {
+func TestStatsSessionDecay(t *testing.T) {
 	s := &SkillStatsFile{
 		Version:  statsVersion,
 		TopN:     DefaultTopN,
@@ -145,15 +145,15 @@ func TestStatsTimeDecayOldEntryLowerScore(t *testing.T) {
 
 	now := time.Now()
 
-	// Old skill: used 2 weeks ago (336 hours), Count=5
+	// Scores are compared as stored: LastUsed no longer affects ranking.
+	// "old-skill" has the same score but was last used long ago — they tie
+	// and name order breaks the tie (old-skill before recent-skill).
 	s.Entries["old-skill"] = &SkillUsageEntry{
 		Name:     "old-skill",
 		Count:    5,
 		LastUsed: now.Add(-336 * time.Hour),
 		Score:    5.0,
 	}
-
-	// Recent skill: used just now, Count=5
 	s.Entries["recent-skill"] = &SkillUsageEntry{
 		Name:     "recent-skill",
 		Count:    5,
@@ -165,21 +165,25 @@ func TestStatsTimeDecayOldEntryLowerScore(t *testing.T) {
 	if len(top) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(top))
 	}
-	if top[0] != "recent-skill" {
-		t.Errorf("expected recent-skill first, got %s", top[0])
-	}
-	if top[1] != "old-skill" {
-		t.Errorf("expected old-skill second, got %s", top[1])
+	if top[0] != "old-skill" || top[1] != "recent-skill" {
+		t.Errorf("expected name-order tie-break [old-skill recent-skill], got %v", top)
 	}
 
-	// Verify the decay math: old-skill should have Score * 0.5^(336/168) = 5 * 0.25 = 1.25
-	oldEffective := 5.0 * math.Pow(0.5, 336.0/168.0)
-	recentEffective := 5.0 * math.Pow(0.5, 0)
-	if math.Abs(oldEffective-1.25) > 0.01 {
-		t.Errorf("expected old effective ~1.25, got %f", oldEffective)
+	// Four session-start decay steps halve every score.
+	for i := 0; i < 4; i++ {
+		s.DecayForNewSession()
 	}
-	if math.Abs(recentEffective-5.0) > 0.01 {
-		t.Errorf("expected recent effective ~5.0, got %f", recentEffective)
+	if math.Abs(s.Entries["old-skill"].Score-2.5) > 1e-9 {
+		t.Errorf("expected old-skill score ~2.5 after 4 sessions, got %f", s.Entries["old-skill"].Score)
+	}
+	if math.Abs(s.Entries["recent-skill"].Score-2.5) > 1e-9 {
+		t.Errorf("expected recent-skill score ~2.5 after 4 sessions, got %f", s.Entries["recent-skill"].Score)
+	}
+
+	// One use adds +1 on top of the decayed score.
+	s.RecordUsage("recent-skill")
+	if math.Abs(s.Entries["recent-skill"].Score-3.5) > 1e-9 {
+		t.Errorf("expected recent-skill score ~3.5 after one use, got %f", s.Entries["recent-skill"].Score)
 	}
 }
 
@@ -241,11 +245,12 @@ func TestStatsSortByScore(t *testing.T) {
 		TopN:    10,
 		Entries: map[string]*SkillUsageEntry{
 			"fresh": {Name: "fresh", Count: 10, LastUsed: time.Now(), Score: 10},
-			"stale": {Name: "stale", Count: 10, LastUsed: time.Now().Add(-24 * time.Hour), Score: 10},
+			"stale": {Name: "stale", Count: 12, LastUsed: time.Now().Add(-24 * time.Hour), Score: 5},
 		},
 	}
 
-	// "missing" has no stats entry: must sort last.
+	// Scores are compared as stored (session-decayed); "stale" has a lower
+	// decayed score, "fresh" a higher one.
 	got := s.SortByScore([]string{"stale", "missing", "fresh"})
 	if len(got) != 3 || got[0] != "fresh" || got[1] != "stale" || got[2] != "missing" {
 		t.Errorf("expected [fresh stale missing], got %v", got)
