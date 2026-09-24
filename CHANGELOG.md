@@ -3,6 +3,22 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Compaction snapshots are named by entry id (2026-09)
+
+**What changed**: Snapshot files are now `compactions/compaction_<entry-id>.jsonl`
+(named after the compaction entry's id) instead of sequential
+`compaction_%05d.jsonl` numbering.
+
+**Why**: The sequence number was derived from the in-memory compaction entry
+count. A lazy-load resume keeps only the *last* compaction entry in memory, so
+after a restart the count is lower than the number of snapshot files on disk —
+the next compaction reused an earlier file name and silently replaced its
+snapshot. In the wild this made `ai history` report a stale window's content
+for the older compaction and would load the wrong context for a rewind to that
+point. Entry ids are unique, so the file name is stable across resumes. Old
+sessions keep working: readers follow the `snapshotRef` stored in each entry,
+never the file name.
+
 ## Slash-command failures are visible to clients (2026-09)
 
 **What changed**: A slash command that fails now emits its reason as an

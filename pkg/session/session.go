@@ -208,16 +208,21 @@ func (s *Session) AppendCompaction(summary string, messages []agentctx.AgentMess
 	defer s.mu.Unlock()
 
 	var snapshotRef string
+	entryID := generateEntryID(s.byID)
 	if s.sessionDir != "" {
-		// Assign sequential snapshot file name based on existing compaction entries.
-		count := 0
-		for _, e := range s.entries {
-			if e.Type == EntryTypeCompaction {
-				count++
-			}
-		}
-		name := fmt.Sprintf("compaction_%05d.jsonl", count+1)
+		// Name the snapshot file after the entry ID. Sequential numbering
+		// (compaction_%05d) derived from the in-memory compaction entry count
+		// could collide after a lazy-load resume (which keeps fewer entries in
+		// memory than exist on disk), silently overwriting an earlier snapshot.
+		// Entry IDs are unique, so the name is stable across resumes.
+		name := fmt.Sprintf("compaction_%s.jsonl", entryID)
 		snapshotPath := filepath.Join(s.sessionDir, "compactions", name)
+		// Extremely unlikely ID collision with a stale file on disk:
+		// disambiguate instead of overwriting.
+		if _, err := os.Stat(snapshotPath); err == nil {
+			name = fmt.Sprintf("compaction_%s_%d.jsonl", entryID, time.Now().UnixNano())
+			snapshotPath = filepath.Join(s.sessionDir, "compactions", name)
+		}
 		if err := saveSnapshotMessages(snapshotPath, messages); err != nil {
 			return "", fmt.Errorf("save compaction snapshot: %w", err)
 		}
@@ -226,7 +231,7 @@ func (s *Session) AppendCompaction(summary string, messages []agentctx.AgentMess
 
 	entry := &SessionEntry{
 		Type:        EntryTypeCompaction,
-		ID:          generateEntryID(s.byID),
+		ID:          entryID,
 		ParentID:    s.leafID,
 		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
 		Summary:     summary,

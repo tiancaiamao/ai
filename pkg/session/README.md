@@ -59,7 +59,7 @@ Messages form a tree via `parentId` links. The current conversation tip is the `
 ### Compaction Entry
 
 ```json
-{"type":"compaction","id":"<entry-id>","parentId":"<parent-entry-id>","timestamp":"...","summary":"...","firstKeptEntryId":"<id>","tokensBefore":50000,"snapshotRef":"compactions/compaction_00001.jsonl"}
+{"type":"compaction","id":"<entry-id>","parentId":"<parent-entry-id>","timestamp":"...","summary":"...","firstKeptEntryId":"<id>","tokensBefore":50000,"snapshotRef":"compactions/compaction_<entry-id>.jsonl"}
 ```
 
 The `firstKeptEntryId` marks where messages resume after the summary.
