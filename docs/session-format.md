@@ -154,7 +154,7 @@ Records a compaction event. The post-compaction messages are saved to an externa
 
 ```json
 {
-    "type": "compaction",
+  "type": "compaction",
   "id": "ab12cd34",
   "parentId": "msg-003",
   "timestamp": "2025-01-15T10:35:00.000Z",
