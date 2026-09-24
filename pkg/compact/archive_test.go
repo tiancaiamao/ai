@@ -135,7 +135,7 @@ func TestCompact_SummaryContainsArchivePath(t *testing.T) {
 		t.Errorf("note should steer to the ai history CLI, got: %s", summaryText)
 	}
 	// No run ID was set, so the note falls back to --session <sessionDir>.
-	if !strings.Contains(summaryText, "--session "+dir) {
+	if !strings.Contains(summaryText, "--session '"+dir+"'") {
 		t.Errorf("note should include --session fallback with session dir, got: %s", summaryText)
 	}
 	// The raw archive file path must NOT be exposed: it invites raw reads of
@@ -196,10 +196,18 @@ func TestArchiveNote_SessionFallback(t *testing.T) {
 	c := NewCompactor(nil, llm.Model{}, "", "", 0, "/sessions/foo")
 	note := c.archiveNote()
 
-	if !strings.Contains(note, "--session /sessions/foo") {
-		t.Errorf("note should use --session fallback, got: %s", note)
+	if !strings.Contains(note, "--session '/sessions/foo'") {
+		t.Errorf("note should use quoted --session fallback, got: %s", note)
 	}
 	if strings.Contains(note, "--id") {
 		t.Errorf("note should not contain --id without a run ID, got: %s", note)
+	}
+
+	// Session dirs derive from the working directory and can contain spaces
+	// or quotes; the inlined commands must stay copy-paste ready.
+	c = NewCompactor(nil, llm.Model{}, "", "", 0, "/Users/me/My Project's dir")
+	note = c.archiveNote()
+	if !strings.Contains(note, "--session '/Users/me/My Project'\\''s dir'") {
+		t.Errorf("note should shell-quote paths with spaces/quotes, got: %s", note)
 	}
 }

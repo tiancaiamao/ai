@@ -529,7 +529,10 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 // context. Commands are inlined with the run ID (or `--session` fallback)
 // so they are copy-paste ready without loading any skill.
 func (c *Compactor) archiveNote() string {
-	flag := "--session " + c.sessionDir
+	// Quote the session dir: it is derived from the working directory and can
+	// contain spaces or shell metacharacters; the run ID is hex and needs no
+	// quoting.
+	flag := "--session " + shellQuote(c.sessionDir)
 	if c.runID != "" {
 		flag = "--id " + c.runID
 	}
@@ -542,6 +545,12 @@ func (c *Compactor) archiveNote() string {
 		"  ai history read --entry <id> " + flag + "      # read one entry in full (paginated)\n" +
 		"Never read or grep the raw JSONL files under compactions/ directly — a single line can be megabytes.\n" +
 		"</critical>"
+}
+
+// shellQuote wraps s in single quotes, escaping embedded single quotes, so it
+// can be embedded in a shell command string verbatim.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // saveArchivedMessages writes old messages removed during compaction to a
