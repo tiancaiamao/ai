@@ -16,6 +16,16 @@ func TestCompactSummarizePrompt(t *testing.T) {
 	}
 }
 
+func TestCompactHintSkillReloadIsConditional(t *testing.T) {
+	p := CompactHint()
+	if !strings.Contains(p, "Check the summary first") {
+		t.Error("CompactHint should direct the agent to check the summary before reloading a skill")
+	}
+	if !strings.Contains(p, "only when you need details that are not preserved there") {
+		t.Error("CompactHint should make skill reload conditional on missing details")
+	}
+}
+
 func TestCompactCheckPrompt(t *testing.T) {
 	p := CompactCheckPrompt()
 	if strings.TrimSpace(p) == "" {
