@@ -22,6 +22,13 @@ func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
 	if cfg.LLMDecide == nil {
 		t.Fatal("expected default LLMDecide config to be initialized")
 	}
+
+	agentCtx.RecentMessages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage(strings.Repeat("x", 400000)),
+	}
+	if !compactor.ShouldCompact(context.Background(), agentCtx) {
+		t.Fatal("expected default hard limit to trigger compaction")
+	}
 }
 
 func TestShouldCompact_Disabled(t *testing.T) {

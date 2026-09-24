@@ -523,10 +523,6 @@ func (f *failingCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) 
 	return nil, errors.New("compaction failed")
 }
 
-func (f *failingCompactor) calculateDynamicThreshold() int {
-	return 100000 // Default threshold for tests
-}
-
 // TestRunInnerLoopMaxTurnsLimit tests that the loop stops when max turns is reached
 func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	orig := streamAssistantResponseFn
