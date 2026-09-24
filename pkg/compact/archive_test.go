@@ -91,9 +91,7 @@ func TestCompact_SummaryContainsArchivePath(t *testing.T) {
 	defer server.Close()
 
 	cfg := &Config{
-		MaxMessages:      10,
 		MaxTokens:        1000,
-		KeepRecent:       2,
 		KeepRecentTokens: 100,
 		AutoCompact:      true,
 	}

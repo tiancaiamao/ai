@@ -19,9 +19,7 @@ import (
 
 // Config contains configuration for context compression.
 type Config struct {
-	MaxMessages      int // Maximum messages before compression
 	MaxTokens        int // Approximate token limit before compression
-	KeepRecent       int // Number of recent messages to keep
 	KeepRecentTokens int // Token budget to keep from the recent messages
 	ReserveTokens    int // Tokens to reserve when using context window
 	ToolCallCutoff   int // Summarize oldest tool outputs when visible tool calls exceed this
@@ -36,11 +34,10 @@ type Config struct {
 	GracePeriod int
 	AutoCompact bool // Whether to automatically compact
 
-	// LLMDecide enables LLM-decides compaction mode for large context windows.
-	// When set, ShouldCompact uses soft/hard thresholds + tool-call intervals,
-	// and asks the LLM whether to compact when an interval is reached.
-	// A hard limit forces compaction without asking.
-	LLMDecide *LLMDecideConfig
+	// LLMDecide stores internally auto-configured thresholds for the model context window.
+	// ShouldCompact uses soft/hard thresholds + tool-call intervals, asking the LLM
+	// whether to compact when an interval is reached; a hard limit forces compaction.
+	LLMDecide *LLMDecideConfig `json:"-"`
 }
 
 // LLMDecideConfig configures the LLM-decides compaction strategy.
@@ -105,9 +102,7 @@ func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxMessages:           50,    // Compact after 50 messages
 		MaxTokens:             8000,  // Compact after ~8000 tokens (fallback)
-		KeepRecent:            5,     // Keep last 5 messages uncompressed
 		KeepRecentTokens:      20000, // Keep ~20k tokens from the recent context
 		ReserveTokens:         16384, // Reserve tokens for responses when using context window
 		ToolCallCutoff:        10,    // Summarize tool outputs after 10 visible tool results
@@ -122,7 +117,7 @@ type Compactor struct {
 	config        *Config
 	model         llm.Model
 	apiKey        string
-	systemPrompt  string // Used ONLY for token estimation in CalculateDynamicThreshold. Actual LLM calls reuse the agent's system prompt.
+	systemPrompt  string // Used ONLY for token estimation for the dynamic threshold. Actual LLM calls reuse the agent's system prompt.
 	contextWindow int
 	askPrompt     string // LLM-decide ask template (loaded lazily)
 	// agentContextPrefix is the skills + AGENTS.md prefix, stored at
@@ -185,12 +180,10 @@ func (c *Compactor) GetConfig() *Config {
 	return c.config
 }
 
-// CalculateDynamicThreshold calculates the compaction threshold based on context window.
+// calculateDynamicThreshold calculates the compaction threshold based on context window.
 // For models with large context windows (e.g., 128k), this allows much more context
 // before triggering compaction, rather than using a fixed 8000 token limit.
-// CalculateDynamicThreshold returns the dynamic compaction threshold based on context window.
-// Exported for use by context_management tool to provide feedback when compact is rejected.
-func (c *Compactor) CalculateDynamicThreshold() int {
+func (c *Compactor) calculateDynamicThreshold() int {
 	// If context window is known, calculate dynamic threshold
 	if c.contextWindow > 0 {
 		// Reserve tokens for:
@@ -236,7 +229,7 @@ func (c *Compactor) calculateKeepRecentBudget() int {
 		budget := c.config.KeepRecentTokens
 
 		// Don't let keep-recent exceed 30% of available context
-		if threshold := c.CalculateDynamicThreshold(); threshold > 0 {
+		if threshold := c.calculateDynamicThreshold(); threshold > 0 {
 			maxKeep := int(float64(threshold) * 0.3)
 			if budget > maxKeep && maxKeep > 0 {
 				budget = maxKeep
@@ -247,7 +240,7 @@ func (c *Compactor) calculateKeepRecentBudget() int {
 	}
 
 	// Calculate based on threshold
-	threshold := c.CalculateDynamicThreshold()
+	threshold := c.calculateDynamicThreshold()
 	if threshold > 0 {
 		// Keep 25% of threshold as recent context
 		return int(float64(threshold) * 0.25)
@@ -335,18 +328,6 @@ func (c *Compactor) EffectiveTokenLimit() (int, string) {
 	return 0, "none"
 }
 
-// EstimateTokens provides a rough estimation of token count.
-func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
-	totalTokens := 0
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-		totalTokens += estimateMessageTokens(msg)
-	}
-	return totalTokens
-}
-
 func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	if !msg.IsAgentVisible() {
 		return 0
@@ -425,7 +406,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	slog.Info("[Compact] Compressing messages",
 		"count", len(ctx.RecentMessages),
 		"keepTokens", keepRecentTokens,
-		"threshold", c.CalculateDynamicThreshold(),
+		"threshold", c.calculateDynamicThreshold(),
 		"contextWindow", c.contextWindow)
 
 	// Generate summary of old messages (with previous summary for incremental update)
@@ -601,8 +582,7 @@ func saveArchivedMessages(sessionDir string, messages []agentctx.AgentMessage) s
 }
 
 // ShouldCompact determines if context should be compressed.
-// In LLMDecide mode, uses soft/hard thresholds + tool-call intervals.
-// In classic mode, uses the dynamic token threshold.
+// Uses soft/hard thresholds + tool-call intervals.
 func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
 		return false
@@ -618,6 +598,11 @@ func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentC
 func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	tokens := agentCtx.EstimateTokens()
 	cfg := c.config.LLMDecide
+	if cfg == nil {
+		defaults := DefaultLLMDecideConfig(c.contextWindow)
+		c.config.LLMDecide = &defaults
+		cfg = c.config.LLMDecide
+	}
 
 	if tokens >= cfg.HardLimit {
 		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",

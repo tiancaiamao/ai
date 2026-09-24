@@ -57,7 +57,7 @@ func TestE2E_PreLLMCompaction(t *testing.T) {
 // TestE2E_CompactionToolPairing builds a session containing several bash
 // tool_call/tool_result pairs under a normal context window, then restarts
 // the server on the same session with a tiny window (2048). The pre-LLM
-// hard-limit compaction fires on the first resumed turn, and with KeepRecent=5
+// hard-limit compaction fires on the first resumed turn while retaining recent context
 // the split boundary lands inside the tool-pair history. This exercises the
 // production tool_call/tool_result pairing repair (ensureToolCallPairingWithGrace):
 // results whose tool_call was summarized into oldMessages get archived while

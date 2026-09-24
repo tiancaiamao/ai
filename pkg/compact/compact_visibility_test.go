@@ -1,28 +1,10 @@
 package compact
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"strings"
 	"testing"
 
-	"github.com/tiancaiamao/ai/pkg/llm"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
-
-func TestEstimateTokensSkipsAgentInvisibleMessages(t *testing.T) {
-	compactor := NewCompactor(DefaultConfig(), llm.Model{}, "key", "sys", 0, "")
-
-	visible := agentctx.NewUserMessage("short visible text")
-	invisible := agentctx.NewUserMessage(strings.Repeat("X", 8000)).WithVisibility(false, true)
-
-	withInvisible := []agentctx.AgentMessage{visible, invisible}
-	withoutInvisible := []agentctx.AgentMessage{visible}
-
-	tokensWithInvisible := compactor.EstimateTokens(withInvisible)
-	tokensWithoutInvisible := compactor.EstimateTokens(withoutInvisible)
-	if tokensWithInvisible != tokensWithoutInvisible {
-		t.Fatalf("expected invisible messages to be ignored, got with=%d without=%d", tokensWithInvisible, tokensWithoutInvisible)
-	}
-}
 
 func TestCompactToolResultsInRecent(t *testing.T) {
 	// Create messages with tool_calls (assistant) and tool_results

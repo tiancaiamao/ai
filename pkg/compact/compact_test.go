@@ -10,6 +10,20 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
+func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
+	cfg := &Config{AutoCompact: true}
+	compactor := NewCompactor(cfg, llm.Model{}, "", "", 100_000, "")
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage(strings.Repeat("x", 2000))},
+	}
+	if compactor.ShouldCompact(context.Background(), agentCtx) {
+		t.Fatal("expected default soft threshold to avoid compaction")
+	}
+	if cfg.LLMDecide == nil {
+		t.Fatal("expected default LLMDecide config to be initialized")
+	}
+}
+
 func TestShouldCompact_Disabled(t *testing.T) {
 	config := &Config{
 		AutoCompact: false,
@@ -29,31 +43,11 @@ func TestShouldCompact_Disabled(t *testing.T) {
 	}
 }
 
-func TestEstimateTokens(t *testing.T) {
-	config := DefaultConfig()
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
-
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("Hello world"),
-		agentctx.NewAssistantMessage(),
-	}
-
-	tokens := compactor.EstimateTokens(messages)
-	if tokens <= 0 {
-		t.Errorf("Estimated tokens should be positive, got %d", tokens)
-	}
-
-	// Very rough check: should be more than 10 characters / 4 = 2.5 tokens
-	if tokens < 2 {
-		t.Errorf("Estimated tokens seems too low: %d", tokens)
-	}
-}
-
 func TestCompact_FewMessages(t *testing.T) {
 	config := DefaultConfig()
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
-	// With fewer messages than KeepRecent, should return nil result
+	// With fewer messages than KeepRecentTokens, should return nil result
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("Hello"),

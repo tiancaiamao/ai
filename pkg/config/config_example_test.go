@@ -43,16 +43,8 @@ func TestConfigExampleFile(t *testing.T) {
 	if cfg.Compactor.MaxTokens != defaultCompactor.MaxTokens {
 		t.Errorf("MaxTokens mismatch: got %d, want %d", cfg.Compactor.MaxTokens, defaultCompactor.MaxTokens)
 	}
-	if cfg.Compactor.KeepRecent != defaultCompactor.KeepRecent {
-		t.Errorf("KeepRecent mismatch: got %d, want %d", cfg.Compactor.KeepRecent, defaultCompactor.KeepRecent)
-	}
 	if cfg.Compactor.AutoCompact != defaultCompactor.AutoCompact {
 		t.Errorf("AutoCompact mismatch: got %v, want %v", cfg.Compactor.AutoCompact, defaultCompactor.AutoCompact)
-	}
-
-	// Verify MaxMessages is not set (should be 0/empty)
-	if cfg.Compactor.MaxMessages != 0 {
-		t.Errorf("MaxMessages should not be set in config, got %d", cfg.Compactor.MaxMessages)
 	}
 
 	// Verify concurrency config
@@ -90,7 +82,6 @@ func TestConfigDefaultsMatchCode(t *testing.T) {
 		expected interface{}
 	}{
 		{"Compactor.MaxTokens", DefaultCompactorConfig().MaxTokens, 8000},
-		{"Compactor.KeepRecent", DefaultCompactorConfig().KeepRecent, 5},
 		{"Compactor.KeepRecentTokens", DefaultCompactorConfig().KeepRecentTokens, 20000},
 		{"Compactor.ReserveTokens", DefaultCompactorConfig().ReserveTokens, 16384},
 		{"Compactor.ToolCallCutoff", DefaultCompactorConfig().ToolCallCutoff, 10},
@@ -167,29 +158,23 @@ func TestNoDeprecatedFieldsInStructs(t *testing.T) {
 // Helper function to get default compactor config
 func DefaultCompactorConfig() *struct {
 	MaxTokens        int
-	KeepRecent       int
 	KeepRecentTokens int
 	ReserveTokens    int
 	ToolCallCutoff   int
 	AutoCompact      bool
-	MaxMessages      int
 } {
 	// Import from compact package would create cycle, so we define expected values
 	return &struct {
 		MaxTokens        int
-		KeepRecent       int
 		KeepRecentTokens int
 		ReserveTokens    int
 		ToolCallCutoff   int
 		AutoCompact      bool
-		MaxMessages      int
 	}{
 		MaxTokens:        8000,
-		KeepRecent:       5,
 		KeepRecentTokens: 20000,
 		ReserveTokens:    16384,
 		ToolCallCutoff:   10,
 		AutoCompact:      true,
-		MaxMessages:      0, // Should be 0 (not used)
 	}
 }

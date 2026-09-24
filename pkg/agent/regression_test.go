@@ -314,6 +314,6 @@ func (c *testCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.Ag
 	return c.shouldTrigger
 }
 
-func (c *testCompactor) CalculateDynamicThreshold() int {
+func (c *testCompactor) calculateDynamicThreshold() int {
 	return 100000
 }

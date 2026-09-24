@@ -305,8 +305,8 @@ func resolveModelAndKey(cfg *config.Config) (llm.Model, string, config.ModelSpec
 
 	slog.Info("Model", "id", model.ID, "provider", model.Provider, "baseURL", model.BaseURL)
 	if cfg.Compactor != nil {
-		slog.Info("Compactor", "maxMessages", cfg.Compactor.MaxMessages, "maxTokens", cfg.Compactor.MaxTokens,
-			"keepRecent", cfg.Compactor.KeepRecent, "keepRecentTokens", cfg.Compactor.KeepRecentTokens,
+		slog.Info("Compactor", "maxTokens", cfg.Compactor.MaxTokens,
+			"keepRecentTokens", cfg.Compactor.KeepRecentTokens,
 			"reserveTokens", cfg.Compactor.ReserveTokens,
 			"toolCallCutoff", cfg.Compactor.ToolCallCutoff,
 			"toolSummaryAutomation", cfg.Compactor.ToolSummaryAutomation)

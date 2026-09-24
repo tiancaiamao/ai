@@ -195,13 +195,11 @@ func renderSessionStateEnriched(raw []byte) string {
 	compactionContext := orUnknown("")
 	compactionLimit := orUnknown("")
 	compactionReserve := orUnknown("")
-	compactionKeepRecent := orUnknown("")
 	compactionKeepRecentTokens := orUnknown("")
 	if state.Compaction != nil {
 		compactionContext = formatIntOrUnknown(state.Compaction.ContextWindow)
 		compactionLimit = formatTokenLimit(state.Compaction)
 		compactionReserve = formatIntOrUnknown(state.Compaction.ReserveTokens)
-		compactionKeepRecent = formatIntOrUnknown(state.Compaction.KeepRecent)
 		compactionKeepRecentTokens = formatIntOrUnknown(state.Compaction.KeepRecentTokens)
 	}
 
@@ -230,7 +228,6 @@ func renderSessionStateEnriched(raw []byte) string {
   context-window: %s
   compaction-limit: %s
   compaction-reserve: %s
-  compaction-keep-recent: %s
   compaction-keep-recent-tokens: %s
   thinking-level: %s
   auto-compaction: %s
@@ -249,7 +246,6 @@ func renderSessionStateEnriched(raw []byte) string {
 		compactionContext,
 		compactionLimit,
 		compactionReserve,
-		compactionKeepRecent,
 		compactionKeepRecentTokens,
 		orUnknown(state.ThinkingLevel),
 		onOff(state.AutoCompactionEnabled),

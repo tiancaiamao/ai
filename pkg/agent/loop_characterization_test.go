@@ -357,7 +357,7 @@ func (c *characterizationTriggerCompactor) Compact(_ context.Context, ctx *agent
 	}, nil
 }
 
-func (c *characterizationTriggerCompactor) CalculateDynamicThreshold() int {
+func (c *characterizationTriggerCompactor) calculateDynamicThreshold() int {
 	return 100000
 }
 

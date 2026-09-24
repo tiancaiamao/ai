@@ -32,7 +32,7 @@ func (c *recoveryCompactor) Compact(_ context.Context, ctx *agentctx.AgentContex
 	}, nil
 }
 
-func (c *recoveryCompactor) CalculateDynamicThreshold() int {
+func (c *recoveryCompactor) calculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
 }
 
@@ -527,7 +527,7 @@ func (f *failingCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) 
 	return nil, errors.New("compaction failed")
 }
 
-func (f *failingCompactor) CalculateDynamicThreshold() int {
+func (f *failingCompactor) calculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
 }
 
