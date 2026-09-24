@@ -23,6 +23,8 @@ func executeToolCalls(
 	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
 	executor ToolExecutor,
 	toolOutputLimits ToolOutputLimits,
+	sessionDir string,
+	runID string,
 ) []agentctx.AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
 	if len(toolCalls) == 0 {
@@ -139,7 +141,7 @@ func executeToolCalls(
 				"availableTools", availableToolNames)
 			content := truncateToolContent(ctx, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "agentctx.Tool not found"},
-			}, toolOutputLimits, normalized.Name)
+			}, toolOutputLimits, normalized.Name, normalized.ID, sessionDir, runID)
 			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
@@ -169,7 +171,7 @@ func executeToolCalls(
 				"toolCallID", normalized.ID)
 			content := truncateToolContent(ctx, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("agentctx.Tool %q is not allowed in this context", normalized.Name)},
-			}, toolOutputLimits, normalized.Name)
+			}, toolOutputLimits, normalized.Name, normalized.ID, sessionDir, runID)
 			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
@@ -237,7 +239,7 @@ func executeToolCalls(
 		if outcome.err != nil {
 			content := truncateToolContent(ctx, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: outcome.err.Error()},
-			}, toolOutputLimits, plan.normalized.Name)
+			}, toolOutputLimits, plan.normalized.Name, plan.normalized.ID, sessionDir, runID)
 			result = agentctx.NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, true))
 			plan.span.AddField("error", true)
@@ -251,7 +253,7 @@ func executeToolCalls(
 				traceevent.Field{Key: "error_message", Value: outcome.err.Error()},
 			)
 		} else {
-			content := truncateToolContent(ctx, outcome.content, toolOutputLimits, plan.normalized.Name)
+			content := truncateToolContent(ctx, outcome.content, toolOutputLimits, plan.normalized.Name, plan.normalized.ID, sessionDir, runID)
 			result = agentctx.NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, false)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, false))
 			plan.span.AddField("error", false)

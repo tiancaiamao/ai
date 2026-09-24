@@ -3,6 +3,28 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Truncated tool output is offloaded to a file (2026-09)
+
+**What changed**: When a tool's text output exceeds the 10,000-char truncation
+limit, the full original output is now written to
+`<session-dir>/toolout/<tool-call-id>.txt` (content-hash name when no tool
+call id is available; `/tmp/ai-toolout-<runid>-<name>.txt` when the session
+dir is unreachable; skipped entirely above a hardcoded 16MB cap). The
+truncation marker now embeds the absolute path —
+`…N tokens truncated, full output: /abs/path…` — implemented via
+`truncate.TruncateWithMarkerSuffix`, which keeps the existing ≤ maxChars size
+guarantee. The `tool_output_truncated` trace event gained an `offload_path`
+field (or an `offload_skipped` reason).
+
+**Why**: Previously the truncated middle was permanently lost; the only
+recovery was re-running the command, which can be expensive or non-deterministic.
+The existing mitigation was a prompt-level rule telling the model to redirect
+long output to a temp file itself — self-discipline, not infrastructure.
+Offloading makes recovery a guarantee: the model can page through the full
+output with the `read` tool (offset/limit). Files are named by tool call id so
+re-truncating the same result doesn't rewrite identical content, and the
+prompt rule stays in place as the cheaper first line of defense.
+
 ## Compaction snapshots are named by entry id (2026-09)
 
 **What changed**: Snapshot files are now `compactions/compaction_<entry-id>.jsonl`

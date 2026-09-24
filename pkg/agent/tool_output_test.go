@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,7 +16,7 @@ func TestTruncateToolContentTruncatesToMaxChars(t *testing.T) {
 		agentctx.TextContent{Type: "text", Text: longText},
 	}
 
-	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash")
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash", "call_1", t.TempDir(), "run-1")
 	if len(result) != 1 {
 		t.Fatalf("expected one content block, got %d", len(result))
 	}
@@ -37,7 +39,7 @@ func TestTruncateToolContentUsesDefaultLimitWhenUnset(t *testing.T) {
 		agentctx.TextContent{Type: "text", Text: longText},
 	}
 
-	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{}, "read")
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{}, "read", "call_2", t.TempDir(), "run-1")
 	text, ok := result[0].(agentctx.TextContent)
 	if !ok {
 		t.Fatalf("expected text content, got %T", result[0])
@@ -53,7 +55,7 @@ func TestTruncateToolContentClampsOversizedLimit(t *testing.T) {
 		agentctx.TextContent{Type: "text", Text: longText},
 	}
 
-	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 204800}, "bash")
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 204800}, "bash", "call_3", t.TempDir(), "run-1")
 	text, ok := result[0].(agentctx.TextContent)
 	if !ok {
 		t.Fatalf("expected text content, got %T", result[0])
@@ -69,7 +71,7 @@ func TestTruncateToolContentPreservesImageBlocks(t *testing.T) {
 		agentctx.ImageContent{Type: "image", Data: "base64", MimeType: "image/png"},
 	}
 
-	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10}, "read")
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10}, "read", "call_4", t.TempDir(), "run-1")
 	if len(result) != 2 {
 		t.Fatalf("expected two content blocks, got %d", len(result))
 	}
@@ -84,5 +86,114 @@ func TestSetToolOutputLimitsNormalizesLimit(t *testing.T) {
 
 	if a.LoopConfig.ToolOutput.MaxChars != maxToolOutputMaxChars {
 		t.Fatalf("expected SetToolOutputLimits to clamp maxChars to %d, got %d", maxToolOutputMaxChars, a.LoopConfig.ToolOutput.MaxChars)
+	}
+}
+
+func TestTruncateToolContentOffloadsFullOutput(t *testing.T) {
+	sessionDir := t.TempDir()
+	longText := strings.Repeat("x", 12000)
+	blocks := []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: longText},
+	}
+
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash", "callu_offload", sessionDir, "")
+	text, ok := result[0].(agentctx.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result[0])
+	}
+
+	// Final output still respects maxChars and contains the marker with path.
+	if len(text.Text) > 10000 {
+		t.Fatalf("truncated text exceeds limit: got %d > 10000", len(text.Text))
+	}
+	path := filepath.Join(sessionDir, "toolout", "callu_offload.txt")
+	if !strings.Contains(text.Text, ", full output: "+path+"…") {
+		t.Fatalf("marker should point at offload path %s, got: %.200s", path, text.Text)
+	}
+
+	// File must contain the full original output.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected offload file: %v", err)
+	}
+	if string(data) != longText {
+		t.Fatalf("offloaded content differs from original output")
+	}
+}
+
+func TestOffloadNamingIdempotentAndFallsBackToHash(t *testing.T) {
+	sessionDir := t.TempDir()
+
+	// Same tool call id + same content reuses the same file without rewrite.
+	if p1 := offloadTruncatedToolOutput("hello", "call_a", sessionDir, "run-1"); p1 != filepath.Join(sessionDir, "toolout", "call_a.txt") {
+		t.Fatalf("unexpected path: %q", p1)
+	}
+	info, err := os.Stat(filepath.Join(sessionDir, "toolout", "call_a.txt"))
+	if err != nil {
+		t.Fatalf("expected file: %v", err)
+	}
+	if p2 := offloadTruncatedToolOutput("hello", "call_a", sessionDir, "run-1"); p2 == "" {
+		t.Fatal("second call should succeed")
+	}
+	info2, err := os.Stat(filepath.Join(sessionDir, "toolout", "call_a.txt"))
+	if err != nil || !info2.ModTime().Equal(info.ModTime()) {
+		t.Fatal("identical content should not be rewritten")
+	}
+
+	// Unsafe/empty tool call id falls back to content hash naming.
+	unsafe := offloadTruncatedToolOutput("data", "../../evil", sessionDir, "")
+	want := filepath.Join(sessionDir, "toolout", "3a6eb0790f39ac87.txt") // replaced below if mismatched
+	if unsafe == "" {
+		t.Fatal("expected offload with hash fallback")
+	}
+	if filepath.Dir(unsafe) != filepath.Dir(want) {
+		t.Fatalf("hash fallback should stay in toolout dir: %q", unsafe)
+	}
+	if filepath.Base(unsafe) == "../../evil.txt" || strings.Contains(filepath.Base(unsafe), "/") {
+		t.Fatalf("path traversal not sanitized: %q", unsafe)
+	}
+
+	// No session dir: falls back to /tmp with run id.
+	tmpPath := offloadTruncatedToolOutput("data2", "", "", "myrun")
+	if !filepath.IsAbs(tmpPath) || !strings.HasPrefix(tmpPath, "/tmp/ai-toolout-myrun-") {
+		t.Fatalf("expected /tmp fallback with run id, got %q", tmpPath)
+	}
+	t.Cleanup(func() { os.Remove(tmpPath) })
+}
+
+func TestOffloadSkipsOversizedOutput(t *testing.T) {
+	sessionDir := t.TempDir()
+	huge := strings.Repeat("z", toolOutputOffloadCap+1)
+
+	if path := offloadTruncatedToolOutput(huge, "call_big", sessionDir, ""); path != "" {
+		t.Fatalf("expected skip for oversized output, got %q", path)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "toolout")); !os.IsNotExist(err) {
+		t.Fatal("no toolout dir should be created when offload is skipped")
+	}
+
+	// truncateToolContent still truncates, without an offload path in the marker.
+	blocks := []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: huge}}
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash", "call_big", sessionDir, "")
+	text := result[0].(agentctx.TextContent)
+	if len(text.Text) > 10000 {
+		t.Fatalf("truncated text exceeds limit: %d", len(text.Text))
+	}
+	if strings.Contains(text.Text, "full output:") {
+		t.Fatal("marker should not point at an offload file when offload is skipped")
+	}
+}
+
+func TestTruncateToolContentNoFileWhenNotTruncated(t *testing.T) {
+	sessionDir := t.TempDir()
+	blocks := []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "short"}}
+
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash", "call_small", sessionDir, "")
+	text := result[0].(agentctx.TextContent)
+	if text.Text != "short" {
+		t.Fatalf("short output should be preserved, got %q", text.Text)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "toolout")); !os.IsNotExist(err) {
+		t.Fatal("no toolout dir should be created when output is not truncated")
 	}
 }

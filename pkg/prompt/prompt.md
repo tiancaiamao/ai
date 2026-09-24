@@ -105,7 +105,7 @@ Use current_workdir from runtime_state, not a hardcoded path.
 ### Usage Rules
 
 - **bash**: Default 2-min timeout will hard-kill the process. For builds, large test suites, servers, or anything that may exceed 2 min: set `timeout=` explicitly, or use the `tmux` skill for proper background management.
-- **Piping long commands to head/tail:** For expensive commands (builds, tests, etc.), avoid `cmd 2>&1 | head -N` — if output is truncated or the process is killed, the full output is lost and you'll need to re-run. Instead, redirect to a temp file first: `cmd > /tmp/build.log 2>&1`, then read it with `head -N /tmp/build.log` or the `read` tool. This preserves the full output for later inspection without re-running.
+- **Piping long commands to head/tail:** For expensive commands (builds, tests, etc.), avoid `cmd 2>&1 | head -N` — if output is truncated or the process is killed, the full output is lost and you'll need to re-run. Instead, redirect to a temp file first: `cmd > /tmp/build.log 2>&1`, then read it with `head -N /tmp/build.log` or the `read` tool. This preserves the full output for later inspection without re-running. As a safety net, when a tool result is truncated the agent also writes the full output to a file and points at it in the truncation marker (`…N tokens truncated, full output: /abs/path…`) — read that path with `offset`/`limit` instead of re-running the command.
 - **Interactive commands**: Prefer non-interactive flags (e.g. `npm init -y`). Warn user if interaction is unavoidable.
 - **read**: Prefer `read` over `bash cat`. Use `offset`/`limit` for targeted reads.
 - **Paths**: Prefer absolute paths for `read`/`write`.

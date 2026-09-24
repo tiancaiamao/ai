@@ -10,6 +10,14 @@ import (
 // Truncate truncates text to fit within maxChars, preserving prefix and suffix.
 // It uses a 50/50 split for prefix/suffix and ensures UTF-8 boundary safety.
 func Truncate(text string, maxChars int) string {
+	return TruncateWithMarkerSuffix(text, maxChars, "")
+}
+
+// TruncateWithMarkerSuffix truncates like Truncate but appends markerSuffix to
+// the truncation marker (before the closing "…"), e.g. a pointer to the file
+// holding the full untruncated output. Size accounting still guarantees the
+// result is at most maxChars bytes.
+func TruncateWithMarkerSuffix(text string, maxChars int, markerSuffix string) string {
 	if text == "" || len(text) <= maxChars {
 		return text
 	}
@@ -20,7 +28,7 @@ func Truncate(text string, maxChars int) string {
 
 	// Start with a conservative marker estimate, then refine once split result
 	// is known so the final output always respects maxChars.
-	marker := formatTruncationMarker(ApproxTokenCount(text))
+	marker := formatTruncationMarker(ApproxTokenCount(text), markerSuffix)
 	for i := 0; i < 2; i++ {
 		if len(marker) >= maxChars {
 			return trimUTF8ToBytes(marker, maxChars)
@@ -31,7 +39,7 @@ func Truncate(text string, maxChars int) string {
 		rightChars := budget - leftChars
 
 		removedTokens, prefix, suffix := splitString(text, leftChars, rightChars)
-		newMarker := formatTruncationMarker(removedTokens)
+		newMarker := formatTruncationMarker(removedTokens, markerSuffix)
 		result := assembleOutput(prefix, suffix, newMarker)
 		if len(result) <= maxChars {
 			return result
@@ -95,8 +103,9 @@ func splitString(s string, beginningBytes, endBytes int) (removedTokens int, pre
 }
 
 // formatTruncationMarker formats a truncation marker with token count.
-func formatTruncationMarker(removedTokens int) string {
-	return fmt.Sprintf("…%d tokens truncated…", removedTokens)
+// suffix is inserted before the closing "…" (may be empty).
+func formatTruncationMarker(removedTokens int, suffix string) string {
+	return fmt.Sprintf("…%d tokens truncated%s…", removedTokens, suffix)
 }
 
 // assembleOutput assembles the truncated output from prefix, marker, and suffix.

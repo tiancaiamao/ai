@@ -93,6 +93,8 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 		newLoopTestEventStream(),
 		nil,
 		DefaultToolOutputLimits(),
+		"",
+		"",
 	)
 	elapsed := time.Since(start)
 
@@ -128,6 +130,8 @@ func TestExecuteToolCallsPreservesOrderWithImmediateError(t *testing.T) {
 		newLoopTestEventStream(),
 		nil,
 		DefaultToolOutputLimits(),
+		"",
+		"",
 	)
 
 	if len(results) != 2 {
@@ -169,6 +173,8 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 		newLoopTestEventStream(),
 		nil,
 		DefaultToolOutputLimits(),
+		"",
+		"",
 	)
 
 	if len(results) != 1 {
@@ -203,6 +209,8 @@ func TestExecuteToolCallsReportsMaxTokensTruncationClearly(t *testing.T) {
 		newLoopTestEventStream(),
 		nil,
 		DefaultToolOutputLimits(),
+		"",
+		"",
 	)
 
 	if len(results) != 1 {

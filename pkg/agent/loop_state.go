@@ -253,7 +253,11 @@ func (s *loopState) processToolCalls(
 	}
 
 	// Dispatch tool calls to the executor.
-	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.ToolOutput)
+	var sessionDir string
+	if s.config.GetSessionDir != nil {
+		sessionDir = s.config.GetSessionDir()
+	}
+	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.ToolOutput, sessionDir, s.config.RunID)
 
 	// Run AfterTool hooks: chain-style, each hook's output feeds the next.
 	hookCtx := HookContext{
