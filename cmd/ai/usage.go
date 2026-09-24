@@ -20,6 +20,8 @@ Subcommands:
   watch           Attach to a running serve instance (TUI)
   send            Send a message to a running serve instance
   kill            Stop a running agent instance
+  history         Read-only access to persisted session history (windows,
+                  list, read, search) — recovers context lost to compaction
 
 Flags for 'run':
   --session <path>         Session file path
@@ -65,8 +67,9 @@ Flags for 'kill':
   --force                  Send SIGKILL instead of graceful abort
 
 Flags for 'history':
-  --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted;
-                           finished runs are matched too)
+  --id <run-id>            Run ID or prefix (required; no cwd auto-select —
+                           finished runs are matched too; ambiguous prefixes
+                           error with a candidate list)
   --session <path>         Session directory path, bypassing run resolution
   --json                   Machine mode: JSONL on stdout, no truncation markers
   Run 'ai history' with no arguments for the full per-action flag reference.
@@ -90,7 +93,10 @@ Examples:
   ai kill --id abc123             Stop specific run by ID
   ai kill --force                 Force kill (SIGKILL)
   ai history windows --id abc123  List session generations of a run
-  ai history search "auth bug"    Search session history of the current run
-  ai history read --entry <id>    Read one history entry in full
+  ai history search "auth bug" --id abc123
+                                  Search session history of a run (including
+                                  compacted-away pages)
+  ai history read --id abc123 --entry <id>
+                  Read one history entry in full
 `)
 }

@@ -4,7 +4,7 @@
 
 2. **Check "Behavioral Constraints"** — these are process rules from loaded skills. Follow them even though the skill content is gone.
 
-3. **Recall the archived conversation** if anything seems unclear: the full pre-compaction conversation is stored at the path mentioned in the <critical> section of the summary, and is queryable via the session-history skill (`ai history search` to locate entries, then `ai history read` to load them).
+3. **Recall the archived conversation** if anything seems unclear: the full pre-compaction conversation is archived as pages and queryable via the `ai history` CLI — use the exact commands in the <critical> section of the summary (`windows` for the page index, `search` to locate entries, `read` to load them). Never read the raw JSONL files under compactions/ directly.
 
 4. **Re-read any design docs or planning files** you were working with. Do NOT proceed based on stale memory.
 

@@ -235,6 +235,29 @@ func TestStatsTopSkillsOrderingAndLimit(t *testing.T) {
 	}
 }
 
+func TestStatsSortByScore(t *testing.T) {
+	s := &SkillStatsFile{
+		Version: 1,
+		TopN:    10,
+		Entries: map[string]*SkillUsageEntry{
+			"fresh": {Name: "fresh", Count: 10, LastUsed: time.Now(), Score: 10},
+			"stale": {Name: "stale", Count: 10, LastUsed: time.Now().Add(-24 * time.Hour), Score: 10},
+		},
+	}
+
+	// "missing" has no stats entry: must sort last.
+	got := s.SortByScore([]string{"stale", "missing", "fresh"})
+	if len(got) != 3 || got[0] != "fresh" || got[1] != "stale" || got[2] != "missing" {
+		t.Errorf("expected [fresh stale missing], got %v", got)
+	}
+
+	// Input without any stats entries: stable input order preserved.
+	got = s.SortByScore([]string{"a", "b", "c"})
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Errorf("expected stable order [a b c], got %v", got)
+	}
+}
+
 func TestStatsSaveLoadRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.json")
 

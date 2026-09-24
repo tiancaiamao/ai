@@ -18,6 +18,7 @@ type Skill struct {
     Content                string      // Full markdown content (body only)
     Frontmatter            Frontmatter // Parsed frontmatter
     DisableModelInvocation bool        // Exclude from auto-prompt
+    Pinned                 bool        // Always listed in prompt (survives topN cutoff)
     LoadedAt               time.Time   // When the skill was loaded
 }
 ```
@@ -33,6 +34,7 @@ type Frontmatter struct {
     Metadata               map[string]interface{} `yaml:"metadata,omitempty"`
     AllowedTools           []string               `yaml:"allowed-tools,omitempty"`
     DisableModelInvocation bool                   `yaml:"disable-model-invocation,omitempty"`
+    Pinned                 bool                   `yaml:"pinned,omitempty"`
 }
 ```
 
@@ -105,6 +107,10 @@ func (s *SkillStatsFile) TopSkills(n int) []string
 
 Tracks skill usage with half-life decay (168 hours) for progressive disclosure ranking.
 
+```go
+func (s *SkillStatsFile) SortByScore(names []string) []string // Rank names by decayed usage; unknown names last, stable order
+```
+
 ## Formatting and Expansion
 
 ```go
@@ -114,7 +120,7 @@ func IsSkillCommand(text string) bool
 func ExtractSkillName(text string) string
 ```
 
-`FormatForPrompt` renders skills as a prompt section. `ExpandCommand` handles `/skill:name` invocations.
+`FormatForPrompt` renders skills as a prompt section. Skills with frontmatter `pinned: true` are always listed regardless of ranking or the topN cutoff. When skills are omitted, the footer lists the omitted skill names (ranked by usage when stats are available) as `find_skill` search hints. `ExpandCommand` handles `/skill:name` invocations.
 
 ## Key Files
 

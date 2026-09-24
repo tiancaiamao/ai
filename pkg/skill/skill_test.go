@@ -220,6 +220,37 @@ Content`,
 	}
 }
 
+func TestParseFrontmatterPinned(t *testing.T) {
+	fm, _, err := parseFrontmatter([]byte(`---
+name: test
+description: Test
+pinned: true
+---
+body`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fm.Pinned {
+		t.Error("expected pinned=true to be parsed")
+	}
+	if _, inMeta := fm.Metadata["pinned"]; inMeta {
+		t.Error("pinned should be a first-class field, not metadata")
+	}
+
+	// Default is false
+	fm, _, err = parseFrontmatter([]byte(`---
+name: test
+description: Test
+---
+body`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fm.Pinned {
+		t.Error("expected pinned=false by default")
+	}
+}
+
 func TestEscapeXML(t *testing.T) {
 	tests := []struct {
 		input    string

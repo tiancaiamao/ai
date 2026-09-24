@@ -1,6 +1,7 @@
 ---
 name: session-history
 description: Retrieve content from earlier in a session that is no longer in the live window, e.g. after a compact, context reset, or when the user refers to previous discussion ("we talked about this before", 之前) or 历史 ("we said earlier"). Also for digging through ANOTHER agent's session when no run ID is known. Use to recover lost context via the `ai history` CLI: search past messages, locate sessions/runs on disk, list windows (compaction generations), and read entries with pagination.
+pinned: true
 ---
 
 # Session History (`ai history`)

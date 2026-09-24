@@ -14,6 +14,7 @@ type Skill struct {
 	Content                string      // Full markdown content
 	Frontmatter            Frontmatter // Parsed frontmatter
 	DisableModelInvocation bool        // If true, skill won't be included in auto-prompt
+	Pinned                 bool        // If true, skill is always listed regardless of usage ranking
 	LoadedAt               time.Time   // When the skill was loaded
 }
 
@@ -26,6 +27,7 @@ type Frontmatter struct {
 	Metadata               map[string]interface{} `yaml:"metadata,omitempty"`
 	AllowedTools           []string               `yaml:"allowed-tools,omitempty"`
 	DisableModelInvocation bool                   `yaml:"disable-model-invocation,omitempty"`
+	Pinned                 bool                   `yaml:"pinned,omitempty"`
 }
 
 // LoadResult contains the result of loading skills.
@@ -69,6 +71,7 @@ const (
 	FieldMetadata               = "metadata"
 	FieldAllowedTools           = "allowed-tools"
 	FieldDisableModelInvocation = "disable-model-invocation"
+	FieldPinned                 = "pinned"
 )
 
 var allowedFrontmatterFields = map[string]bool{
@@ -79,4 +82,5 @@ var allowedFrontmatterFields = map[string]bool{
 	FieldMetadata:               true,
 	FieldAllowedTools:           true,
 	FieldDisableModelInvocation: true,
+	FieldPinned:                 true,
 }

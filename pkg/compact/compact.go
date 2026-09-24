@@ -136,6 +136,10 @@ type Compactor struct {
 	// sessionDir is the session directory used for archiving old messages
 	// that are removed during compaction. When empty, archiving is skipped.
 	sessionDir string
+	// runID is the run ID of this agent, inlined into the archive note so the
+	// post-compaction history CLI commands are copy-paste ready. When empty,
+	// the note falls back to `--session <sessionDir>`.
+	runID string
 	// askFunc allows tests to inject a fake LLM decision without a real API
 	// call. nil means use the real askLLM method.
 	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
@@ -153,6 +157,12 @@ type Compactor struct {
 // Called by the agent loop after compaction, after planting a canary message.
 func (c *Compactor) SetCanaryValue(val string) {
 	c.canaryValue = val
+}
+
+// SetRunID sets the agent's run ID, used to inline copy-paste-ready
+// `ai history` commands into the post-compaction archive note.
+func (c *Compactor) SetRunID(id string) {
+	c.runID = id
 }
 
 // NewCompactor creates a new Compactor.
@@ -431,16 +441,17 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// result is always protected.
 	recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
 
-	// Archive old messages so the agent can access them via read/grep later.
+	// Archive old messages; the agent recovers them later via the `ai history`
+	// CLI (windows/list/read/search over these archived pages).
 	archivePath := saveArchivedMessages(c.sessionDir, oldMessages)
 
-	// Create new recent messages with summary, including archive path note.
-	// The archive note is placed BEFORE the summary so the agent sees it first
+	// Create new recent messages with summary, including the archive note.
+	// The note is placed BEFORE the summary so the agent sees it first
 	// and is more likely to use it proactively.
 	recentMessages = RemoveAllCanaries(recentMessages)
 	summaryText := summary
 	if archivePath != "" {
-		summaryText = fmt.Sprintf(archiveNoteTemplate, archivePath) + "\n\n" + summary
+		summaryText = c.archiveNote() + "\n\n" + summary
 	}
 	newRecentMessages := []agentctx.AgentMessage{
 		agentctx.NewCompactionSummaryMessage(summaryText),
@@ -511,14 +522,27 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 	return result
 }
 
-// archiveNoteTemplate is prepended to the compaction summary so the agent knows
-// where to find the full pre-compaction conversation. It uses directive language
-// to encourage proactive recovery of lost context.
-const archiveNoteTemplate = "<critical>\n" +
-	"The full conversation before this summary is archived at `%s`.\n" +
-	"This summary may omit important details — analysis results, intermediate findings, discussion context.\n" +
-	"If anything seems incomplete or you are unsure what was discussed earlier, read this file (use the read or grep tool) BEFORE asking the user.\n" +
-	"</critical>"
+// archiveNote is prepended to the compaction summary so the agent knows how
+// to recover the full pre-compaction conversation. It steers the agent to the
+// `ai history` CLI (bounded, structured output) instead of raw reads of the
+// archived JSONL files, where a single line can be megabytes and flood the
+// context. Commands are inlined with the run ID (or `--session` fallback)
+// so they are copy-paste ready without loading any skill.
+func (c *Compactor) archiveNote() string {
+	flag := "--session " + c.sessionDir
+	if c.runID != "" {
+		flag = "--id " + c.runID
+	}
+	return "<critical>\n" +
+		"The full conversation before this summary is archived as pages (one per compaction).\n" +
+		"This summary may omit important details — analysis results, intermediate findings, discussion context.\n" +
+		"If anything seems incomplete or you are unsure what was discussed earlier, recall it via the history CLI BEFORE asking the user:\n" +
+		"  ai history windows " + flag + "        # index of all pages (TOC of this session)\n" +
+		"  ai history search \"<keyword>\" " + flag + "  # locate entries (bounded output)\n" +
+		"  ai history read --entry <id> " + flag + "      # read one entry in full (paginated)\n" +
+		"Never read or grep the raw JSONL files under compactions/ directly — a single line can be megabytes.\n" +
+		"</critical>"
+}
 
 // saveArchivedMessages writes old messages removed during compaction to a
 // sequential JSONL file under <sessionDir>/compactions/archived_NNNNN.jsonl.

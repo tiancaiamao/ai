@@ -24,13 +24,9 @@ func TestFormatForPromptLimitsSkillCount(t *testing.T) {
 	if skillCount != 10 {
 		t.Fatalf("expected 10 skills in prompt (nil stats, default cap), got %d", skillCount)
 	}
-	// 30 - 10 = 20 omitted
-	if !strings.Contains(out, "*Note: 20 additional skills omitted for brevity.*") {
-		t.Fatalf("expected 23 omitted note, got output: %s", out)
-	}
-	// No footer when stats is nil
-	if strings.Contains(out, "find_skill") {
-		t.Fatalf("expected no find_skill footer when stats is nil, got: %s", out)
+	// 30 - 10 = 20 omitted; hint names are derived from the first omitted skills
+	if !strings.Contains(out, "Try names: skill-10, skill-11, skill-12, skill-13, skill-14, skill-15, skill-16, skill-17, skill-18, skill-19") {
+		t.Fatalf("expected derived omitted-names hint capped at 10, got output: %s", out)
 	}
 }
 
@@ -96,9 +92,9 @@ func TestFormatForPromptWithStatsRanked(t *testing.T) {
 		t.Error("delta should not appear (not in top-2)")
 	}
 
-	// Footer should be present
-	if !strings.Contains(out, "Additional skills are available via `find_skill`") {
-		t.Error("expected find_skill hint when stats is non-nil")
+	// Footer should list the omitted skill names (ranked by usage: beta > delta)
+	if !strings.Contains(out, "Try names: beta, delta") {
+		t.Errorf("expected omitted-names hint 'beta, delta', got output: %s", out)
 	}
 }
 
@@ -152,16 +148,16 @@ func TestFormatForPromptWithStatsAllStale(t *testing.T) {
 
 	out := FormatForPrompt(skills, stats)
 
-	// Should fall back to showing all loaded skills
+	// Should fall back to showing all loaded skills; both are shown, so
+	// nothing is omitted and no names hint is expected.
 	if !strings.Contains(out, "- **alpha**") {
 		t.Error("expected alpha in output (all-stale fallback)")
 	}
 	if !strings.Contains(out, "- **beta**") {
 		t.Error("expected beta in output (all-stale fallback)")
 	}
-	// Footer should still be present (stats is non-nil)
-	if !strings.Contains(out, "Additional skills are available via `find_skill`") {
-		t.Error("expected find_skill hint")
+	if strings.Contains(out, "Try names:") {
+		t.Errorf("expected no names hint when nothing is omitted, got: %s", out)
 	}
 }
 
@@ -189,13 +185,9 @@ func TestFormatForPromptColdStart(t *testing.T) {
 	if skillCount != 10 {
 		t.Fatalf("expected 10 skills in prompt (cold start, capped at TopN), got %d", skillCount)
 	}
-	// Footer should show omitted count (cold start with empty stats)
-	if !strings.Contains(out, "5 additional skills omitted for brevity") {
-		t.Error("expected '5 additional skills omitted for brevity' footer for cold start with empty stats")
-	}
-	// Should NOT show find_skill hint (no stats entries = no ranking data)
-	if strings.Contains(out, "find_skill") {
-		t.Error("cold start with empty stats should not show find_skill hint")
+	// Hint should list the omitted skill names (no stats to rank by, input order)
+	if !strings.Contains(out, "Try names: skill-10, skill-11, skill-12, skill-13, skill-14") {
+		t.Errorf("expected omitted-names hint for cold start, got: %s", out)
 	}
 }
 
@@ -229,5 +221,72 @@ func TestFormatForPromptSupplementFillsTopN(t *testing.T) {
 	}
 	if !strings.Contains(out, "- **unranked-b**") {
 		t.Error("expected unranked-b (supplement)")
+	}
+}
+
+func TestFormatForPromptPinnedAlwaysListed(t *testing.T) {
+	skills := []Skill{
+		{Name: "alpha", Description: "Alpha", FilePath: "/tmp/a/SKILL.md"},
+		{Name: "beta", Description: "Beta", FilePath: "/tmp/b/SKILL.md"},
+		{Name: "gamma", Description: "Gamma", FilePath: "/tmp/g/SKILL.md"},
+		{Name: "session-history", Description: "History", FilePath: "/tmp/h/SKILL.md", Pinned: true},
+	}
+
+	// Stats rank only alpha; topN=1. Without pinning, session-history would
+	// be invisible — the exact death spiral this fixes.
+	stats := &SkillStatsFile{
+		Version: 1,
+		TopN:    1,
+		Entries: map[string]*SkillUsageEntry{
+			"alpha": {Name: "alpha", Count: 50, LastUsed: time.Now(), Score: 50},
+		},
+	}
+
+	out := FormatForPrompt(skills, stats)
+
+	if !strings.Contains(out, "- **session-history**") {
+		t.Errorf("pinned skill should always be listed, got: %s", out)
+	}
+	if strings.Contains(out, "- **beta**") || strings.Contains(out, "- **gamma**") {
+		t.Errorf("non-pinned unranked skills should be cut by topN, got: %s", out)
+	}
+}
+
+func TestFormatForPromptPinnedNotDuplicated(t *testing.T) {
+	skills := []Skill{
+		{Name: "alpha", Description: "Alpha", FilePath: "/tmp/a/SKILL.md", Pinned: true},
+		{Name: "beta", Description: "Beta", FilePath: "/tmp/b/SKILL.md"},
+	}
+
+	// alpha is both ranked and pinned — must appear exactly once.
+	stats := &SkillStatsFile{
+		Version: 1,
+		TopN:    2,
+		Entries: map[string]*SkillUsageEntry{
+			"alpha": {Name: "alpha", Count: 5, LastUsed: time.Now(), Score: 5},
+		},
+	}
+
+	out := FormatForPrompt(skills, stats)
+	if n := strings.Count(out, "- **alpha**"); n != 1 {
+		t.Errorf("pinned+ranked skill should appear exactly once, got %d: %s", n, out)
+	}
+}
+
+func TestFormatForPromptPinnedColdStart(t *testing.T) {
+	skills := make([]Skill, 0, 13)
+	for i := 0; i < 12; i++ {
+		skills = append(skills, Skill{Name: fmt.Sprintf("skill-%d", i), Description: "d", FilePath: "/tmp/s"})
+	}
+	// The 13th skill (index 12) would be cut by topN=10, but it is pinned.
+	skills = append(skills, Skill{Name: "pinned-late", Description: "d", FilePath: "/tmp/p", Pinned: true})
+
+	out := FormatForPrompt(skills, nil)
+
+	if !strings.Contains(out, "- **pinned-late**") {
+		t.Errorf("pinned skill should survive the cold-start cutoff, got: %s", out)
+	}
+	if strings.Contains(out, "- **skill-11**") {
+		t.Errorf("unpinned skills beyond topN should still be cut, got: %s", out)
 	}
 }

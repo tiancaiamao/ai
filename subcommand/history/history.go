@@ -91,10 +91,14 @@ Usage:
   ai history <action> [flags]
 
 Actions:
-  windows    List compaction generations (windows) of the session
+  windows    List compaction generations (windows) of a session — a table of
+             contents: one line per archived page with a summary preview.
+             Start here to see what was compacted away and pick a page.
   list       List message items in a window or along the current path
   read       Read one entry in full, in character-based pages
-  search     Literal substring search over messages and compaction snapshots
+  search     Literal substring search across all pages (windows) of a
+             session, including compacted-away history. Returns entry IDs
+             to feed into 'read'.
 
 Global flags:
   --id <run-id|prefix>   Run ID or unique prefix; required unless --session
@@ -145,8 +149,9 @@ Examples:
   ai history read --id a1b2c3 --entry <entry-id>
                                        Read one entry in full
   ai history read --id a1b2c3 --entry e --offset-chars 20000 --max-chars 20000
-  ai history search "auth bug" --id a1b2c3 --json
-                                       Search, machine-readable output
+  ai history search "auth bug" --id a1b2c3
+                                       Recover context lost to compaction:
+                                       find it, then read the entry
   ai history search "err" --id a1b2c3 --json | jq -r '.entry_id'
                                        Collect entry IDs for batch reads
 `)
