@@ -170,14 +170,7 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 	}
 	cfgCopy := *config
 	config = &cfgCopy
-	var llmDecideCfg *LLMDecideConfig
-	if cfgCopy.LLMDecide != nil {
-		llmCfg := *cfgCopy.LLMDecide
-		llmDecideCfg = &llmCfg
-	} else {
-		defaults := DefaultLLMDecideConfig(contextWindow)
-		llmDecideCfg = &defaults
-	}
+	llmCfg := effectiveLLMDecideConfig(cfgCopy.LLMDecide, contextWindow)
 	return &Compactor{
 		config:          config,
 		model:           model,
@@ -185,8 +178,37 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 		systemPrompt:    systemPrompt,
 		contextWindow:   contextWindow,
 		sessionDir:      sessionDir,
-		llmDecideConfig: llmDecideCfg,
+		llmDecideConfig: &llmCfg,
 	}
+}
+
+func effectiveLLMDecideConfig(cfg *LLMDecideConfig, contextWindow int) LLMDecideConfig {
+	effective := DefaultLLMDecideConfig(contextWindow)
+	if cfg == nil {
+		return effective
+	}
+	if cfg.SoftThreshold > 0 {
+		effective.SoftThreshold = cfg.SoftThreshold
+	}
+	if cfg.HardLimit > 0 {
+		effective.HardLimit = cfg.HardLimit
+	}
+	if cfg.TierMedium > 0 {
+		effective.TierMedium = cfg.TierMedium
+	}
+	if cfg.TierHigh > 0 {
+		effective.TierHigh = cfg.TierHigh
+	}
+	if cfg.IntervalLow > 0 {
+		effective.IntervalLow = cfg.IntervalLow
+	}
+	if cfg.IntervalMedium > 0 {
+		effective.IntervalMedium = cfg.IntervalMedium
+	}
+	if cfg.IntervalHigh > 0 {
+		effective.IntervalHigh = cfg.IntervalHigh
+	}
+	return effective
 }
 
 // GetConfig returns the compactor configuration.

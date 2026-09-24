@@ -37,6 +37,42 @@ func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
 	}
 }
 
+func TestNewCompactorCopiesLLMDecideConfig(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold:  111,
+			HardLimit:      222,
+			TierMedium:     333,
+			TierHigh:       444,
+			IntervalLow:    5,
+			IntervalMedium: 6,
+			IntervalHigh:   7,
+		},
+	}
+
+	compactor := NewCompactor(cfg, llm.Model{}, "", "", 100_000, "")
+	if compactor.llmDecideConfig == cfg.LLMDecide {
+		t.Fatal("expected compactor to keep an internal copy of LLMDecide config")
+	}
+
+	cfg.LLMDecide.HardLimit = 999
+	if compactor.llmDecideConfig.HardLimit != 222 {
+		t.Fatal("expected caller mutations not to affect compactor runtime thresholds")
+	}
+}
+
+func TestNewCompactorFillsMissingLLMDecideFields(t *testing.T) {
+	compactor := NewCompactor(&Config{
+		AutoCompact: true,
+		LLMDecide:   &LLMDecideConfig{},
+	}, llm.Model{}, "", "", 100_000, "")
+
+	if compactor.llmDecideConfig.HardLimit <= 0 {
+		t.Fatal("expected default hard limit for zero-value LLMDecide config")
+	}
+}
+
 func TestShouldCompact_Disabled(t *testing.T) {
 	config := &Config{
 		AutoCompact: false,
