@@ -47,7 +47,7 @@ func TestCompact_FewMessages(t *testing.T) {
 	config := DefaultConfig()
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
-	// With fewer messages than KeepRecentTokens, should return nil result
+	// With fewer messages than the token budget, the budget is still sufficient for these messages
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("Hello"),

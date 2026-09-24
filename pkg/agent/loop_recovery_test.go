@@ -32,10 +32,6 @@ func (c *recoveryCompactor) Compact(_ context.Context, ctx *agentctx.AgentContex
 	}, nil
 }
 
-func (c *recoveryCompactor) calculateDynamicThreshold() int {
-	return 100000 // Default threshold for tests
-}
-
 func newTestAgentEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
 	return llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 		func(e AgentEvent) bool { return e.Type == EventAgentEnd },

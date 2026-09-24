@@ -658,8 +658,6 @@ func (c *testCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (
 	return &agentctx.CompactionResult{Summary: "[summary]"}, nil
 }
 
-func (c *testCompactor) calculateDynamicThreshold() int { return 100000 }
-
 func eventTypes(events []agent.AgentEvent) []string {
 	types := make([]string, len(events))
 	for i, e := range events {

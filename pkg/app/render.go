@@ -478,9 +478,7 @@ var settingsDisplayKeys = []string{
 	"compaction-context-window",
 	"compaction-reserve-tokens",
 	"compaction-token-limit",
-	"compaction-max-messages",
 	"compaction-max-tokens",
-	"compaction-keep-recent",
 	"compaction-keep-recent-tokens",
 }
 
