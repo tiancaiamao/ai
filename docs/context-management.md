@@ -225,7 +225,7 @@ Every tool output is normalized before being added to context:
 - **Images**: Preserved completely
 
 When truncation occurs, the full original output is offloaded to
-`<session-dir>/toolout/<tool-call-id>.txt` (falling back to a content-hash
+`<session-dir>/toolout/<tool-call-id>.txt` (`-N` suffix for additional truncated text blocks in the same result; falling back to a content-hash
 name, and to `/tmp/ai-toolout-…` when no session dir is available; skipped for
 outputs above a hardcoded 16MB cap). The truncation marker embeds the absolute
 path — `…N tokens truncated, full output: /abs/path…` — so the agent can

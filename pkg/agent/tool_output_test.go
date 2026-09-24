@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,15 +144,10 @@ func TestOffloadNamingIdempotentAndFallsBackToHash(t *testing.T) {
 
 	// Unsafe/empty tool call id falls back to content hash naming.
 	unsafe := offloadTruncatedToolOutput("data", "../../evil", sessionDir, "")
-	want := filepath.Join(sessionDir, "toolout", "3a6eb0790f39ac87.txt") // replaced below if mismatched
-	if unsafe == "" {
-		t.Fatal("expected offload with hash fallback")
-	}
-	if filepath.Dir(unsafe) != filepath.Dir(want) {
-		t.Fatalf("hash fallback should stay in toolout dir: %q", unsafe)
-	}
-	if filepath.Base(unsafe) == "../../evil.txt" || strings.Contains(filepath.Base(unsafe), "/") {
-		t.Fatalf("path traversal not sanitized: %q", unsafe)
+	sum := sha256.Sum256([]byte("data"))
+	want := filepath.Join(sessionDir, "toolout", hex.EncodeToString(sum[:8])+".txt")
+	if unsafe != want {
+		t.Fatalf("expected hash-named fallback file %q, got %q", want, unsafe)
 	}
 
 	// No session dir: falls back to /tmp with run id.
@@ -195,5 +192,38 @@ func TestTruncateToolContentNoFileWhenNotTruncated(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir, "toolout")); !os.IsNotExist(err) {
 		t.Fatal("no toolout dir should be created when output is not truncated")
+	}
+}
+
+func TestTruncateToolContentMultipleTruncatedBlocksUseDistinctFiles(t *testing.T) {
+	sessionDir := t.TempDir()
+	first := strings.Repeat("a", 12000)
+	second := strings.Repeat("b", 11000)
+	blocks := []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: first},
+		agentctx.TextContent{Type: "text", Text: second},
+	}
+
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash", "callu_multi", sessionDir, "")
+	for i, want := range []string{first, second} {
+		text, ok := result[i].(agentctx.TextContent)
+		if !ok {
+			t.Fatalf("block %d: expected text content, got %T", i, result[i])
+		}
+		name := "callu_multi.txt"
+		if i == 1 {
+			name = "callu_multi-2.txt"
+		}
+		path := filepath.Join(sessionDir, "toolout", name)
+		if !strings.Contains(text.Text, ", full output: "+path+"…") {
+			t.Fatalf("block %d: marker should point at %s, got: %.200s", i, path, text.Text)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("block %d: expected offload file %s: %v", i, path, err)
+		}
+		if string(data) != want {
+			t.Fatalf("block %d: offloaded content differs from original output", i)
+		}
 	}
 }

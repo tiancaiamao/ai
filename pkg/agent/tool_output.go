@@ -70,6 +70,10 @@ func truncateToolContent(ctx context.Context, content []agentctx.ContentBlock, l
 	}
 
 	result := make([]agentctx.ContentBlock, 0, len(content))
+	// 1-based index of truncated text blocks within this tool result. Multiple
+	// truncated blocks share the tool call id, so blocks after the first get a
+	// "-N" filename suffix to avoid overwriting each other's offload files.
+	truncatedBlockIndex := 0
 	for _, block := range content {
 		switch b := block.(type) {
 		case agentctx.TextContent:
@@ -78,7 +82,12 @@ func truncateToolContent(ctx context.Context, content []agentctx.ContentBlock, l
 			// Check if truncation is needed
 			if originalLen > maxChars {
 				// Offload the full output so truncation is recoverable via `read`.
-				offloadPath := offloadTruncatedToolOutput(b.Text, toolCallID, sessionDir, runID)
+				truncatedBlockIndex++
+				nameID := toolCallID
+				if truncatedBlockIndex > 1 {
+					nameID = fmt.Sprintf("%s-%d", toolCallID, truncatedBlockIndex)
+				}
+				offloadPath := offloadTruncatedToolOutput(b.Text, nameID, sessionDir, runID)
 				markerSuffix := ""
 				if offloadPath != "" {
 					markerSuffix = ", full output: " + offloadPath

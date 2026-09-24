@@ -8,7 +8,8 @@ Not a git log mirror — focus on what changed at the design level, not just wha
 **What changed**: When a tool's text output exceeds the 10,000-char truncation
 limit, the full original output is now written to
 `<session-dir>/toolout/<tool-call-id>.txt` (content-hash name when no tool
-call id is available; `/tmp/ai-toolout-<runid>-<name>.txt` when the session
+call id is available, `-N` suffix for additional truncated text blocks in the
+same result; `/tmp/ai-toolout-<runid>-<name>.txt` when the session
 dir is unreachable; skipped entirely above a hardcoded 16MB cap). The
 truncation marker now embeds the absolute path —
 `…N tokens truncated, full output: /abs/path…` — implemented via
