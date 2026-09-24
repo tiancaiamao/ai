@@ -8,7 +8,7 @@ The `compact` package manages conversation context size within LLM window limits
 
 ### Compaction Decision: LLMDecide Mode
 
-When `LLMDecideConfig` is set, the compactor uses a tiered threshold system:
+The compactor automatically uses LLM-decides compaction with thresholds selected from the model context window. `LLMDecideConfig` is internal and is not user-configurable.
 
 1. **Hard limit**: At or above → compact immediately
 2. **Soft threshold**: Below → skip (not enough pressure)
@@ -46,16 +46,14 @@ When compaction triggers (`Compact`), all canary messages are removed and `canar
 
 ```go
 type Config struct {
-    MaxMessages           int              // Compress when messages exceed this
     MaxTokens             int              // Compress when estimated tokens exceed this
-    KeepRecent            int              // Always keep this many recent messages
     KeepRecentTokens      int              // Token budget for recent messages
     ReserveTokens         int              // Tokens to reserve from context window
-        ToolCallCutoff        int              // Archive tool results when visible count exceeds this
+    ToolCallCutoff        int              // Archive tool results when visible count exceeds this
     ToolSummaryAutomation string           // "off", "fallback", or "always"
     AutoCompact           bool             // Enable automatic compaction
     GracePeriod           int              // Protect N most recent tool results from archiving
-    LLMDecide             *LLMDecideConfig // Enable LLM-decides mode
+    LLMDecide             *LLMDecideConfig // Internal; auto-configured from model context window
 }
 
 type LLMDecideConfig struct {
@@ -69,7 +67,7 @@ type LLMDecideConfig struct {
 }
 ```
 
-`DefaultLLMDecideConfig(contextWindow)` returns tuned thresholds for the given context window size.
+The compactor automatically selects thresholds from the model context window via `DefaultLLMDecideConfig(contextWindow)`. `LLMDecideConfig` is internal and is not user-configurable or read from `config.json`.
 
 ## Core Methods
 
@@ -79,11 +77,10 @@ func (c *Compactor) Compact(ctx, agentCtx) (*CompactionResult, error)
 ```
 
 `ShouldCompact`:
-- If `LLMDecide` is set: tiered threshold + LLM yes/no gate (`shouldCompactLLMDecide`)
-- Otherwise: dynamic threshold based on `MaxTokens` or `MaxMessages`
+- Tiered threshold + LLM yes/no gate (`shouldCompactLLMDecide`)
 
 `Compact`:
-1. Splits messages by token budget (`splitMessagesByTokenBudget`) or count
+1. Splits messages by token budget (`splitMessagesByTokenBudget`)
 2. Summarizes old messages via LLM (`GenerateSummary`)
 3. Fixes tool-call/result pairing (`ensureToolCallPairing` / `ensureToolCallPairingWithGrace`)
 4. Compacts excess tool results (`compactToolResultsInRecent`)

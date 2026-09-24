@@ -749,3 +749,17 @@ Key commits: `c9eb5aa` (#338) --role flag, `fddee39` role validation,
 | Context management tools (v1/v2) | `4394172` (#1) 2026-03 | `b28a112` (#305) 2026-06 | Cache-unfriendly, cognitive burden, replaced by LLMDecide |
 | `PROJECT_CONTEXT` injection | — | `c6a5763` (#284) 2026-06 | Removed, not useful |
 | Go MCP implementation | — | `bfcb2cf` 2026-03 | Replaced by mcporter skill |
+
+## Remove classic-mode compaction remnants
+
+**What changed**: Removed the unused message-count settings (`MaxMessages` and
+`KeepRecent`) and the obsolete compactor-level `EstimateTokens` API. The
+internal dynamic threshold helper is unexported, status/config displays only
+report live token-based settings, and `LLMDecide` is no longer exposed through
+user configuration. A missing internal LLMDecide config now falls back to
+context-window defaults.
+
+**Why**: Compaction decisions now exclusively use LLMDecide, and execution
+uses token budgets and `AgentContext` token estimates. Keeping the former
+classic-mode options visible implied behaviors that no longer existed, while
+LLMDecide settings read from user config were silently overwritten at startup.

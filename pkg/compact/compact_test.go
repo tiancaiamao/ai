@@ -10,6 +10,72 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
+func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
+	cfg := &Config{AutoCompact: true}
+	compactor := NewCompactor(cfg, llm.Model{}, "", "", 100_000, "")
+	if cfg.LLMDecide != nil {
+		t.Fatal("expected caller config to remain unchanged")
+	}
+	if compactor.config.LLMDecide != nil {
+		t.Fatal("expected stored config to preserve nil internal LLMDecide setting")
+	}
+	if compactor.llmDecideConfig == nil {
+		t.Fatal("expected compactor to use default LLMDecide config")
+	}
+	if got := compactor.GetConfig(); got == nil || got.LLMDecide == nil || got.LLMDecide.HardLimit != compactor.llmDecideConfig.HardLimit {
+		t.Fatal("expected GetConfig to expose effective runtime LLMDecide thresholds")
+	}
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage(strings.Repeat("x", 2000))},
+	}
+	if compactor.ShouldCompact(context.Background(), agentCtx) {
+		t.Fatal("expected default soft threshold to avoid compaction")
+	}
+
+	agentCtx.RecentMessages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage(strings.Repeat("x", 400000)),
+	}
+	if !compactor.ShouldCompact(context.Background(), agentCtx) {
+		t.Fatal("expected default hard limit to trigger compaction")
+	}
+}
+
+func TestNewCompactorCopiesLLMDecideConfig(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold:  111,
+			HardLimit:      222,
+			TierMedium:     333,
+			TierHigh:       444,
+			IntervalLow:    5,
+			IntervalMedium: 6,
+			IntervalHigh:   7,
+		},
+	}
+
+	compactor := NewCompactor(cfg, llm.Model{}, "", "", 100_000, "")
+	if compactor.llmDecideConfig == cfg.LLMDecide {
+		t.Fatal("expected compactor to keep an internal copy of LLMDecide config")
+	}
+
+	cfg.LLMDecide.HardLimit = 999
+	if compactor.llmDecideConfig.HardLimit != 222 {
+		t.Fatal("expected caller mutations not to affect compactor runtime thresholds")
+	}
+}
+
+func TestNewCompactorFillsMissingLLMDecideFields(t *testing.T) {
+	compactor := NewCompactor(&Config{
+		AutoCompact: true,
+		LLMDecide:   &LLMDecideConfig{},
+	}, llm.Model{}, "", "", 100_000, "")
+
+	if compactor.llmDecideConfig.HardLimit <= 0 {
+		t.Fatal("expected default hard limit for zero-value LLMDecide config")
+	}
+}
+
 func TestShouldCompact_Disabled(t *testing.T) {
 	config := &Config{
 		AutoCompact: false,
@@ -29,31 +95,11 @@ func TestShouldCompact_Disabled(t *testing.T) {
 	}
 }
 
-func TestEstimateTokens(t *testing.T) {
-	config := DefaultConfig()
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
-
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("Hello world"),
-		agentctx.NewAssistantMessage(),
-	}
-
-	tokens := compactor.EstimateTokens(messages)
-	if tokens <= 0 {
-		t.Errorf("Estimated tokens should be positive, got %d", tokens)
-	}
-
-	// Very rough check: should be more than 10 characters / 4 = 2.5 tokens
-	if tokens < 2 {
-		t.Errorf("Estimated tokens seems too low: %d", tokens)
-	}
-}
-
 func TestCompact_FewMessages(t *testing.T) {
 	config := DefaultConfig()
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
-	// With fewer messages than KeepRecent, should return nil result
+	// With fewer messages than the token budget, the budget is still sufficient for these messages
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("Hello"),

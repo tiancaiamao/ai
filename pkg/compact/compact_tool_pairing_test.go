@@ -173,9 +173,7 @@ func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
 // TestFullCompactPreservesPairing tests the full compaction flow preserves tool_call/tool_result pairing
 func TestFullCompactPreservesPairing(t *testing.T) {
 	config := &Config{
-		MaxMessages:      10,
 		MaxTokens:        1000,
-		KeepRecent:       2,
 		KeepRecentTokens: 100,
 		AutoCompact:      true,
 	}

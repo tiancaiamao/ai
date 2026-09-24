@@ -24,7 +24,7 @@ var compactCheckPrompt string
 var compactHint string
 
 // CompactorBasePrompt returns a baseline system prompt used by the compactor
-// for token estimation in CalculateDynamicThreshold. This string is NOT sent
+// for token estimation in the dynamic compaction threshold. This string is NOT sent
 // to the LLM as a system prompt — the compactor reuses the agent's system prompt
 // for cache-friendliness. The content here only affects token-overhead arithmetic.
 func CompactorBasePrompt() string {
