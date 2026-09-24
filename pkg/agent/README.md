@@ -126,7 +126,7 @@ The stream supports abort via `Push(agentEndEvent)` and cancellation through con
 | `loop_hooks.go` | Loop-specific hook implementations |
 | `tool_exec.go` | Tool execution dispatch |
 | `tool_guard.go` | Tool execution safety guards (loop guard, consecutive limits) |
-| `tool_output.go` | `ToolOutputLimits`, tool output processing |
+| `tool_output.go` | `ToolOutputLimits`, tool output processing, truncated-output offload to `<session-dir>/toolout/` |
 | `tool_call_normalize.go` | Tool call normalization |
 | `tool_metadata.go` | Tool metadata extraction |
 | `tool_tag_parser.go` | Tool tag parsing |

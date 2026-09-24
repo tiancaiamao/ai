@@ -309,6 +309,8 @@ func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *t
 		newLoopTestEventStream(),
 		nil,
 		DefaultToolOutputLimits(),
+		"",
+		"",
 	)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 tool result, got %d", len(results))

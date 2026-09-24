@@ -12,16 +12,22 @@ Provides safe text truncation for tool outputs and long messages. The truncation
 
 ```go
 func Truncate(text string, maxChars int) string
+func TruncateWithMarkerSuffix(text string, maxChars int, markerSuffix string) string
 ```
 
-Truncates `text` to fit within `maxChars` bytes with:
+Truncate truncates `text` to fit within `maxChars` bytes with:
 - 50/50 split between prefix and suffix
 - UTF-8 boundary safety (never splits a multi-byte character)
 - Truncation marker showing approximate removed token count
 
+`TruncateWithMarkerSuffix` appends `markerSuffix` inside the marker (before the
+closing `…`), e.g. a pointer to a file holding the full untruncated output.
+Size accounting still guarantees the result is at most `maxChars` bytes.
+
 Example output:
 ```
 [first N chars]…1250 tokens truncated…[last N chars]
+[first N chars]…1250 tokens truncated, full output: /abs/path…[last N chars]
 ```
 
 ### TruncateString
