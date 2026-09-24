@@ -1,6 +1,7 @@
 package session
 
 import (
+	"path/filepath"
 	"testing"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -167,4 +168,77 @@ func findCompactionEntry(s *Session) *SessionEntry {
 		}
 	}
 	return nil
+}
+
+// TestCompactionSnapshot_NoOverwriteAfterLazyResume verifies that a compaction
+// performed after a lazy-load resume does not overwrite an earlier snapshot
+// file. Snapshot names were previously derived from the in-memory compaction
+// entry count, which is incomplete after a lazy-load resume (only the last
+// compaction entry is kept in memory), so the second compaction reused the
+// first snapshot's file name and silently replaced its content.
+func TestCompactionSnapshot_NoOverwriteAfterLazyResume(t *testing.T) {
+	dir := t.TempDir()
+	sess := NewSession(dir)
+
+	for i := 0; i < 5; i++ {
+		sess.AppendMessage(agentctx.NewUserMessage("before first compaction"))
+	}
+	post1 := []agentctx.AgentMessage{agentctx.NewUserMessage("[summary 1]")}
+	if _, err := sess.AppendCompaction("first summary", post1); err != nil {
+		t.Fatalf("first AppendCompaction: %v", err)
+	}
+	sess.AppendMessage(agentctx.NewUserMessage("between compactions"))
+
+	// Second compaction before the restart: on disk there are now two
+	// snapshot files, but the lazy resume below will only keep the last
+	// compaction entry in memory.
+	post1b := []agentctx.AgentMessage{agentctx.NewUserMessage("[summary 1b]")}
+	if _, err := sess.AppendCompaction("first-b summary", post1b); err != nil {
+		t.Fatalf("second AppendCompaction: %v", err)
+	}
+	sess.AppendMessage(agentctx.NewUserMessage("between compactions"))
+
+	// Simulate a process restart: lazy load keeps only recent messages and
+	// the last compaction entry in memory.
+	resumed, err := LoadSession(dir)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	post2 := []agentctx.AgentMessage{agentctx.NewUserMessage("[summary 2]")}
+	if _, err := resumed.AppendCompaction("second summary", post2); err != nil {
+		t.Fatalf("AppendCompaction after resume: %v", err)
+	}
+
+	full, err := loadSessionFull(dir)
+	if err != nil {
+		t.Fatalf("loadSessionFull: %v", err)
+	}
+	var refs []string
+	for _, e := range full.entries {
+		if e.Type == EntryTypeCompaction {
+			refs = append(refs, e.SnapshotRef)
+		}
+	}
+	if len(refs) != 3 {
+		t.Fatalf("compaction entries = %d, want 3", len(refs))
+	}
+	for i := 0; i < len(refs); i++ {
+		for j := i + 1; j < len(refs); j++ {
+			if refs[i] == refs[j] {
+				t.Fatalf("snapshot refs collide: %s = %s", refs[i], refs[j])
+			}
+		}
+	}
+
+	want := []string{"[summary 1]", "[summary 1b]", "[summary 2]"}
+	for i, ref := range refs {
+		snap, err := loadSnapshotMessages(filepath.Join(dir, ref))
+		if err != nil {
+			t.Fatalf("load snapshot %s: %v", ref, err)
+		}
+		if len(snap) != 1 || firstTextContent(snap[0]) != want[i] {
+			t.Errorf("snapshot %s = %d msgs, want %q — earlier snapshot was overwritten",
+				ref, len(snap), want[i])
+		}
+	}
 }

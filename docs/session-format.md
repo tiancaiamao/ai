@@ -17,8 +17,8 @@ Sessions persist the full conversation history for an agent instance as append-o
     ├── <session-uuid-1>/
     │   ├── messages.jsonl               # Append-only entry log
         │   ├── compactions/                 # Compaction snapshot files
-    │   │   ├── compaction_00001.jsonl   # Post-compaction messages
-    │   │   └── compaction_00002.jsonl
+        │   │   ├── compaction_ab12cd34.jsonl   # Post-compaction messages (named by entry id)
+    │   │   └── compaction_ef56ab78.jsonl
     │   └── meta.json                    # Session metadata incl. current workdir
     ├── <session-uuid-2>/
     │   ├── messages.jsonl
@@ -154,11 +154,11 @@ Records a compaction event. The post-compaction messages are saved to an externa
 
 ```json
 {
-  "type": "compaction",
-  "id": "comp-001",
+    "type": "compaction",
+  "id": "ab12cd34",
   "parentId": "msg-003",
   "timestamp": "2025-01-15T10:35:00.000Z",
-  "snapshotRef": "compactions/compaction_00001.jsonl",
+  "snapshotRef": "compactions/compaction_ab12cd34.jsonl",
   "summary": "The user asked to fix a bug in auth.go. The assistant read the file and identified an issue with token validation..."
 }
 ```
