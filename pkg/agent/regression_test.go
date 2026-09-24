@@ -313,7 +313,3 @@ func (c *testCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (
 func (c *testCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	return c.shouldTrigger
 }
-
-func (c *testCompactor) CalculateDynamicThreshold() int {
-	return 100000
-}

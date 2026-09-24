@@ -30,9 +30,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Compactor == nil {
 		t.Error("Expected compactor config to be initialized")
 	} else {
-		if cfg.Compactor.MaxMessages != 50 {
-			t.Errorf("Expected default MaxMessages 50, got %d", cfg.Compactor.MaxMessages)
-		}
 		if cfg.Compactor.MaxTokens != 8000 {
 			t.Errorf("Expected default MaxTokens 8000, got %d", cfg.Compactor.MaxTokens)
 		}
@@ -68,9 +65,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			"maxTokens": 77777
 		},
 		"compactor": {
-			"maxMessages": 100,
 			"maxTokens": 5000,
-			"keepRecent": 10,
 			"keepRecentTokens": 12000,
 			"toolCallCutoff": 6,
 		"toolSummaryAutomation": "always",
@@ -108,10 +103,6 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 	if cfg.Model.MaxTokens != 77777 {
 		t.Errorf("Expected model MaxTokens 77777, got %d", cfg.Model.MaxTokens)
-	}
-
-	if cfg.Compactor.MaxMessages != 100 {
-		t.Errorf("Expected MaxMessages 100, got %d", cfg.Compactor.MaxMessages)
 	}
 
 	if cfg.Compactor.MaxTokens != 5000 {
@@ -221,7 +212,21 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 	}
 }
 
-// TestSaveConfig tests saving config to file.
+func TestLoadConfigIgnoresLLMDecideConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	data := `{"compactor":{"LLMDecide":{"HardLimit":1}}}`
+	if err := os.WriteFile(configPath, []byte(data), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config with legacy LLMDecide block: %v", err)
+	}
+	if cfg.Compactor.LLMDecide != nil {
+		t.Fatal("LLMDecide should not be loaded from user config")
+	}
+}
+
 func TestSaveConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "test_save.json")
@@ -234,9 +239,7 @@ func TestSaveConfig(t *testing.T) {
 			API:      "test-api",
 		},
 		Compactor: &compact.Config{
-			MaxMessages: 75,
 			MaxTokens:   6000,
-			KeepRecent:  7,
 			AutoCompact: true,
 		},
 		Log: &LogConfig{
@@ -262,10 +265,6 @@ func TestSaveConfig(t *testing.T) {
 
 	if loadedCfg.Model.ID != "test-model" {
 		t.Errorf("Expected model ID 'test-model', got '%s'", loadedCfg.Model.ID)
-	}
-
-	if loadedCfg.Compactor.MaxMessages != 75 {
-		t.Errorf("Expected MaxMessages 75, got %d", loadedCfg.Compactor.MaxMessages)
 	}
 }
 
@@ -407,16 +406,9 @@ func TestCompactorDefaults(t *testing.T) {
 	}
 
 	compactorConfig := cfg.Compactor
-	if compactorConfig.MaxMessages != 50 {
-		t.Errorf("Expected MaxMessages 50, got %d", compactorConfig.MaxMessages)
-	}
 
 	if compactorConfig.MaxTokens != 8000 {
 		t.Errorf("Expected MaxTokens 8000, got %d", compactorConfig.MaxTokens)
-	}
-
-	if compactorConfig.KeepRecent != 5 {
-		t.Errorf("Expected KeepRecent 5, got %d", compactorConfig.KeepRecent)
 	}
 	if compactorConfig.KeepRecentTokens != 20000 {
 		t.Errorf("Expected KeepRecentTokens 20000, got %d", compactorConfig.KeepRecentTokens)

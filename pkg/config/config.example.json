@@ -8,7 +8,6 @@
   },
   "compactor": {
     "MaxTokens": 8000,
-    "KeepRecent": 5,
     "KeepRecentTokens": 20000,
     "ReserveTokens": 16384,
     "ToolCallCutoff": 10,

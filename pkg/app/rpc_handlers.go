@@ -94,7 +94,7 @@ func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 	ag.SetThinkingLevel(app.cfg.ThinkingLevel)
 	app.ag = ag
 
-	slog.Info("Auto-compact enabled", "maxMessages", app.compactorConfig.MaxMessages, "maxTokens", app.compactorConfig.MaxTokens)
+	slog.Info("Auto-compact enabled", "maxTokens", app.compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
