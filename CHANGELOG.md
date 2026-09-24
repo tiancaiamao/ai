@@ -48,6 +48,28 @@ are at different decay steps. This also fixes a subtle bug in the original
 implementation, where the in-place decay mutated stored scores and the
 per-entry max merge then restored the pre-decay value from disk on every
 save, nullifying decay entirely.
+## Truncated tool output is offloaded to a file (2026-09)
+
+**What changed**: When a tool's text output exceeds the 10,000-char truncation
+limit, the full original output is now written to
+`<session-dir>/toolout/<tool-call-id>.txt` (content-hash name when no tool
+call id is available, `-N` suffix for additional truncated text blocks in the
+same result; `/tmp/ai-toolout-<runid>-<name>.txt` when the session
+dir is unreachable; skipped entirely above a hardcoded 16MB cap). The
+truncation marker now embeds the absolute path —
+`…N tokens truncated, full output: /abs/path…` — implemented via
+`truncate.TruncateWithMarkerSuffix`, which keeps the existing ≤ maxChars size
+guarantee. The `tool_output_truncated` trace event gained an `offload_path`
+field (or an `offload_skipped` reason).
+
+**Why**: Previously the truncated middle was permanently lost; the only
+recovery was re-running the command, which can be expensive or non-deterministic.
+The existing mitigation was a prompt-level rule telling the model to redirect
+long output to a temp file itself — self-discipline, not infrastructure.
+Offloading makes recovery a guarantee: the model can page through the full
+output with the `read` tool (offset/limit). Files are named by tool call id so
+re-truncating the same result doesn't rewrite identical content, and the
+prompt rule stays in place as the cheaper first line of defense.
 
 ## Compaction snapshots are named by entry id (2026-09)
 
@@ -773,3 +795,17 @@ Key commits: `c9eb5aa` (#338) --role flag, `fddee39` role validation,
 | Context management tools (v1/v2) | `4394172` (#1) 2026-03 | `b28a112` (#305) 2026-06 | Cache-unfriendly, cognitive burden, replaced by LLMDecide |
 | `PROJECT_CONTEXT` injection | — | `c6a5763` (#284) 2026-06 | Removed, not useful |
 | Go MCP implementation | — | `bfcb2cf` 2026-03 | Replaced by mcporter skill |
+
+## Remove classic-mode compaction remnants
+
+**What changed**: Removed the unused message-count settings (`MaxMessages` and
+`KeepRecent`) and the obsolete compactor-level `EstimateTokens` API. The
+internal dynamic threshold helper is unexported, status/config displays only
+report live token-based settings, and `LLMDecide` is no longer exposed through
+user configuration. A missing internal LLMDecide config now falls back to
+context-window defaults.
+
+**Why**: Compaction decisions now exclusively use LLMDecide, and execution
+uses token budgets and `AgentContext` token estimates. Keeping the former
+classic-mode options visible implied behaviors that no longer existed, while
+LLMDecide settings read from user config were silently overwritten at startup.

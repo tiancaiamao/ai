@@ -32,10 +32,6 @@ func (c *recoveryCompactor) Compact(_ context.Context, ctx *agentctx.AgentContex
 	}, nil
 }
 
-func (c *recoveryCompactor) CalculateDynamicThreshold() int {
-	return 100000 // Default threshold for tests
-}
-
 func newTestAgentEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
 	return llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
@@ -525,10 +521,6 @@ func (f *failingCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentCon
 
 func (f *failingCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	return nil, errors.New("compaction failed")
-}
-
-func (f *failingCompactor) CalculateDynamicThreshold() int {
-	return 100000 // Default threshold for tests
 }
 
 // TestRunInnerLoopMaxTurnsLimit tests that the loop stops when max turns is reached

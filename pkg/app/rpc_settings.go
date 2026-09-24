@@ -36,17 +36,13 @@ func BuildSettingsResponse(s SettingsSnapshot) map[string]any {
 	compactionContext := "unknown"
 	compactionReserve := "unknown"
 	compactionLimit := "unknown"
-	compactionMaxMessages := "disabled"
 	compactionMaxTokens := "disabled"
-	compactionKeepRecent := "unknown"
 	compactionKeepRecentTokens := "unknown"
 	if s.Compaction != nil {
 		compactionContext = FormatIntOrUnknown(s.Compaction.ContextWindow)
 		compactionReserve = FormatIntOrUnknown(s.Compaction.ReserveTokens)
 		compactionLimit = FormatTokenLimit(s.Compaction)
-		compactionMaxMessages = FormatLimit(s.Compaction.MaxMessages)
 		compactionMaxTokens = FormatLimit(s.Compaction.MaxTokens)
-		compactionKeepRecent = FormatIntOrUnknown(s.Compaction.KeepRecent)
 		compactionKeepRecentTokens = FormatIntOrUnknown(s.Compaction.KeepRecentTokens)
 	}
 
@@ -63,9 +59,7 @@ func BuildSettingsResponse(s SettingsSnapshot) map[string]any {
 			"compaction-context-window":     compactionContext,
 			"compaction-reserve-tokens":     compactionReserve,
 			"compaction-token-limit":        compactionLimit,
-			"compaction-max-messages":       compactionMaxMessages,
 			"compaction-max-tokens":         compactionMaxTokens,
-			"compaction-keep-recent":        compactionKeepRecent,
 			"compaction-keep-recent-tokens": compactionKeepRecentTokens,
 		},
 	}

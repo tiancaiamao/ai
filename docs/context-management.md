@@ -50,7 +50,7 @@ The `sessionCompactor` is a thin thread-safe wrapper holding a `*compact.Compact
 
 **File:** `pkg/compact/compact.go` — `shouldCompactLLMDecide()`
 
-When the `LLMDecide` config is set, the compactor uses a tiered threshold system instead of a single hard limit:
+LLM-decides compaction uses thresholds selected automatically for the current model's context window; they are not user-configurable and are not read from `config.json`.
 
 ### Config (`LLMDecideConfig`)
 
@@ -66,7 +66,7 @@ type LLMDecideConfig struct {
 }
 ```
 
-`DefaultLLMDecideConfig(contextWindow)` returns tuned thresholds for the given context window size.
+Thresholds are auto-configured for the selected model context window; values are not user-tunable.
 
 ### Decision Flow
 
@@ -120,7 +120,7 @@ The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigg
 
 ### Flow
 
-1. **Split messages**: Divide `RecentMessages` into `oldMessages` (to summarize) and `recentMessages` (to keep intact), using a token budget (`KeepRecentTokens`). If all messages fit within the budget but the message count exceeds 50, a forced split keeps the last 30%.
+1. **Split messages**: Divide `RecentMessages` into `oldMessages` (to summarize) and `recentMessages` (to keep intact), using a token budget (`KeepRecentTokens`). If token estimation says all messages fit within the budget despite high message count, a forced split keeps the last 30%.
 2. **Generate summary**: LLM summarizes `oldMessages` (which may include the previous compaction summary message)
 3. **Fix tool-call pairing**: Ensure `tool_call` / `tool_result` pairs are not split across the boundary
 4. **Compact tool results**: If visible tool results exceed `ToolCallCutoff`, hide oldest ones from agent (keep visible to user)
@@ -133,7 +133,7 @@ The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigg
 
 When `KeepRecentTokens > 0`: walks backwards from the latest message, accumulating token estimates until budget is reached. Compaction summary messages are always included in the "recent" set.
 
-**Force-split fallback**: If token estimation says all messages fit within budget but message count > 50, a forced 30/70 split is applied (estimation is a rough `chars/4` heuristic).
+**Force-split fallback**: If token estimation says all messages fit within budget despite a high message count, a forced 30/70 split is applied (estimation is a rough `chars/4` heuristic).
 
 ### Tool-Call Pairing
 
@@ -223,6 +223,14 @@ Every tool output is normalized before being added to context:
 - **Text output**: Truncated to 10,000 chars (head+tail preservation)
 - **Error patterns**: Detected and preserved with higher priority
 - **Images**: Preserved completely
+
+When truncation occurs, the full original output is offloaded to
+`<session-dir>/toolout/<tool-call-id>.txt` (`-N` suffix for additional truncated text blocks in the same result; falling back to a content-hash
+name, and to `/tmp/ai-toolout-…` when no session dir is available; skipped for
+outputs above a hardcoded 16MB cap). The truncation marker embeds the absolute
+path — `…N tokens truncated, full output: /abs/path…` — so the agent can
+recover the full output with the `read` tool instead of re-running the
+command.
 
 ### Tool Call Cutoff
 

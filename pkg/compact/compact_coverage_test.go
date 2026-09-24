@@ -140,19 +140,19 @@ func TestCompactor_EffectiveTokenLimit(t *testing.T) {
 func TestCalculateDynamicThreshold_EdgeCases(t *testing.T) {
 	// No context window → use config MaxTokens
 	c := NewCompactor(&Config{MaxTokens: 7777}, llm.Model{}, "", "", 0, "")
-	if got := c.CalculateDynamicThreshold(); got != 7777 {
+	if got := c.calculateDynamicThreshold(); got != 7777 {
 		t.Errorf("expected 7777, got %d", got)
 	}
 
 	// Tiny context window (overhead > window) → fall back to MaxTokens
 	c2 := NewCompactor(&Config{MaxTokens: 3333, ReserveTokens: 50000}, llm.Model{}, "", "huge system prompt", 1000, "")
-	if got := c2.CalculateDynamicThreshold(); got != 3333 {
+	if got := c2.calculateDynamicThreshold(); got != 3333 {
 		t.Errorf("expected fall-back 3333, got %d", got)
 	}
 
 	// Window with all overhead but small available → minimum threshold 4000 applies
 	c3 := NewCompactor(&Config{ReserveTokens: 16384, MaxTokens: 5000}, llm.Model{}, "", "", 20000, "")
-	got := c3.CalculateDynamicThreshold()
+	got := c3.calculateDynamicThreshold()
 	if got < 4000 {
 		t.Errorf("expected minimum threshold 4000, got %d", got)
 	}
@@ -224,8 +224,7 @@ func TestCompact_EmptyMessages(t *testing.T) {
 
 func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 	cfg := &Config{
-		KeepRecent:       3,
-		KeepRecentTokens: 0, // exercise the keepCount branch
+		KeepRecentTokens: 0, // exercise the zero-token-budget fallback
 		AutoCompact:      true,
 	}
 	c := NewCompactor(cfg, llm.Model{}, "", "", 0, "")
@@ -234,7 +233,7 @@ func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 		agentctx.NewUserMessage("a"),
 		agentctx.NewUserMessage("b"),
 	}
-	// Fewer messages than KeepRecent — no-op
+	// Fewer messages than the forced-split threshold — no-op
 	r, err := c.Compact(context.Background(), ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

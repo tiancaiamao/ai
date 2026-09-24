@@ -260,7 +260,7 @@ func TestFormatTruncationMarker(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := formatTruncationMarker(tt.removedTokens)
+		result := formatTruncationMarker(tt.removedTokens, "")
 		if result != tt.expected {
 			t.Errorf("formatTruncationMarker(%d) = %q, want %q", tt.removedTokens, result, tt.expected)
 		}
@@ -320,5 +320,41 @@ func TestTruncateString(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("TruncateString(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
 		}
+	}
+}
+
+func TestTruncateWithMarkerSuffix(t *testing.T) {
+	text := strings.Repeat("abcdefgh", 5000) // 40000 bytes
+	suffix := ", full output: /tmp/some/path/output.txt"
+
+	result := TruncateWithMarkerSuffix(text, 10000, suffix)
+	if len(result) > 10000 {
+		t.Fatalf("result exceeds maxChars: %d > 10000", len(result))
+	}
+	if !strings.Contains(result, "tokens truncated"+suffix+"…") {
+		t.Errorf("marker should embed the suffix, got: %.200s…", result)
+	}
+
+	// Empty suffix keeps the legacy marker format.
+	if got := TruncateWithMarkerSuffix(text, 10000, ""); !strings.Contains(got, "tokens truncated…") || strings.Contains(got, "full output") {
+		t.Errorf("empty suffix should keep legacy marker, got: %.200s…", got)
+	}
+}
+
+func TestTruncateWithMarkerSuffixFallsBackWhenBudgetTooSmall(t *testing.T) {
+	text := strings.Repeat("abcdefgh", 200) // 1600 bytes
+	longSuffix := ", full output: /tmp/very/long/path/to/offloaded/tool/output/file.txt"
+
+	// maxChars smaller than the marker+suffix: suffix must be dropped, and
+	// the plain truncation behavior must be preserved.
+	result := TruncateWithMarkerSuffix(text, 60, longSuffix)
+	if len(result) > 60 {
+		t.Fatalf("result exceeds maxChars: %d > 60", len(result))
+	}
+	if strings.Contains(result, "full output") {
+		t.Fatalf("suffix should be dropped when it does not fit the budget: %q", result)
+	}
+	if !strings.Contains(result, "tokens truncated") {
+		t.Fatalf("expected truncation marker, got %q", result)
 	}
 }

@@ -99,7 +99,6 @@ Returned by compactors after performing compression.
 type Compactor interface {
     ShouldCompact(ctx, agentCtx) bool
     Compact(ctx, agentCtx) (*CompactionResult, error)
-    CalculateDynamicThreshold() int
 }
 ```
 

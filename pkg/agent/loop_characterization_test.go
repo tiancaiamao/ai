@@ -357,10 +357,6 @@ func (c *characterizationTriggerCompactor) Compact(_ context.Context, ctx *agent
 	}, nil
 }
 
-func (c *characterizationTriggerCompactor) CalculateDynamicThreshold() int {
-	return 100000
-}
-
 // TestCharacterization_CompactionTrigger verifies that when ShouldCompact returns
 // true, compaction fires automatically and emits the correct events.
 func TestCharacterization_CompactionTrigger(t *testing.T) {

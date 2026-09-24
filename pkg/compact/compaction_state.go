@@ -2,9 +2,7 @@ package compact
 
 // CompactionState represents compaction thresholds and settings.
 type CompactionState struct {
-	MaxMessages           int    `json:"maxMessages,omitempty"`
 	MaxTokens             int    `json:"maxTokens,omitempty"`
-	KeepRecent            int    `json:"keepRecent,omitempty"`
 	KeepRecentTokens      int    `json:"keepRecentTokens,omitempty"`
 	ReserveTokens         int    `json:"reserveTokens,omitempty"`
 	ToolCallCutoff        int    `json:"toolCallCutoff,omitempty"`
@@ -21,9 +19,7 @@ func BuildCompactionState(cfg *Config, compactor *Compactor) *CompactionState {
 	}
 	limit, source := compactor.EffectiveTokenLimit()
 	return &CompactionState{
-		MaxMessages:           cfg.MaxMessages,
 		MaxTokens:             cfg.MaxTokens,
-		KeepRecent:            cfg.KeepRecent,
 		KeepRecentTokens:      cfg.KeepRecentTokens,
 		ReserveTokens:         compactor.ReserveTokens(),
 		ToolCallCutoff:        cfg.ToolCallCutoff,
