@@ -139,6 +139,9 @@ type Compactor struct {
 	// call. nil means use the real askLLM method.
 	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
 
+	// llmDecideConfig stores the effective threshold config used at runtime.
+	llmDecideConfig *LLMDecideConfig
+
 	// llmDecideLastAskCount tracks the tool-call counter value at the last
 	// LLM-decide ask, preventing re-asking every turn after a "no".
 	llmDecideLastAskCount int
@@ -167,20 +170,22 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 	}
 	cfgCopy := *config
 	config = &cfgCopy
+	var llmDecideCfg *LLMDecideConfig
 	if cfgCopy.LLMDecide != nil {
 		llmCfg := *cfgCopy.LLMDecide
-		config.LLMDecide = &llmCfg
+		llmDecideCfg = &llmCfg
 	} else {
 		defaults := DefaultLLMDecideConfig(contextWindow)
-		config.LLMDecide = &defaults
+		llmDecideCfg = &defaults
 	}
 	return &Compactor{
-		config:        config,
-		model:         model,
-		apiKey:        apiKey,
-		systemPrompt:  systemPrompt,
-		contextWindow: contextWindow,
-		sessionDir:    sessionDir,
+		config:          config,
+		model:           model,
+		apiKey:          apiKey,
+		systemPrompt:    systemPrompt,
+		contextWindow:   contextWindow,
+		sessionDir:      sessionDir,
+		llmDecideConfig: llmDecideCfg,
 	}
 }
 
@@ -606,7 +611,7 @@ func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentC
 // on error it falls back to compacting.
 func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	tokens := agentCtx.EstimateTokens()
-	cfg := c.config.LLMDecide
+	cfg := c.llmDecideConfig
 
 	if tokens >= cfg.HardLimit {
 		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
@@ -678,7 +683,7 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 }
 
 func (c *Compactor) llmDecideInterval(tokens int) int {
-	cfg := c.config.LLMDecide
+	cfg := c.llmDecideConfig
 	switch {
 	case tokens >= cfg.TierHigh:
 		return cfg.IntervalHigh
@@ -756,7 +761,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		c.askPrompt = prompt.CompactCheckPrompt()
 	}
 
-	cfg := c.config.LLMDecide
+	cfg := c.llmDecideConfig
 	budgetPct := fmt.Sprintf("%d%% (%d / %d tokens)", tokens*100/cfg.HardLimit, tokens, cfg.HardLimit)
 	askContent := fmt.Sprintf(c.askPrompt, budgetPct)
 

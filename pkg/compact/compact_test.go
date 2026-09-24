@@ -16,7 +16,10 @@ func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
 	if cfg.LLMDecide != nil {
 		t.Fatal("expected caller config to remain unchanged")
 	}
-	if compactor.config.LLMDecide == nil {
+	if compactor.config.LLMDecide != nil {
+		t.Fatal("expected stored config to preserve nil internal LLMDecide setting")
+	}
+	if compactor.llmDecideConfig == nil {
 		t.Fatal("expected compactor to use default LLMDecide config")
 	}
 	agentCtx := &agentctx.AgentContext{
