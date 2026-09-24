@@ -19,6 +19,38 @@ point. Entry ids are unique, so the file name is stable across resumes. Old
 sessions keep working: readers follow the `snapshotRef` stored in each entry,
 never the file name.
 
+## Compacted history is steered to `ai history`; skills can pin themselves (2026-09)
+
+**What changed**: After a compaction, the `<critical>` note appended to the
+summary no longer tells the agent to `read`/`grep` the raw
+`compactions/archived_*.jsonl` files. It now inlines copy-paste-ready
+`ai history windows/search/read --id <run-id>` commands (run id wired into
+the compactor via `SetRunID` at setup, falling back to `--session <dir>` when
+unknown) and explicitly forbids direct raw-file access. The
+`compact_hint.md` system-prompt item 3 was rewritten to match, so the note
+and the standing hint no longer contradict each other.
+
+The skill system gained two visibility mechanisms: (1) a `pinned: true`
+frontmatter flag that always lists a skill in the `<agent:skills>` injection
+regardless of usage ranking or the topN cutoff (`session-history` is pinned),
+and (2) the omitted-skills footer now names up to 10 actually-omitted skills
+(ranked by decayed usage via new `SortByScore`) instead of a static keyword
+list. `ai history` CLI help was expanded to describe each action's role in
+the recover-lost-context workflow, and top-level `ai` usage now lists
+`history` as a subcommand with a `--id` description matching the subcommand's
+actual no-cwd-autoselect behavior.
+
+**Why**: Session analysis of a long-running agent showed the post-compaction
+note directing the model to raw JSONL files (single lines up to 3.5 MB)
+while the `ai history` CLI — which bounds output to 40 KB and offers
+pagination/search — was used zero times; the `session-history` skill that
+documents the CLI ranked below the topN cutoff (10 uses) and was therefore
+never shown, and hand-editing `skill-stats.json` to boost it was silently
+overwritten on the next `Save()`. Pinning is the durable fix for
+"this skill must always be discoverable"; the derived footer names replace
+guessable keywords with real skill names even in the cold-start case.
+
+
 ## Slash-command failures are visible to clients (2026-09)
 
 **What changed**: A slash command that fails now emits its reason as an

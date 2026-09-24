@@ -84,6 +84,9 @@ func parseFrontmatter(content []byte) (*Frontmatter, []byte, error) {
 		case "disable-model-invocation":
 			// Parse as boolean
 			fm.DisableModelInvocation = parseBool(value)
+		case "pinned":
+			// Parse as boolean: always list this skill regardless of usage ranking
+			fm.Pinned = parseBool(value)
 		default:
 			// Store in metadata
 			fm.Metadata[key] = value

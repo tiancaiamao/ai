@@ -185,6 +185,7 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 
 	// --- Compactor ---
 	compactor, compactorConfig := createCompactor(cfg, model, apiKey, currentContextWindow, sess.GetDir())
+	compactor.SetRunID(params.RunID)
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 

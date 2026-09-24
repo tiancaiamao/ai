@@ -37,9 +37,10 @@ When compaction triggers (`Compact`), all canary messages are removed and `canar
 1. Split messages into "old" (summarize) and "recent" (keep) by token budget or count
 2. Generate LLM summary of old messages (with previous summary for incremental update)
 3. Fix tool-call/result pairing across the split boundary
-4. Archive excess visible tool results (beyond `ToolCallCutoff`)
-5. Clean stale runtime_state messages
-6. Return `CompactionResult` with before/after token counts
+4. Archive old messages to `compactions/archived_*.jsonl` (pages of the session); the summary is followed by a `<critical>` note that steers the agent to the `ai history` CLI (`windows`/`search`/`read`) with the run ID inlined (`SetRunID`) so compacted history stays retrievable without raw file access
+5. Archive excess visible tool results (beyond `ToolCallCutoff`)
+6. Clean stale runtime_state messages
+7. Return `CompactionResult` with before/after token counts
 
 ## Config
 

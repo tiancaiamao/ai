@@ -122,7 +122,7 @@ func TestCompact_SummaryContainsArchivePath(t *testing.T) {
 		t.Fatalf("Compact failed: %v", err)
 	}
 
-	// First message should be the compaction summary with archive path
+	// First message should be the compaction summary prefixed with the note
 	if len(agentCtx.RecentMessages) == 0 {
 		t.Fatal("no messages after compact")
 	}
@@ -131,11 +131,17 @@ func TestCompact_SummaryContainsArchivePath(t *testing.T) {
 	if !strings.Contains(summaryText, "mock summary content") {
 		t.Errorf("summary should contain LLM-generated content, got: %s", summaryText)
 	}
-	if !strings.Contains(summaryText, "archived_") {
-		t.Errorf("summary should contain archive path reference, got: %s", summaryText)
+	if !strings.Contains(summaryText, "ai history") {
+		t.Errorf("note should steer to the ai history CLI, got: %s", summaryText)
 	}
-	if !strings.Contains(summaryText, dir) {
-		t.Errorf("summary should contain session dir path, got: %s", summaryText)
+	// No run ID was set, so the note falls back to --session <sessionDir>.
+	if !strings.Contains(summaryText, "--session '"+dir+"'") {
+		t.Errorf("note should include --session fallback with session dir, got: %s", summaryText)
+	}
+	// The raw archive file path must NOT be exposed: it invites raw reads of
+	// megabyte-sized JSONL lines.
+	if strings.Contains(summaryText, "archived_") {
+		t.Errorf("note should not expose the raw archive path, got: %s", summaryText)
 	}
 
 	// Archive file should exist with valid JSONL content
@@ -168,5 +174,40 @@ func TestCompact_SummaryContainsArchivePath(t *testing.T) {
 	}
 	if !found {
 		t.Error("no archived_*.jsonl file found in compactions dir")
+	}
+}
+
+func TestArchiveNote_RunID(t *testing.T) {
+	c := NewCompactor(nil, llm.Model{}, "", "", 0, "/sessions/foo")
+	c.SetRunID("abc123")
+	note := c.archiveNote()
+
+	for _, want := range []string{"--id abc123", "ai history windows", "ai history search", "ai history read", "session-history", "</critical>"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note should contain %q, got: %s", want, note)
+		}
+	}
+	if strings.Contains(note, "--session") {
+		t.Errorf("note should not fall back to --session when runID is set, got: %s", note)
+	}
+}
+
+func TestArchiveNote_SessionFallback(t *testing.T) {
+	c := NewCompactor(nil, llm.Model{}, "", "", 0, "/sessions/foo")
+	note := c.archiveNote()
+
+	if !strings.Contains(note, "--session '/sessions/foo'") {
+		t.Errorf("note should use quoted --session fallback, got: %s", note)
+	}
+	if strings.Contains(note, "--id") {
+		t.Errorf("note should not contain --id without a run ID, got: %s", note)
+	}
+
+	// Session dirs derive from the working directory and can contain spaces
+	// or quotes; the inlined commands must stay copy-paste ready.
+	c = NewCompactor(nil, llm.Model{}, "", "", 0, "/Users/me/My Project's dir")
+	note = c.archiveNote()
+	if !strings.Contains(note, "--session '/Users/me/My Project'\\''s dir'") {
+		t.Errorf("note should shell-quote paths with spaces/quotes, got: %s", note)
 	}
 }

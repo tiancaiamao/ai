@@ -323,6 +323,7 @@ func (l *Loader) loadFromFile(filePath string, source string) *fileLoadResult {
 		Content:                string(bodyContent),
 		Frontmatter:            *frontmatter,
 		DisableModelInvocation: frontmatter.DisableModelInvocation,
+		Pinned:                 frontmatter.Pinned,
 	}
 
 	return &fileLoadResult{Skill: skill, Diagnostics: diagnostics}

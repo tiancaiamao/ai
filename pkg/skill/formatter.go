@@ -9,6 +9,7 @@ import (
 
 const (
 	maxSkillDescriptionRunes = 220
+	maxKeywordNames          = 10
 )
 
 // FormatForPrompt formats skills for inclusion in a system prompt.
@@ -20,7 +21,8 @@ const (
 //
 // If stats is non-nil and has entries, only the top-N ranked skills from
 // stats are shown. Otherwise (cold start / nil stats), all visible skills
-// are shown capped at DefaultTopN.
+// are shown capped at DefaultTopN. Pinned skills (frontmatter
+// `pinned: true`) are always listed regardless of ranking or the topN cutoff.
 func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 	// Filter out skills that shouldn't be auto-included
 	visibleSkills := make([]Skill, 0, len(skills))
@@ -93,6 +95,9 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 		}
 	}
 
+	// Pinned skills are always listed, even when cut by the topN ranking.
+	selected = ensurePinned(selected, visibleSkills)
+
 	lines := []string{
 		"## Skills",
 		"Skills are specialized instructions. Before starting any non-trivial task, check available skills first. If any skill's description matches your task, read the FULL skill file BEFORE acting — not after, not when stuck.",
@@ -109,17 +114,47 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 	)
 
-	if stats != nil && len(stats.Entries) > 0 {
-		// Hint about discoverable skills so LLM knows what to search for.
-		// Keep it short — this is a cold-start bridge, not an exhaustive list.
+	// Hint about omitted skills so the LLM knows what to search for with
+	// find_skill. Derived from the actual omitted skill names (ranked by
+	// usage when stats are available), not a static keyword list.
+	selectedNames := make(map[string]bool, len(selected))
+	for _, s := range selected {
+		selectedNames[s.Name] = true
+	}
+	var omittedNames []string
+	for _, s := range visibleSkills {
+		if !selectedNames[s.Name] {
+			omittedNames = append(omittedNames, s.Name)
+		}
+	}
+	if len(omittedNames) > 0 {
+		if stats != nil {
+			omittedNames = stats.SortByScore(omittedNames)
+		}
+		if len(omittedNames) > maxKeywordNames {
+			omittedNames = omittedNames[:maxKeywordNames]
+		}
 		lines = append(lines, "",
-			"*Additional skills are available via `find_skill`. Try keywords: coding, debug, browser, git, mobile, device, PDF, Obsidian, notes, orchestration, architecture, review, planning, brainstorm, security, hardware.*")
-	} else if len(visibleSkills) > topN {
-		omitted := len(visibleSkills) - topN
-		lines = append(lines, fmt.Sprintf("*Note: %d additional skills omitted for brevity.*", omitted))
+			fmt.Sprintf("*Additional skills are available via `find_skill`. Try names: %s.*", strings.Join(omittedNames, ", ")))
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// ensurePinned appends any pinned skills not already in selected, so pinned
+// skills survive the topN cutoff in both the ranked and cold-start paths.
+func ensurePinned(selected, visible []Skill) []Skill {
+	seen := make(map[string]bool, len(selected))
+	for _, s := range selected {
+		seen[s.Name] = true
+	}
+	for _, s := range visible {
+		if s.Pinned && !seen[s.Name] {
+			selected = append(selected, s)
+			seen[s.Name] = true
+		}
+	}
+	return selected
 }
 
 // escapeXML escapes special XML characters.

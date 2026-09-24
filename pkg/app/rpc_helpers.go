@@ -98,6 +98,7 @@ func (app *App) createBaseContext() *agentctx.AgentContext {
 	// Sync prefix to compactor: AgentContext.AgentContextPrefix has json:"-"
 	// and is lost on checkpoint/restore, so the compactor stores its own copy.
 	if app.compactor != nil {
+		app.compactor.SetRunID(app.runID)
 		app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
 		app.compactor.SetThinkingLevel(app.currentThinkingLevel)
 	}

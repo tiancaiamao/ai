@@ -146,6 +146,38 @@ func (s *SkillStatsFile) Save() error {
 	return os.Rename(tmpPath, s.FilePath)
 }
 
+// SortByScore returns the given names sorted by descending time-decayed score
+// (same decay as TopSkills). Names without a stats entry sort last, in input
+// order. Used to rank omitted skill names for the find_skill keyword hint.
+func (s *SkillStatsFile) SortByScore(names []string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	scores := make([]float64, len(names))
+	for i, name := range names {
+		if entry, ok := s.Entries[name]; ok {
+			hoursSince := now.Sub(entry.LastUsed).Hours()
+			scores[i] = entry.Score * math.Pow(0.5, hoursSince/decayHalfLifeHours)
+		}
+	}
+
+	idx := make([]int, len(names))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		return scores[idx[a]] > scores[idx[b]]
+	})
+
+	result := make([]string, len(names))
+	for i, j := range idx {
+		result[i] = names[j]
+	}
+	return result
+}
+
 // TopSkills returns up to n skill names sorted by descending time-decayed score.
 // The effective score for ranking applies decay based on time elapsed since
 // each skill's LastUsed:
