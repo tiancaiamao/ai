@@ -165,6 +165,10 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 	if config == nil {
 		config = DefaultConfig()
 	}
+	if config.LLMDecide == nil {
+		defaults := DefaultLLMDecideConfig(contextWindow)
+		config.LLMDecide = &defaults
+	}
 	return &Compactor{
 		config:        config,
 		model:         model,
@@ -598,11 +602,6 @@ func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentC
 func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	tokens := agentCtx.EstimateTokens()
 	cfg := c.config.LLMDecide
-	if cfg == nil {
-		defaults := DefaultLLMDecideConfig(c.contextWindow)
-		c.config.LLMDecide = &defaults
-		cfg = c.config.LLMDecide
-	}
 
 	if tokens >= cfg.HardLimit {
 		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
