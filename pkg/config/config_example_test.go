@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
@@ -36,6 +37,12 @@ func TestConfigExampleFile(t *testing.T) {
 	// Verify compactor config exists
 	if cfg.Compactor == nil {
 		t.Fatal("Compactor config should not be nil")
+	}
+	if bytes.Contains(data, []byte(`"LLMDecide"`)) {
+		t.Fatal("config.example.json should not expose internal LLMDecide settings")
+	}
+	if cfg.Compactor.LLMDecide != nil {
+		t.Fatal("example config should not load internal LLMDecide settings")
 	}
 
 	// Verify compactor config matches defaults
