@@ -22,6 +22,9 @@ func TestShouldCompactLLMDecideNilConfigUsesDefaults(t *testing.T) {
 	if compactor.llmDecideConfig == nil {
 		t.Fatal("expected compactor to use default LLMDecide config")
 	}
+	if got := compactor.GetConfig(); got == nil || got.LLMDecide == nil || got.LLMDecide.HardLimit != compactor.llmDecideConfig.HardLimit {
+		t.Fatal("expected GetConfig to expose effective runtime LLMDecide thresholds")
+	}
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage(strings.Repeat("x", 2000))},
 	}

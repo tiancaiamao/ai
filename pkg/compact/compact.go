@@ -213,7 +213,15 @@ func effectiveLLMDecideConfig(cfg *LLMDecideConfig, contextWindow int) LLMDecide
 
 // GetConfig returns the compactor configuration.
 func (c *Compactor) GetConfig() *Config {
-	return c.config
+	if c == nil || c.config == nil {
+		return nil
+	}
+	cfgCopy := *c.config
+	if c.llmDecideConfig != nil {
+		llmCfg := *c.llmDecideConfig
+		cfgCopy.LLMDecide = &llmCfg
+	}
+	return &cfgCopy
 }
 
 // calculateDynamicThreshold calculates the compaction threshold based on context window.
