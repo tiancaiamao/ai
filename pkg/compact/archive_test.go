@@ -182,7 +182,7 @@ func TestArchiveNote_RunID(t *testing.T) {
 	c.SetRunID("abc123")
 	note := c.archiveNote()
 
-	for _, want := range []string{"--id abc123", "ai history windows", "ai history search", "ai history read", "</critical>"} {
+	for _, want := range []string{"--id abc123", "ai history windows", "ai history search", "ai history read", "session-history", "</critical>"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note should contain %q, got: %s", want, note)
 		}

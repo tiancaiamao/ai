@@ -543,6 +543,7 @@ func (c *Compactor) archiveNote() string {
 		"  ai history windows " + flag + "        # index of all pages (TOC of this session)\n" +
 		"  ai history search \"<keyword>\" " + flag + "  # locate entries (bounded output)\n" +
 		"  ai history read --entry <id> " + flag + "      # read one entry in full (paginated)\n" +
+		"For the full CLI reference, load the `session-history` skill (find_skill) or run `ai history --help`.\n" +
 		"Never read or grep the raw JSONL files under compactions/ directly — a single line can be megabytes.\n" +
 		"</critical>"
 }
