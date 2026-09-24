@@ -2,6 +2,7 @@ package skill
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/truncate"
@@ -10,6 +11,10 @@ import (
 const (
 	maxSkillDescriptionRunes = 220
 	maxKeywordNames          = 10
+	// explorationSlots reserves the tail of the top-N prompt slots for the
+	// least recently shown skills, so low-frequency skills still rotate into
+	// the prompt instead of starving behind high-frequency ones.
+	explorationSlots = 2
 )
 
 // FormatForPrompt formats skills for inclusion in a system prompt.
@@ -19,10 +24,17 @@ const (
 // Skills with DisableModelInvocation=true are excluded from the prompt
 // (they can only be invoked explicitly via /skill:name commands).
 //
-// If stats is non-nil and has entries, only the top-N ranked skills from
-// stats are shown. Otherwise (cold start / nil stats), all visible skills
-// are shown capped at DefaultTopN. Pinned skills (frontmatter
-// `pinned: true`) are always listed regardless of ranking or the topN cutoff.
+// If stats is non-nil and has entries, the top-N prompt slots are split
+// between exploitation (highest session-decayed score) and exploration
+// (least recently shown, never-shown first). Pinned skills (frontmatter
+// `pinned: true`) and project-local skills (source "project" from
+// .agents/skills, or explicit "path") are always listed regardless of
+// ranking or the topN cutoff. Otherwise (cold start / nil stats), all
+// visible skills are shown capped at DefaultTopN.
+//
+// The selected skills are recorded via stats.RecordShown so the exploration
+// rotation has a "least recently shown" signal; the prompt builder persists
+// it.
 func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 	// Filter out skills that shouldn't be auto-included
 	visibleSkills := make([]Skill, 0, len(skills))
@@ -45,35 +57,24 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 	var selected []Skill
 
 	if stats != nil && len(stats.Entries) > 0 {
-		// Stats-based ranking: use TopSkills to determine order
-		topNames := stats.TopSkills(topN)
-		nameSet := make(map[string]bool, len(topNames))
-		for _, n := range topNames {
-			nameSet[n] = true
-		}
-
 		// Build lookup by name
 		skillByName := make(map[string]*Skill, len(visibleSkills))
 		for i := range visibleSkills {
 			skillByName[visibleSkills[i].Name] = &visibleSkills[i]
 		}
 
-		// Add ranked skills that exist in the loaded list (in rank order)
-		for _, name := range topNames {
+		// Exploitation: highest-ranked (session-decayed) skills first.
+		exploitN := topN - explorationSlots
+		if exploitN < 1 {
+			exploitN = 1
+		}
+		for _, name := range stats.TopSkills(topN) {
+			if len(selected) >= exploitN {
+				break
+			}
 			if s, ok := skillByName[name]; ok {
 				selected = append(selected, *s)
 				delete(skillByName, name)
-			}
-		}
-
-		// Supplement with unranked skills to fill up to topN
-		for _, s := range visibleSkills {
-			if len(selected) >= topN {
-				break
-			}
-			if _, ok := skillByName[s.Name]; ok {
-				selected = append(selected, s)
-				delete(skillByName, s.Name)
 			}
 		}
 
@@ -85,6 +86,28 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 			} else {
 				selected = visibleSkills
 			}
+		} else if remaining := topN - len(selected); remaining > 0 && len(skillByName) > 0 {
+			// Exploration: fill the remaining slots with the least recently
+			// shown skills (never shown first, name order as tie-break).
+			unselected := make([]Skill, 0, len(skillByName))
+			for _, s := range skillByName {
+				unselected = append(unselected, *s)
+			}
+			sort.Slice(unselected, func(i, j int) bool {
+				li := stats.LastShownOf(unselected[i].Name)
+				lj := stats.LastShownOf(unselected[j].Name)
+				if !li.Equal(lj) {
+					return li.Before(lj)
+				}
+				return unselected[i].Name < unselected[j].Name
+			})
+			if remaining > len(unselected) {
+				remaining = len(unselected)
+			}
+			for _, s := range unselected[:remaining] {
+				selected = append(selected, s)
+				delete(skillByName, s.Name)
+			}
 		}
 	} else {
 		// Cold start / nil stats: show all visible skills capped at topN
@@ -95,8 +118,19 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 		}
 	}
 
-	// Pinned skills are always listed, even when cut by the topN ranking.
-	selected = ensurePinned(selected, visibleSkills)
+	// Pinned skills and project-local skills are always listed, even when
+	// cut by the topN ranking.
+	selected = ensureAlwaysListed(selected, visibleSkills)
+
+	// Record which skills were shown so the exploration rotation can pick
+	// the least recently shown next time.
+	if stats != nil && len(selected) > 0 {
+		shownNames := make([]string, len(selected))
+		for i, s := range selected {
+			shownNames[i] = s.Name
+		}
+		stats.RecordShown(shownNames)
+	}
 
 	lines := []string{
 		"## Skills",
@@ -141,15 +175,19 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 	return strings.Join(lines, "\n")
 }
 
-// ensurePinned appends any pinned skills not already in selected, so pinned
-// skills survive the topN cutoff in both the ranked and cold-start paths.
-func ensurePinned(selected, visible []Skill) []Skill {
+// ensureAlwaysListed appends pinned skills and project-local skills not
+// already in selected. Project skills (source "project" from .agents/skills
+// or explicitly added "path" skills) are always listed: they were
+// deliberately placed for this project/agent and should not compete in the
+// usage ranking. Survives the topN cutoff in both the ranked and
+// cold-start paths.
+func ensureAlwaysListed(selected, visible []Skill) []Skill {
 	seen := make(map[string]bool, len(selected))
 	for _, s := range selected {
 		seen[s.Name] = true
 	}
 	for _, s := range visible {
-		if s.Pinned && !seen[s.Name] {
+		if (s.Pinned || s.Source == "project" || s.Source == "path") && !seen[s.Name] {
 			selected = append(selected, s)
 			seen[s.Name] = true
 		}

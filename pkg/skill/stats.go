@@ -13,10 +13,11 @@ import (
 
 // SkillUsageEntry tracks usage statistics for a single skill.
 type SkillUsageEntry struct {
-	Name     string    `json:"name"`
-	Count    int       `json:"count"`
-	LastUsed time.Time `json:"lastUsed"`
-	Score    float64   `json:"score"`
+	Name      string    `json:"name"`
+	Count     int       `json:"count"`
+	LastUsed  time.Time `json:"lastUsed"`
+	LastShown time.Time `json:"lastShown"`
+	Score     float64   `json:"score"`
 }
 
 // SkillStatsFile holds persisted skill usage statistics.
@@ -121,9 +122,42 @@ func (s *SkillStatsFile) RecordUsage(skillName string) {
 	entry.Score++
 }
 
+// RecordShown marks the given skills as shown in the prompt (LastShown).
+// Persistence happens via Save, which the prompt builder performs after
+// formatting.
+func (s *SkillStatsFile) RecordShown(names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	for _, name := range names {
+		entry, ok := s.Entries[name]
+		if !ok {
+			entry = &SkillUsageEntry{Name: name}
+			s.Entries[name] = entry
+		}
+		entry.LastShown = now
+	}
+}
+
+// LastShownOf returns the last-shown timestamp for a skill (zero time if the
+// skill has never been shown).
+func (s *SkillStatsFile) LastShownOf(name string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if entry, ok := s.Entries[name]; ok {
+		return entry.LastShown
+	}
+	return time.Time{}
+}
+
 // Save writes the stats to s.FilePath atomically using write-to-temp + rename.
 // The caller must NOT hold s.mu; Save acquires it internally.
 func (s *SkillStatsFile) Save() error {
+	if s.FilePath == "" {
+		return nil // nothing to persist (e.g. stats built in tests)
+	}
 	s.mu.Lock()
 	data, err := json.MarshalIndent(s, "", "  ")
 	s.mu.Unlock()
@@ -151,7 +185,11 @@ func (s *SkillStatsFile) Save() error {
 		return err
 	}
 
-	return os.Rename(tmpPath, s.FilePath)
+	if err := os.Rename(tmpPath, s.FilePath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // SortByScore returns the given names sorted by descending score.

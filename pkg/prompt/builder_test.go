@@ -344,16 +344,17 @@ func TestBuilderWithSkillStats(t *testing.T) {
 		t.Error("agent:skills wrapper missing")
 	}
 
-	// With TopN=2 and "popular" ranked highest, "medium" should not appear
-	// because it has no stats entry and popular + unpopular fill the top 2.
-	// Actually, let's check: popular (ranked), unpopular (ranked) → top 2 from stats.
-	// "medium" has no stats → it gets added as unranked supplement only if room.
-	// TopN=2, ranked=2 → selected has 2 → medium is excluded.
+	// TopN=2 → 1 exploitation + 1 exploration slot. "popular" wins
+	// exploitation; "medium" (never shown) fills the exploration slot over
+	// "unpopular" via the name tie-break.
 	if !contains(skillsMsg, "**popular**") {
 		t.Error("popular skill should appear")
 	}
-	if contains(skillsMsg, "**medium**") {
-		t.Error("medium skill should be filtered out (TopN=2, not in top entries)")
+	if !contains(skillsMsg, "**medium**") {
+		t.Error("medium skill should appear (exploration slot)")
+	}
+	if contains(skillsMsg, "**unpopular**") {
+		t.Error("unpopular skill should be filtered out (lost the exploration tie-break)")
 	}
 
 	// Stats present → should include find_skill hint

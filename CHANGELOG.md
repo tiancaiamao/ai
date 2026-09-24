@@ -13,6 +13,13 @@ decayed score. `pkg/app` calls the decay step exactly once per session start
 (right after `LoadStats`), and `TopSkills`/`SortByScore` rank by the stored
 score directly.
 
+The top-N prompt selection now also reserves 2 exploration slots: the
+exploitation slots take the highest decayed scores, and the remaining slots
+are filled by the least recently *shown* skills (`LastShown`, recorded via
+`RecordShown` on every prompt build). Pinned skills and project-local skills
+(`.agents/skills/` source `project`, explicit `path`) are always listed and
+no longer compete in the ranking.
+
 **Why**: The wall-clock formula only decayed against `LastUsed` on a
 cumulative `Count`, so a single 50-use burst dominated the top-N for months,
 and long idle gaps made every previously used skill decay to ~0 — while the
@@ -21,6 +28,14 @@ counts agent sessions matches how the ranking is actually consumed: the
 top-N prompt injection happens per session, so one decay step per session
 start is the natural clock. Idle time is now a no-op, and burst usage fades in
 a bounded number of sessions.
+
+Pure exploitation also starved long-tail skills: a skill that lost the
+top-N once would never re-enter the prompt (no exposure → no usage → no
+score). The exploration slots rotate the least recently shown skills through,
+so every skill keeps a chance to be picked up again. And project skills were
+explicitly placed for this project (or passed via an explicit path), so
+hiding them behind a global usage ranking contradicted their intent — they
+are now always visible.
 
 ## Compaction snapshots are named by entry id (2026-09)
 

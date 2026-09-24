@@ -101,6 +101,8 @@ type SkillStatsFile struct { ... }
 
 func LoadStats(path string) *SkillStatsFile
 func (s *SkillStatsFile) RecordUsage(skillName string)
+func (s *SkillStatsFile) RecordShown(names []string)
+func (s *SkillStatsFile) LastShownOf(name string) time.Time
 func (s *SkillStatsFile) DecayForNewSession()
 func (s *SkillStatsFile) Save() error
 func (s *SkillStatsFile) TopSkills(n int) []string
@@ -110,7 +112,9 @@ Tracks skill usage with session-based decay for progressive disclosure ranking.
 "Time" advances in agent sessions, not wall-clock time: `DecayForNewSession`
 is called once per session start and multiplies every score by
 `0.5^(1/4)` (half-life = 4 agent sessions), while `RecordUsage` adds +1 on top
-of the decayed score. Idle time never decays scores.
+of the decayed score. Idle time never decays scores. `RecordShown` marks which
+skills appeared in the prompt (LastShown), which drives the exploration
+rotation; `Save` is a no-op when no file path is set.
 
 ```go
 func (s *SkillStatsFile) SortByScore(names []string) []string // Rank names by decayed usage; unknown names last, stable order
@@ -125,7 +129,15 @@ func IsSkillCommand(text string) bool
 func ExtractSkillName(text string) string
 ```
 
-`FormatForPrompt` renders skills as a prompt section. Skills with frontmatter `pinned: true` are always listed regardless of ranking or the topN cutoff. When skills are omitted, the footer lists the omitted skill names (ranked by usage when stats are available) as `find_skill` search hints. `ExpandCommand` handles `/skill:name` invocations.
+`FormatForPrompt` renders skills as a prompt section. The top-N slots are split
+between exploitation (highest session-decayed score) and exploration (2
+reserved slots filled by the least recently shown skills, never-shown first),
+so low-frequency skills still rotate into the prompt. Skills with frontmatter
+`pinned: true` and project-local skills (source `project` from
+`.agents/skills/`, or explicitly added `path` skills) are always listed
+regardless of ranking or the topN cutoff. When skills are omitted, the footer
+lists the omitted skill names (ranked by usage when stats are available) as
+`find_skill` search hints. `ExpandCommand` handles `/skill:name` invocations.
 
 ## Key Files
 

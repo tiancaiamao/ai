@@ -2,7 +2,8 @@
 
 ## Goals
 
-- Progressive disclosure: only top-N high-frequency skills in the per-turn agent context prefix, rest discoverable via `find_skill` tool
+- Progressive disclosure: top-N skills in the per-turn agent context prefix (exploitation by decayed score + 2 exploration slots for the least recently shown), rest discoverable via `find_skill` tool
+- Pinned and project-local skills are always listed regardless of ranking
 - Usage tracking with session-based decay to auto-rank skills by relevance (one decay step per agent session start, not wall-clock)
 - LLM-generated search index for semantic skill discovery (aliases, use-when, categories)
 
@@ -264,6 +265,11 @@ Logic:
 3. Only render those skills in the prompt
 4. Add a footer: `*Use the find_skill tool to discover more skills by keyword.*`
 5. Remove the `maxPromptSkills` cap (now controlled by TopN from stats)
+
+> **Evolution**: the implemented selection is a superset of this — top-N is
+> split into exploitation (top decayed scores) + 2 exploration slots (least
+> recently shown, via `LastShown`/`RecordShown`), and pinned / project-local
+> skills are always appended regardless of the topN cutoff.
 
 ### 4.6 Changes to `cmd/ai/rpc_handlers.go`
 
