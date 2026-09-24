@@ -12,21 +12,29 @@ import (
 )
 
 // SkillUsageEntry tracks usage statistics for a single skill.
+//
+// Score is the entry's effective value as of the DecayStep recorded in
+// LastDecay; the effective value at the current DecayStep is
+// Score * sessionDecayFactor^(DecayStep - LastDecay). RecordUsage and
+// RecordShown refresh the entry, re-anchoring LastDecay at the current
+// DecayStep.
 type SkillUsageEntry struct {
 	Name      string    `json:"name"`
 	Count     int       `json:"count"`
 	LastUsed  time.Time `json:"lastUsed"`
 	LastShown time.Time `json:"lastShown"`
 	Score     float64   `json:"score"`
+	LastDecay int       `json:"lastDecay"`
 }
 
 // SkillStatsFile holds persisted skill usage statistics.
 type SkillStatsFile struct {
-	mu       sync.Mutex                  `json:"-"`
-	Version  int                         `json:"version"`
-	TopN     int                         `json:"topN"`
-	Entries  map[string]*SkillUsageEntry `json:"entries"`
-	FilePath string                      `json:"-"`
+	mu        sync.Mutex                  `json:"-"`
+	Version   int                         `json:"version"`
+	TopN      int                         `json:"topN"`
+	DecayStep int                         `json:"decayStep"` // total decay steps applied
+	Entries   map[string]*SkillUsageEntry `json:"entries"`
+	FilePath  string                      `json:"-"`
 }
 
 const (
@@ -67,9 +75,10 @@ func LoadStats(path string) *SkillStatsFile {
 	}
 
 	var file struct {
-		Version int                         `json:"version"`
-		TopN    int                         `json:"topN"`
-		Entries map[string]*SkillUsageEntry `json:"entries"`
+		Version   int                         `json:"version"`
+		TopN      int                         `json:"topN"`
+		DecayStep int                         `json:"decayStep"`
+		Entries   map[string]*SkillUsageEntry `json:"entries"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
 		slog.Warn("[SkillStats] stats file has invalid JSON, starting fresh",
@@ -85,6 +94,7 @@ func LoadStats(path string) *SkillStatsFile {
 	if s.TopN < DefaultTopN {
 		s.TopN = DefaultTopN
 	}
+	s.DecayStep = file.DecayStep
 	if file.Entries != nil {
 		s.Entries = file.Entries
 	}
@@ -92,17 +102,27 @@ func LoadStats(path string) *SkillStatsFile {
 	return s
 }
 
-// DecayForNewSession applies one decay step to all skill scores. Call it
-// exactly once per agent session start, before the first usage record.
-// Time is measured in agent sessions, not wall-clock time: while the agent
-// is idle, scores do not decay.
+// DecayForNewSession records one decay step. Call it exactly once per agent
+// session start. Time is measured in agent sessions, not wall-clock time:
+// while the agent is idle, scores do not decay. The step is applied lazily
+// when scores are read or merged, so it composes with Save's merge with the
+// on-disk copy (see mergeWithDisk).
 func (s *SkillStatsFile) DecayForNewSession() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, entry := range s.Entries {
-		entry.Score *= sessionDecayFactor
+	s.DecayStep++
+}
+
+// decayedScore returns entry.Score expressed at step s: the stored value
+// multiplied by the per-session decay factor for every step since the entry
+// was last refreshed (LastDecay).
+func decayedScore(entry *SkillUsageEntry, s int) float64 {
+	n := s - entry.LastDecay
+	if n <= 0 {
+		return entry.Score
 	}
+	return entry.Score * math.Pow(sessionDecayFactor, float64(n))
 }
 
 // RecordUsage records one use of skillName: Count is incremented and Score
@@ -113,13 +133,14 @@ func (s *SkillStatsFile) RecordUsage(skillName string) {
 
 	entry, ok := s.Entries[skillName]
 	if !ok {
-		entry = &SkillUsageEntry{Name: skillName}
+		entry = &SkillUsageEntry{Name: skillName, LastDecay: s.DecayStep}
 		s.Entries[skillName] = entry
 	}
 
 	entry.Count++
 	entry.LastUsed = time.Now()
-	entry.Score++
+	entry.Score = decayedScore(entry, s.DecayStep) + 1
+	entry.LastDecay = s.DecayStep
 }
 
 // RecordShown marks the given skills as shown in the prompt (LastShown).
@@ -133,10 +154,12 @@ func (s *SkillStatsFile) RecordShown(names []string) {
 	for _, name := range names {
 		entry, ok := s.Entries[name]
 		if !ok {
-			entry = &SkillUsageEntry{Name: name}
+			entry = &SkillUsageEntry{Name: name, LastDecay: s.DecayStep}
 			s.Entries[name] = entry
 		}
 		entry.LastShown = now
+		entry.Score = decayedScore(entry, s.DecayStep)
+		entry.LastDecay = s.DecayStep
 	}
 }
 
@@ -152,12 +175,17 @@ func (s *SkillStatsFile) LastShownOf(name string) time.Time {
 	return time.Time{}
 }
 
-// mergeWithDisk folds the on-disk entries into s so a Save from a concurrent
-// process doesn't overwrite updates that happened since s loaded the file.
-// The merge is monotonic: per-entry max of Score/Count/LastUsed/LastShown,
-// union of entries. Consequence: a skill's score never decreases on disk, so
-// concurrent sessions decay slightly slower than one step per session —
-// harmless for ranking. A missing or unreadable file is ignored (fresh start).
+// mergeWithDisk folds the on-disk copy into s before Save so concurrent
+// agent processes don't clobber each other's updates with a stale in-memory
+// snapshot.
+//
+// Scores are compared at the reference step (the larger of the two files'
+// DecayStep), where each side's entry is expressed as
+// Score * factor^(refStep - LastDecay). The larger effective value wins and
+// is stored anchored at the reference step, so an entry's effective value
+// never decreases across saves (the merge is monotonic and convergent).
+// Count/LastUsed/LastShown merge by plain max; entries are a union. A
+// missing or unreadable file is ignored (fresh start).
 func (s *SkillStatsFile) mergeWithDisk() {
 	data, err := os.ReadFile(s.FilePath)
 	if err != nil || len(data) == 0 {
@@ -169,14 +197,25 @@ func (s *SkillStatsFile) mergeWithDisk() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing.DecayStep > s.DecayStep {
+		s.DecayStep = existing.DecayStep
+	}
+	refStep := s.DecayStep
 	for name, e := range existing.Entries {
 		ours, ok := s.Entries[name]
 		if !ok {
 			s.Entries[name] = e
 			continue
 		}
-		if e.Score > ours.Score {
-			ours.Score = e.Score
+		// Express both sides at refStep; the larger effective value wins.
+		// Storing it anchored at refStep (LastDecay = refStep) keeps the
+		// entry's future decay consistent.
+		if eff := decayedScore(e, refStep); eff > decayedScore(ours, refStep) {
+			ours.Score = eff
+			ours.LastDecay = refStep
+		} else {
+			ours.Score = decayedScore(ours, refStep)
+			ours.LastDecay = refStep
 		}
 		if e.Count > ours.Count {
 			ours.Count = e.Count
@@ -245,7 +284,7 @@ func (s *SkillStatsFile) SortByScore(names []string) []string {
 	scores := make([]float64, len(names))
 	for i, name := range names {
 		if entry, ok := s.Entries[name]; ok {
-			scores[i] = entry.Score
+			scores[i] = decayedScore(entry, s.DecayStep)
 		}
 	}
 
@@ -283,7 +322,7 @@ func (s *SkillStatsFile) TopSkills(n int) []string {
 
 	candidates := make([]scored, 0, len(s.Entries))
 	for name, entry := range s.Entries {
-		candidates = append(candidates, scored{name: name, score: entry.Score})
+		candidates = append(candidates, scored{name: name, score: decayedScore(entry, s.DecayStep)})
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {

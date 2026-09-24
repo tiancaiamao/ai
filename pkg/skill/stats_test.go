@@ -169,21 +169,21 @@ func TestStatsSessionDecay(t *testing.T) {
 		t.Errorf("expected name-order tie-break [old-skill recent-skill], got %v", top)
 	}
 
-	// Four session-start decay steps halve every score.
+	// Four session-start decay steps halve every effective score.
 	for i := 0; i < 4; i++ {
 		s.DecayForNewSession()
 	}
-	if math.Abs(s.Entries["old-skill"].Score-2.5) > 1e-9 {
-		t.Errorf("expected old-skill score ~2.5 after 4 sessions, got %f", s.Entries["old-skill"].Score)
+	if math.Abs(decayedScore(s.Entries["old-skill"], s.DecayStep)-2.5) > 1e-9 {
+		t.Errorf("expected old-skill effective score ~2.5 after 4 sessions, got %f", decayedScore(s.Entries["old-skill"], s.DecayStep))
 	}
-	if math.Abs(s.Entries["recent-skill"].Score-2.5) > 1e-9 {
-		t.Errorf("expected recent-skill score ~2.5 after 4 sessions, got %f", s.Entries["recent-skill"].Score)
+	if math.Abs(decayedScore(s.Entries["recent-skill"], s.DecayStep)-2.5) > 1e-9 {
+		t.Errorf("expected recent-skill effective score ~2.5 after 4 sessions, got %f", decayedScore(s.Entries["recent-skill"], s.DecayStep))
 	}
 
 	// One use adds +1 on top of the decayed score.
 	s.RecordUsage("recent-skill")
-	if math.Abs(s.Entries["recent-skill"].Score-3.5) > 1e-9 {
-		t.Errorf("expected recent-skill score ~3.5 after one use, got %f", s.Entries["recent-skill"].Score)
+	if math.Abs(decayedScore(s.Entries["recent-skill"], s.DecayStep)-3.5) > 1e-9 {
+		t.Errorf("expected recent-skill effective score ~3.5 after one use, got %f", decayedScore(s.Entries["recent-skill"], s.DecayStep))
 	}
 }
 
@@ -378,5 +378,123 @@ func TestStatsSaveMergesConcurrentEntries(t *testing.T) {
 	}
 	if c := merged.Entries["c"]; c == nil || c.Score != 1 {
 		t.Errorf("c: expected disk-only entry to be merged in, got %+v", c)
+	}
+}
+
+// TestStatsDecaySurvivesSaveCycles is the regression for the max-merge
+// nullifying decay: after 10 load→decay→save cycles the effective score
+// must have fallen (1 * 0.841^10 ≈ 0.177), not reverted to the pre-decay
+// value.
+func TestStatsDecaySurvivesSaveCycles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+
+	s := &SkillStatsFile{
+		Version:  statsVersion,
+		TopN:     DefaultTopN,
+		Entries:  make(map[string]*SkillUsageEntry),
+		FilePath: path,
+	}
+	s.RecordUsage("skill-a")
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		s := LoadStats(path)
+		s.DecayForNewSession()
+		if err := s.Save(); err != nil {
+			t.Fatalf("Save %d failed: %v", i, err)
+		}
+	}
+
+	loaded := LoadStats(path)
+	entry := loaded.Entries["skill-a"]
+	if entry == nil {
+		t.Fatal("skill-a not found")
+	}
+	want := math.Pow(0.5, 10.0/4.0) // 10 decayed sessions on a score of 1
+	if math.Abs(entry.Score-want) > 1e-9 {
+		t.Errorf("effective score after 10 cycles: expected %f, got %f", want, entry.Score)
+	}
+	if loaded.DecayStep != 10 {
+		t.Errorf("DecayStep: expected 10, got %d", loaded.DecayStep)
+	}
+}
+
+// TestStatsMergeAcrossDecaySteps verifies the merge when the two sides are
+// at different decay steps: scores are compared as effective values at the
+// larger step, and the winner is stored anchored at that step.
+func TestStatsMergeAcrossDecaySteps(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+
+	// Another process saved at decay step 3.
+	diskState := &SkillStatsFile{
+		Version:   statsVersion,
+		TopN:      DefaultTopN,
+		DecayStep: 3,
+		Entries: map[string]*SkillUsageEntry{
+			"skill-a": {Name: "skill-a", Count: 5, Score: 5.0, LastDecay: 3},
+		},
+		FilePath: path,
+	}
+	if err := diskState.Save(); err != nil {
+		t.Fatalf("seed Save failed: %v", err)
+	}
+
+	// We are further along (step 5). Our entry (7, fresh at step 5) beats
+	// the disk's (5, decayed twice: 5 * d^2 ≈ 3.52).
+	ours := &SkillStatsFile{
+		Version:   statsVersion,
+		TopN:      DefaultTopN,
+		DecayStep: 5,
+		Entries: map[string]*SkillUsageEntry{
+			"skill-a": {Name: "skill-a", Count: 9, Score: 7.0, LastDecay: 5},
+		},
+		FilePath: path,
+	}
+	if err := ours.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	merged := LoadStats(path)
+	if merged.DecayStep != 5 {
+		t.Errorf("DecayStep: expected max 5, got %d", merged.DecayStep)
+	}
+	entry := merged.Entries["skill-a"]
+	if entry == nil {
+		t.Fatal("skill-a not found")
+	}
+	// Ours wins: 7 * d^0 = 7 > 5 * d^2. Stored anchored at step 5.
+	if math.Abs(entry.Score-7.0) > 1e-9 {
+		t.Errorf("Score: expected 7 (our effective value at step 5), got %f", entry.Score)
+	}
+	if entry.LastDecay != 5 {
+		t.Errorf("LastDecay: expected 5, got %d", entry.LastDecay)
+	}
+	if entry.Count != 9 {
+		t.Errorf("Count: expected max 9, got %d", entry.Count)
+	}
+}
+
+// TestStatsLegacyFileMigration verifies that old files without decayStep /
+// lastDecay load with step 0, so effective scores equal the stored scores
+// until the next session start (no migration jump).
+func TestStatsLegacyFileMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+	legacy := `{"version":1,"topN":10,"entries":{"skill-a":{"name":"skill-a","count":5,"lastUsed":"2026-01-01T00:00:00Z","score":5}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := LoadStats(path)
+	if loaded.DecayStep != 0 {
+		t.Errorf("DecayStep: expected 0 for legacy file, got %d", loaded.DecayStep)
+	}
+	if loaded.DecayStep != loaded.Entries["skill-a"].LastDecay {
+		t.Errorf("entry LastDecay: expected 0, got %d", loaded.Entries["skill-a"].LastDecay)
+	}
+	top := loaded.TopSkills(1)
+	if top[0] != "skill-a" {
+		t.Errorf("expected skill-a to rank with its stored score, got %v", top)
 	}
 }

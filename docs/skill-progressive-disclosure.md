@@ -116,26 +116,32 @@ type SkillStatsFile struct {
 
 // LoadStats reads from ~/.ai/skill-stats.json.
 // Returns empty stats with defaults if file doesn't exist.
-func LoadStats(path string) (*SkillStatsFile, error)
+func LoadStats(path string) *SkillStatsFile
 
 // RecordUsage records one use: Count++ and Score += 1 on top of the
 // session-decayed value.
 func (s *SkillStatsFile) RecordUsage(skillName string)
 
-// DecayForNewSession applies one decay step (Score *= 0.5^(1/4)) to all
-// entries. Called once per agent session start.
+// DecayForNewSession advances the global decay step (DecayStep++). Called
+// once per agent session start. Decay is applied lazily: an entry's
+// effective score is Score * 0.5^(1/4)^(DecayStep - LastDecay).
 func (s *SkillStatsFile) DecayForNewSession()
 
 // TopSkills returns the top N skill names by (session-decayed) score.
 func (s *SkillStatsFile) TopSkills(n int) []string
 ```
 
-**Decay formula** (session-based): each agent session start multiplies every
-score by `0.5^(1/4)`; each use adds +1. Half-life = 4 agent sessions. Wall
-clock does not matter — a skill kept unused while the agent is idle keeps its
-score, and a skill used 50 times in one burst fades out after ~40 idle sessions
-rather than dominating for months. (Originally designed as a wall-clock
-half-life; revised so decay only counts sessions where the agent actually ran.)
+**Decay formula** (session-based): each agent session start advances the
+decay step, which multiplies every entry's effective score by `0.5^(1/4)`;
+each use adds +1 to the entry's effective score and resets its decay clock.
+Half-life = 4 agent sessions. Wall clock does not matter — a skill kept
+unused while the agent is idle keeps its score, and a skill used 50 times in
+one burst fades out after ~40 idle sessions rather than dominating for
+months. (Originally designed as a wall-clock half-life; revised so decay only
+counts sessions where the agent actually ran.) The step is stored in the
+stats file header and each entry remembers the step at which its score was
+last refreshed (`lastDecay`), so decay composes with concurrent saves: the
+merge compares effective values, not raw stored scores.
 
 ### 4.2 New file: `~/.ai/skill-index.json` — LLM-generated search index
 
@@ -304,8 +310,8 @@ Pass it through to `FormatForPrompt(skills, skillStats)`.
 
 ### Concurrent access to skill-stats.json
 - Multiple agent processes share one `~/.ai/skill-stats.json` and each holds an in-memory copy
-- **Mitigation**: `Save` merges the on-disk copy monotonically before writing (per-entry max of Score/Count/LastUsed/LastShown, union of entries), then writes atomically via temp file + rename
-- **Residual effect**: a stale process can't delete or lower another process's updates; scores never decrease on disk, so concurrent sessions decay slightly slower than one step per session — harmless for ranking
+- **Mitigation**: `Save` merges the on-disk copy monotonically before writing — effective scores (stored Score × decay factor per step since last refresh) are compared at the larger of the two files' decay steps, with per-entry max of Count/LastUsed/LastShown and union of entries — then writes atomically via temp file + rename
+- **Residual effect**: a stale process can't delete or lower another process's updates; an entry's effective value never decreases across saves. If two processes both refresh the same skill between saves, the larger effective value wins (the merge takes a max, not a sum)
 
 ### find_skill with no results
 - Return helpful message: `"No skills found matching 'xyz'. Use find_skill with a different keyword."`

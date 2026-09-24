@@ -110,13 +110,16 @@ func (s *SkillStatsFile) TopSkills(n int) []string
 
 Tracks skill usage with session-based decay for progressive disclosure ranking.
 "Time" advances in agent sessions, not wall-clock time: `DecayForNewSession`
-is called once per session start and multiplies every score by
-`0.5^(1/4)` (half-life = 4 agent sessions), while `RecordUsage` adds +1 on top
-of the decayed score. Idle time never decays scores. `RecordShown` marks which
-skills appeared in the prompt (LastShown), which drives the exploration
-rotation; `Save` is a no-op when no file path is set, and otherwise merges
-the on-disk copy monotonically (per-entry max, union of entries) before the
-atomic write, so concurrent agent processes don't clobber each other's updates.
+is called once per session start and advances a global decay step, so every
+entry's *effective* score (stored `Score` × `0.5^(1/4)` per step since its
+last refresh) halves every 4 agent sessions; `RecordUsage` adds +1 on top of
+the effective score and re-anchors the entry at the current step. Idle time
+never decays scores. `RecordShown` marks which skills appeared in the prompt
+(LastShown), which drives the exploration rotation; `Save` is a no-op when no
+file path is set, and otherwise merges the on-disk copy monotonically
+(effective scores compared at the larger decay step, per-entry max of
+Count/LastUsed/LastShown, union of entries) before the atomic write, so
+concurrent agent processes don't clobber each other's updates.
 
 ```go
 func (s *SkillStatsFile) SortByScore(names []string) []string // Rank names by decayed usage; unknown names last, stable order

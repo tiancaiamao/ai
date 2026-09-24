@@ -39,11 +39,15 @@ are now always visible.
 
 Because `Save` now runs on every prompt build (to persist `LastShown`) and
 the stats file is shared by all agent processes, concurrent saves no longer
-overwrite each other: `Save` first merges the on-disk copy monotonically
-(per-entry max of Score/Count/LastUsed/LastShown, union of entries) before
-the atomic temp+rename write. A skill's score therefore never decreases on
-disk; concurrent sessions may decay slightly slower than one step per
-session, which is harmless for ranking.
+overwrite each other: `Save` first merges the on-disk copy monotonically —
+effective scores compared at the larger of the two files' decay steps,
+per-entry max of Count/LastUsed/LastShown, union of entries — before the
+atomic temp+rename write. An entry's effective value therefore never
+decreases across saves, and the merge stays correct even when the two sides
+are at different decay steps. This also fixes a subtle bug in the original
+implementation, where the in-place decay mutated stored scores and the
+per-entry max merge then restored the pre-decay value from disk on every
+save, nullifying decay entirely.
 
 ## Compaction snapshots are named by entry id (2026-09)
 
