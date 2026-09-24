@@ -227,3 +227,27 @@ func TestTruncateToolContentMultipleTruncatedBlocksUseDistinctFiles(t *testing.T
 		}
 	}
 }
+
+func TestOffloadDuplicateCallIDDisambiguatesByHash(t *testing.T) {
+	sessionDir := t.TempDir()
+
+	// Same tool call id, different content (duplicate ids from the provider):
+	// the second offload must not clobber the first file.
+	p1 := offloadTruncatedToolOutput("content one", "call_dup", sessionDir, "")
+	p2 := offloadTruncatedToolOutput("content two", "call_dup", sessionDir, "")
+	if p1 != filepath.Join(sessionDir, "toolout", "call_dup.txt") {
+		t.Fatalf("unexpected first path: %q", p1)
+	}
+	if p2 == p1 {
+		t.Fatal("second offload with different content should get a distinct path")
+	}
+	data, err := os.ReadFile(p1)
+	if err != nil || string(data) != "content one" {
+		t.Fatalf("first offload file was clobbered: %q (%v)", string(data), err)
+	}
+
+	// Repeating the second offload is idempotent.
+	if again := offloadTruncatedToolOutput("content two", "call_dup", sessionDir, ""); again != p2 {
+		t.Fatalf("expected idempotent reuse of %q, got %q", p2, again)
+	}
+}

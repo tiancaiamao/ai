@@ -340,3 +340,21 @@ func TestTruncateWithMarkerSuffix(t *testing.T) {
 		t.Errorf("empty suffix should keep legacy marker, got: %.200s…", got)
 	}
 }
+
+func TestTruncateWithMarkerSuffixFallsBackWhenBudgetTooSmall(t *testing.T) {
+	text := strings.Repeat("abcdefgh", 200) // 1600 bytes
+	longSuffix := ", full output: /tmp/very/long/path/to/offloaded/tool/output/file.txt"
+
+	// maxChars smaller than the marker+suffix: suffix must be dropped, and
+	// the plain truncation behavior must be preserved.
+	result := TruncateWithMarkerSuffix(text, 60, longSuffix)
+	if len(result) > 60 {
+		t.Fatalf("result exceeds maxChars: %d > 60", len(result))
+	}
+	if strings.Contains(result, "full output") {
+		t.Fatalf("suffix should be dropped when it does not fit the budget: %q", result)
+	}
+	if !strings.Contains(result, "tokens truncated") {
+		t.Fatalf("expected truncation marker, got %q", result)
+	}
+}

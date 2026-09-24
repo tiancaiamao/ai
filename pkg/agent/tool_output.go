@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
@@ -164,8 +165,18 @@ func offloadTruncatedToolOutput(text, toolCallID, sessionDir, runID string) stri
 	}
 
 	// Idempotency: don't rewrite identical content.
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == text {
-		return path
+	if existing, err := os.ReadFile(path); err == nil {
+		if string(existing) == text {
+			return path
+		}
+		// Same name, different content: another truncated result shares this
+		// tool call id (providers may emit duplicate ids). Disambiguate by
+		// content hash instead of clobbering its offload file.
+		sum := sha256.Sum256([]byte(text))
+		path = strings.TrimSuffix(path, ".txt") + "-" + hex.EncodeToString(sum[:8]) + ".txt"
+		if existing, err := os.ReadFile(path); err == nil && string(existing) == text {
+			return path
+		}
 	}
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		return ""

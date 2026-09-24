@@ -29,6 +29,13 @@ func TruncateWithMarkerSuffix(text string, maxChars int, markerSuffix string) st
 	// Start with a conservative marker estimate, then refine once split result
 	// is known so the final output always respects maxChars.
 	marker := formatTruncationMarker(ApproxTokenCount(text), markerSuffix)
+	if markerSuffix != "" && len(marker) >= maxChars {
+		// The suffix (e.g. an offload path) would consume the whole budget on
+		// very small limits, leaving zero original content and a cut-off path.
+		// Fall back to the plain marker.
+		markerSuffix = ""
+		marker = formatTruncationMarker(ApproxTokenCount(text), "")
+	}
 	for i := 0; i < 2; i++ {
 		if len(marker) >= maxChars {
 			return trimUTF8ToBytes(marker, maxChars)
