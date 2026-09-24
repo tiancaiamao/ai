@@ -1,6 +1,6 @@
 <agent:hint> Context was compacted. The summary above preserves key information, but some details may be lost. You MUST do the following BEFORE responding to the user:
 
-1. **Check "Skills Loaded"** in the compaction summary. Any skills listed there have lost their full content. Reload them via `find_skill(name="<name>", load=true)` if you need the full details.
+1. **Check "Skills Loaded"** in the compaction summary. A listed skill's full content may be gone, but the summary may preserve the instructions you need. Check the summary first; reload a skill with `find_skill(name="<name>", load=true)` only when you need details that are not preserved there.
 
 2. **Check "Behavioral Constraints"** — these are process rules from loaded skills. Follow them even though the skill content is gone.
 
