@@ -169,7 +169,9 @@ ai watch --id "$CHILD_ID" --follow --pretty
 # watch 返回后（turn 完成或 timeout），检查子 agent 状态：
 # - watch 输出以 "ai: turn complete" 结尾 → 完成 → cleanup
 # - watch 输出以 "watch timeout" 结尾 → 超时 → git diff 检查产出
-# - watch 输出以 "agent stream ended" 结尾 → agent 进程已退出（可能崩溃）
+# - watch output ends with "agent process <id> exited without completing turn" → process exited abnormally
+# - watch output ends with "agent stream closed but process <id> still alive" → connection lost; process may still be running
+
 ```
 
 **`--timeout` 三种模式：**
@@ -344,10 +346,13 @@ watch 超时后：
 
 ### agent 崩溃检测
 
-默认模式下，如果 watch 输出以 `--- agent stream ended without _turn_end event ---` 结尾，说明 **agent 进程已退出但未正常完成 turn**（崩溃/被杀）：
-1. 检查 tmux session 是否还存在：`tmux has-session -t "$TMUX_SESSION" 2>/dev/null`
-2. 不存在 → agent 确实已死 → 检查 `git diff` 看有无部分产出
+默认模式下，如果 watch 输出显示 `agent process <id> exited without completing turn (crash or kill)`，说明 **agent 进程已退出但未正常完成 turn**：
+1. 检查是否为自己管理的 agent；结合 `ai ls` 状态确认进程已退出
+2. 检查 `git diff` 看有无部分产出
 3. 有产出 → 在此基础上继续；无产出 → 报告给用户
+
+如果输出显示 `agent stream closed but process <id> still alive (connection lost, not a crash)`，这是连接断开而非确认崩溃：重新执行 watch 观察，不要据此 kill agent。
+
 
 ## How to List Your Subagents
 

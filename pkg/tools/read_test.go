@@ -452,11 +452,14 @@ func TestReadTool_ContextAnchorRespectsMaxBytes(t *testing.T) {
 
 	ws, _ := NewWorkspace(dir)
 	tool := NewReadTool(ws)
-	_, err := tool.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"path": filePath, "offset": 3, "limit": 1,
 	})
-	if err == nil || !strings.Contains(err.Error(), "range and context are too large") {
-		t.Fatalf("expected context size error, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected compact context fallback, got: %v", err)
 	}
-
+	text := result[0].(agentctx.TextContent).Text
+	if !strings.Contains(text, "line3") || strings.Contains(text, strings.Repeat("a", 101)) {
+		t.Fatalf("expected selected line without oversized context anchor, got output length %d", len(text))
+	}
 }

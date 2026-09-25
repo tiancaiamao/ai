@@ -222,10 +222,14 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	if len(header)+len(output)+len(footer) > maxBytes {
-		return nil, fmt.Errorf("selected range and context are too large (%d bytes). Use a smaller limit value, e.g. limit=%d",
-			len(header)+len(output)+len(footer), maxBytes/80) // rough line-width estimate
-
+		// The context anchor is optional; fall back to a compact hint when it crowds out the requested range.
+		header = fmt.Sprintf("[%d lines above omitted. Use offset=1 to read from start.]\n\n", offset-1)
 	}
+	if len(header)+len(output)+len(footer) > maxBytes {
+		return nil, fmt.Errorf("selected range and hints are too large (%d bytes). Use a smaller limit value, e.g. limit=%d",
+			len(header)+len(output)+len(footer), maxBytes/80) // rough line-width estimate
+	}
+
 	output = header + output + footer
 
 	return []agentctx.ContentBlock{
