@@ -233,7 +233,7 @@ func TestBashToolParentCancellationStillAborts(t *testing.T) {
 			return
 		}
 	}
-		t.Fatalf("expected 'Command canceled' message, got blocks: %+v", blocks)
+	t.Fatalf("expected 'Command canceled' message, got blocks: %+v", blocks)
 }
 
 func TestBashToolTimeoutPipeTip(t *testing.T) {

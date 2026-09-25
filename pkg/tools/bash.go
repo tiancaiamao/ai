@@ -428,7 +428,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			"elapsed", elapsed.Seconds(),
 			"outputSize", output.Len())
 
-				resultText := fmt.Sprintf(
+		resultText := fmt.Sprintf(
 			"Command timed out after %v and was terminated.\n"+
 				"Partial output (%d bytes):\n%s\n\n"+
 				"For long-running tasks, use the /tmux skill for proper background management.",
@@ -439,7 +439,6 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		if strings.Contains(command, "|") {
 			resultText += "\n\ntip: piping to head/tail loses partial output on kill; redirect to a file instead (cmd > /tmp/out.log 2>&1)"
 		}
-
 
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
