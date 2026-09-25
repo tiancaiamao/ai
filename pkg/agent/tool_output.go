@@ -91,7 +91,7 @@ func truncateToolContent(ctx context.Context, content []agentctx.ContentBlock, l
 				offloadPath := offloadTruncatedToolOutput(b.Text, nameID, sessionDir, runID)
 				markerSuffix := ""
 				if offloadPath != "" {
-					markerSuffix = ", full output: " + offloadPath
+					markerSuffix = fmt.Sprintf(", use read tool (offset/limit) on: %s", offloadPath)
 				}
 
 				// Apply truncation

@@ -1,6 +1,6 @@
 ---
-name: mcporter
-description: Use the mcporter CLI to list, configure, auth, and call MCP servers/tools directly (HTTP or stdio), including ad-hoc servers, config edits, and CLI/type generation.
+name: mcp
+description: Access MCP servers/tools from the agent (list, schema, call, auth, config, codegen). Current implementation: the mcporter CLI.
 homepage: http://mcporter.dev
 metadata:
   {
@@ -22,17 +22,19 @@ metadata:
   }
 ---
 
-# mcporter
+# mcp
 
-Use `mcporter` to work with MCP servers directly.
+The agent has no built-in MCP protocol support. This skill is the interface for MCP access; the current implementation is the `mcporter` CLI. If the implementation changes, keep the interface stable: list servers, inspect schemas, call `server.tool` with args, and handle large JSON outputs.
 
-Quick start
+Current implementation: mcporter
+
+## Quick start
 
 - `mcporter list`
 - `mcporter list <server> --schema`
 - `mcporter call <server.tool> key=value`
 
-Call tools
+## Call tools
 
 - Selector: `mcporter call linear.list_issues team=ENG limit:5`
 - Function syntax: `mcporter call "linear.create_issue(title: \"Bug\")"`
@@ -40,22 +42,22 @@ Call tools
 - Stdio: `mcporter call --stdio "bun run ./server.ts" scrape url=https://example.com`
 - JSON payload: `mcporter call <server.tool> --args '{"limit":5}'`
 
-Auth + config
+## Auth + config
 
 - OAuth: `mcporter auth <server | url> [--reset]`
 - Config: `mcporter config list|get|add|remove|import|login|logout`
 
-Daemon
+## Daemon
 
 - `mcporter daemon start|status|stop|restart`
 
-Codegen
+## Codegen
 
 - CLI: `mcporter generate-cli --server <name>` or `--command <url>`
 - Inspect: `mcporter inspect-cli <path> [--json]`
 - TS: `mcporter emit-ts <server> --mode client|types`
 
-Notes
+## Notes
 
 - Config default: `./config/mcporter.json` (override with `--config`).
 - Prefer `--output json` for machine-readable results.

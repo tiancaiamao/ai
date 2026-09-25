@@ -74,7 +74,11 @@ spawn 时不传任务，然后用 `send --wait` 发送任务。`send --wait` 同
 
 **⚠️ `ai serve` 是阻塞命令，必须用 tmux 后台运行。** 不能用 `&`（bash tool 的 pipe 会卡死）。
 
-**💡 `--input` 建议：** 推荐在 spawn 时通过 `--input` 或 `--input-file` 传入任务指令。不带 `--input` spawn 空壳是支持的用法（如预热、条件分发、多轮交互），但务必在流程中安排好后续 `ai send`，避免遗忘导致空跑浪费 token。
+**💡 `--input` 建议：** 推荐在 spawn 时通过 `--input-file` 传入任务指令（**不要用 `--input` 传长文本**）。`--input` 内联长文本在 tmux 中极易因 quoting 问题导致 serve 立即退出（session 找不到）。规则：
+
+- **短指令（<100 chars）**：`--input 'Fix the bug in auth.go'` 即可
+- **多行/长文本（>100 chars 或含换行/引号/特殊字符）**：⚠️ **必须**先写入 /tmp 文件，再用 `--input-file /tmp/task.md`
+- 不带 `--input` spawn 空壳是支持的用法（如预热、条件分发、多轮交互），但务必在流程中安排好后续 `ai send`，避免遗忘导致空跑浪费 token。
 
 **⚠️ 推荐用 `--role`，避免手写 `--system-prompt`：** 大多数场景应使用 `--role coder`（默认值），`ai` 会自动加载对应的 system prompt。仅在需要高度定制化的 role（如 validator with specific checklist）时才用 `--system-prompt`。注意：同时设置两者时，`--system-prompt` 会覆盖 `--role`。
 
@@ -153,24 +157,35 @@ echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 `watch --follow --pretty` 是等待子 agent 的标准方式。它纯观察，不注入 prompt，不打断子 agent。
 
-**不需要预估任务时长。** 每轮 watch 是一个观察窗口，通过循环判断子 agent 是否在推进：
+**不需要预估任务时长。** 默认行为（不加 `--timeout`）是**等待 turn 完成后自动退出**——这是最推荐的用法：
 
 ```bash
-# 第一轮 watch（bash tool timeout 或 --timeout 控制单轮观察时长）
-ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m
+# ✅ 推荐：默认模式（等待 _turn_end 自动退出，无需手动管理超时）
+ai watch --id "$CHILD_ID" --follow --pretty
 
-# watch 返回后（timeout 或 agent 完成），检查是否还在推进：
-# - watch 输出中有 tool call / thinking → 在干活 → 再 watch 一轮
-# - git diff 有新变化 → 在干活 → 再 watch 一轮
-# - 完全无输出且无变化 → 可能卡死 → 参考"卡死判断"章节
+# 如果确实需要硬上限（如 CI 场景），可以用 --timeout：
+# ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m
 
-# 继续观察
-ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m
+# watch 返回后（turn 完成或 timeout），检查子 agent 状态：
+# - watch 输出以 "ai: turn complete" 结尾 → 完成 → cleanup
+# - watch 输出以 "watch timeout" 结尾 → 超时 → git diff 检查产出
+# - watch output ends with "agent process <id> exited without completing turn" → process exited abnormally
+# - watch output ends with "agent stream closed but process <id> still alive" → connection lost; process may still be running
+
 ```
 
+**`--timeout` 两种模式：**
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| 不加 `--timeout`（默认） | 等待 `_turn_end` 后自动退出 | **绝大多数场景** |
+| `--timeout 15m` | 硬上限，到时间强制退出 | CI 卡死兜底、调试 |
+
+> 注：`--timeout 0` 与默认行为相同（无时间上限，turn 结束即退出）。`ai serve` 是长驻进程，不存在"等到进程退出"的用法。
+
 **关键认知：**
-- watch 超时（bash tool 限制或 `--timeout`）≠ 子 agent 失败。子 agent 在 tmux 中继续运行。
-- 不需要一次性 watch 到完成。分轮观察、每轮判断是否继续，更可控。
+- 默认模式不需要循环重试——一次 watch 就能等到 turn 完成
+- watch 超时（仅 `--timeout` 模式下）≠ 子 agent 失败。子 agent 在 tmux 中继续运行。
 - 子 agent 等 LLM 响应时（如 rate limit retry）可能几分钟没输出但不是卡死。结合 `git diff` 判断。
 
 #### send --wait 的正确用途
@@ -200,8 +215,8 @@ ai serve --role coder \
   --input '...Write your complete output to /tmp/result.md...Output DONE when complete.' \
   ...
 
-# watch 观察进度（不打断）
-ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m
+# watch 观察（默认模式，等待 turn 完成自动退出）
+ai watch --id "$CHILD_ID" --follow --pretty
 
 # 完成后读文件（完整内容，无截断）
 cat /tmp/result.md
@@ -290,7 +305,7 @@ done
 
 ## Timeout & Watch Loop 策略
 
-**核心原则：不预估任务时长，用 watch loop 检测推进。**
+**核心原则：用默认 watch 模式等待 turn 完成，不预估任务时长。**
 
 ### `ai serve --timeout`
 
@@ -298,31 +313,47 @@ done
 
 ### `ai watch --timeout`
 
-**必须设 ≥2m（推荐 `5m`）**。watch 超时后控制权回到主 agent，子 agent 仍在 tmux 中继续运行。主 agent 判断是否需要再 watch 一轮。
-
-**⚠️ 禁止短轮询（<40s）。** 短轮询会让上下文被大量"无进展"输出填满——每次 watch 的 toolResult 都进 context，是 compaction 次数暴涨和 token 浪费的主因。bash 工具允许设大 timeout 参数，长等待完全可行：
+**默认不加 `--timeout`**（等待 `_turn_end` 自动退出）。只在需要硬上限兜底时才设值：
 
 ```bash
-# ✅ 长窗口（bash timeout 同步设大，如 320）
-ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m 2>&1 | tail -5
-# ❌ 短轮询（每 20-40s 一次）——只有在关键节点（测试落盘、CI 完成）才允许
-timeout 30 ai watch --id "$CHILD_ID" --follow --pretty --timeout 25s 2>&1 | tail -5
+# ✅ 推荐：默认模式
+ai watch --id "$CHILD_ID" --follow --pretty 2>&1 | tail -5
+
+# ✅ 需要硬上限时（如 CI 卡死兜底）
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m 2>&1 | tail -5
+
+# ❌ 避免：5m 硬超时导致频繁重试循环
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m
 ```
 
-不要用 `sleep 25` 短循环钻 bash 的 `sleep≥30s` 禁令空子——那是次优策略；长等待用 `ai watch --timeout 5m` 或 tmux wait 脚本（`~/.ai/skills/tmux/bin/tmux_wait.sh`）。
+**⚠️ 禁止短轮询（<40s）。** 短轮询会让上下文被大量"无进展"输出填满——每次 watch 的 toolResult 都进 context，是 compaction 次数暴涨和 token 浪费的主因。
+
+不要用 `sleep 25` 短循环钻 bash 的 `sleep≥30s` 禁令空子——那是次优策略；用默认 watch 模式等待即可。
 
 ### 卡死判断
 
-连续两轮 watch（~10 分钟）无 tool call 输出 **且** `git diff` 无变化 → 可能卡死，考虑 kill。注意 rate limit retry 期间也会无输出，但不是卡死——watch 中会显示 `llm_retry` 事件。
+默认模式下 watch 会等到 turn 结束，所以卡死判断主要用于 `--timeout` 模式或 watch 返回后的情况：
 
-### 超时恢复
+`git diff` 无变化 **且** `ai ls` 显示进程已消失 → 确认卡死/崩溃，kill 并报告。注意 rate limit retry 期间也会无输出，但不是卡死——watch 中会显示 `llm_retry` 事件。
+
+### 超时恢复（仅 `--timeout` 模式适用）
 
 watch 超时后：
 1. ❌ 不要立即 kill
 2. ✅ `git diff --stat` 检查子 agent 是否已产出文件
-3. ✅ 有产出 → 子 agent 在推进 → 再 watch 一轮
+3. ✅ 有产出 → 子 agent 在推进 → 再 watch 一轮（默认模式）
 4. ✅ 无产出且无输出 → 可能卡死 → kill
 5. ✅ kill 后如果发现有产出 → 在此基础上继续，**不要从零重做**
+
+### agent 崩溃检测
+
+默认模式下，如果 watch 输出显示 `agent process <id> exited without completing turn (crash or kill)`，说明 **agent 进程已退出但未正常完成 turn**：
+1. 检查是否为自己管理的 agent；结合 `ai ls` 状态确认进程已退出
+2. 检查 `git diff` 看有无部分产出
+3. 有产出 → 在此基础上继续；无产出 → 报告给用户
+
+如果输出显示 `agent stream closed but process <id> still alive (connection lost, not a crash)`，这是连接断开而非确认崩溃：重新执行 watch 观察，不要据此 kill agent。
+
 
 ## How to List Your Subagents
 
@@ -425,6 +456,8 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | 用 `ai send` 查询正在干活的子 agent 进度 | ⛔ `send` 会注入新 prompt **打断**子 agent；用 `watch --follow --pretty` 观察 |
 | `ai watch` 不加 `--pretty` | ⛔ 非 TUI 环境（tmux/脚本）不加 `--pretty` 会无输出 |
 | watch 超时后立即 kill | ⛔ 超时 ≠ 失败；先 `git diff` 检查产出，有变化就再 watch 一轮 |
+| `ai watch --timeout 5m` 反复重试 | ⚠️ 用**默认模式**（不加 `--timeout`）等待 turn 完成，一次 watch 即可。`--timeout` 仅用于 CI 卡死兜底 |
+| `--input` 内联多行长文本 | ⚠️ tmux quoting 会导致 serve 立即退出。长文本（>100 chars）必须用 `--input-file /tmp/task.md` |
 | kill 前不确认子 agent 是否在推进 | 连续两轮 watch 无输出且 `git diff` 无变化才考虑 kill |
 | kill 后发现有产出却从零重做 | ⛔ 先 `git diff` 检查子 agent 产出，在此基础上继续 |
 

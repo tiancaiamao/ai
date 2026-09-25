@@ -67,24 +67,25 @@ func TestReadTool_OffsetAndLimit(t *testing.T) {
 
 	text := result[0].(agentctx.TextContent).Text
 
-	// Should contain lines 3-5
-	if !strings.Contains(text, "line3") || !strings.Contains(text, "line4") || !strings.Contains(text, "line5") {
-		t.Errorf("expected lines 3-5 in output, got: %s", text)
+	// Should contain lines 3-5 exactly once (the anchor must not overlap the selected range).
+	for _, line := range []string{"line3", "line4", "line5"} {
+		if strings.Count(text, line) != 1 {
+			t.Errorf("expected %s exactly once, got: %s", line, text)
+		}
 	}
-	// Should NOT contain lines 1-2 or 6-10
-	if strings.Contains(text, "line1") || strings.Contains(text, "line2") {
-		t.Errorf("should not contain lines 1-2, got: %s", text)
+	// Lines 1-2 are context; lines 6-10 are not included in the selected range.
+	if !strings.Contains(text, "line1") || !strings.Contains(text, "line2") {
+		t.Errorf("expected preceding context, got: %s", text)
 	}
 	if strings.Contains(text, "line6") {
-		t.Errorf("should not contain lines 6+, got: %s", text)
+		t.Errorf("selected content should not contain lines 6+, got: %s", text)
 	}
 	// 10 lines total, we read lines 3-5 (3 lines), remaining: 5 lines (6,7,8,9,10)
 	if !strings.Contains(text, "5 more lines below") {
 		t.Errorf("expected footer hint '5 more lines below', got: %s", text)
 	}
-	// Should have header hint
-	if !strings.Contains(text, "2 lines above omitted") {
-		t.Errorf("expected header hint '2 lines above omitted', got: %s", text)
+	if !strings.Contains(text, "File context (lines 1-2)") {
+		t.Errorf("expected context anchor for lines 1-2, got: %s", text)
 	}
 }
 
@@ -117,10 +118,10 @@ func TestReadTool_OffsetOnly(t *testing.T) {
 	if !strings.Contains(text, "line90") || !strings.Contains(text, "line100") {
 		t.Errorf("expected lines 90-100, got: %s", text)
 	}
-	// Should have header hint
-	if !strings.Contains(text, "89 lines above omitted") {
-		t.Errorf("expected header hint about 89 lines omitted, got: %s", text)
+	if !strings.Contains(text, "79 lines omitted between context and requested range") {
+		t.Errorf("expected header hint about omitted lines between context and requested range, got: %s", text)
 	}
+
 	// Should NOT have footer hint (we read to end)
 	if strings.Contains(text, "more lines below") {
 		t.Errorf("should not have footer hint, got: %s", text)
@@ -431,7 +432,34 @@ func TestReadTool_StringOffsetLimit(t *testing.T) {
 	if !strings.Contains(text, "line2") || !strings.Contains(text, "line3") {
 		t.Fatalf("expected lines 2 and 3, got: %s", text)
 	}
-	if strings.Contains(text, "line1") || strings.Contains(text, "line4") {
-		t.Fatalf("should not contain line1/line4, got: %s", text)
+
+	if strings.Count(text, "line2") != 1 || strings.Count(text, "line3") != 1 {
+		t.Fatalf("selected lines should not be duplicated in context, got: %s", text)
+	}
+	if strings.Contains(text, "line4") {
+		t.Fatalf("line4 should not be in output, got: %s", text)
+	}
+}
+
+func TestReadTool_ContextAnchorRespectsMaxBytes(t *testing.T) {
+	t.Setenv("AI_READ_MAX_BYTES", "100")
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := strings.Repeat("a", 150) + "\nline2\nline3\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath, "offset": 3, "limit": 1,
+	})
+	if err != nil {
+		t.Fatalf("expected compact context fallback, got: %v", err)
+	}
+	text := result[0].(agentctx.TextContent).Text
+	if !strings.Contains(text, "line3") || strings.Contains(text, strings.Repeat("a", 101)) {
+		t.Fatalf("expected selected line without oversized context anchor, got output length %d", len(text))
 	}
 }

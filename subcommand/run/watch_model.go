@@ -410,7 +410,7 @@ func WatchSubcommand() {
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
 	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until the turn ends (machine-readable)")
-	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait (0 = until the agent process exits; default without this flag: exit on turn end)")
+	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait before giving up (default: exit when the turn ends; 0 means no time limit)")
 	prettyFlag := fs.Bool("pretty", false, "with --follow: format output as readable conversation instead of raw JSONL")
 	summaryFlag := fs.Bool("summary", false, "with --follow --pretty: only show final assistant text (no intermediate thinking/tools)")
 	fs.Parse(os.Args[1:])
@@ -440,7 +440,14 @@ func WatchSubcommand() {
 		}
 		result := followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
 		if result.timedOut {
-			fmt.Fprintln(os.Stderr, "--- watch timeout; agent may still be running, continue watching before cleanup ---")
+			elapsed := ""
+			retryExtra := ""
+			if *watchTimeoutFlag > 0 {
+				elapsed = fmt.Sprintf(" after %s", *watchTimeoutFlag)
+				retryExtra = " --timeout " + (*watchTimeoutFlag).String()
+			}
+			fmt.Fprintf(os.Stderr, "--- watch timeout%s; agent may still be running ---\n", elapsed)
+			fmt.Fprintf(os.Stderr, "--- retry: ai watch --id %s --follow --pretty%s ---\n", meta.ID, retryExtra)
 		}
 		if code := followWatchExitCode(result); code != 0 {
 			os.Exit(code)
@@ -544,7 +551,7 @@ func followWatchExitCode(result followWatchResult) int {
 // (_turn_end update), the connection closes, or the timeout fires.
 func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) followWatchResult {
 	// watchTimeout == -1: flag not set → default behavior (exit on _turn_end)
-	// watchTimeout == 0: wait forever (until the agent process exits)
+	// watchTimeout <= 0: no timer (default: exit on _turn_end, or stream close)
 	// watchTimeout > 0: wait up to this duration
 	client, sid, err := connectACP(tui.SocketPath("", meta.ID))
 	if err != nil {
@@ -630,7 +637,11 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			}
 		}
 		if !ended {
-			fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
+			if tui.IsRunning(meta) {
+				fmt.Fprintf(os.Stderr, "--- agent stream closed but process %s still alive (connection lost, not a crash) ---\n", meta.ID)
+			} else {
+				fmt.Fprintf(os.Stderr, "--- agent process %s exited without completing turn (crash or kill) ---\n", meta.ID)
+			}
 		}
 		fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 		return finish(ended)
@@ -700,7 +711,11 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		}
 	}
 	if !ended {
-		fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
+		if tui.IsRunning(meta) {
+			fmt.Fprintf(os.Stderr, "--- agent stream closed but process %s still alive (connection lost, not a crash) ---\n", meta.ID)
+		} else {
+			fmt.Fprintf(os.Stderr, "--- agent process %s exited without completing turn (crash or kill) ---\n", meta.ID)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 	return finish(ended)

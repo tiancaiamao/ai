@@ -188,20 +188,29 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	selectedLines := lines[start:end]
 	output := strings.Join(selectedLines, "\n")
 
-	// Check size of selected content (not entire file).
-	// This allows reading sections of large files via offset/limit.
+	// Check size of selected content and context anchor.
+	// This allows reading sections of large files via offset/limit without returning oversized context.
 	maxBytes := getReadMaxBytes()
 	if len(output) > maxBytes {
 		return nil, fmt.Errorf("selected range is too large (%d lines, %d bytes). Use a smaller limit value, e.g. limit=%d",
 			len(selectedLines), len(output), maxBytes/80) // rough line-width estimate
 	}
 
-	// Add continuation hints when content is truncated
 	var header, footer string
 	if offset > 1 {
-		header = fmt.Sprintf("[%d lines above omitted. Use offset=1, limit=%d to read from start.]\n\n",
-			offset-1, offset-1)
+		// Include up to 10 preceding lines as context without repeating the selected range.
+		anchorEnd := start
+		if anchorEnd > 10 {
+			anchorEnd = 10
+		}
+		anchorLines := strings.Join(lines[:anchorEnd], "\n")
+		header = fmt.Sprintf("[File context (lines 1-%d):\n```\n%s\n```", anchorEnd, anchorLines)
+		if start > anchorEnd {
+			header += fmt.Sprintf("\n[%d lines omitted between context and requested range.]", start-anchorEnd)
+		}
+		header += "\n\n"
 	}
+
 	if end < totalLines {
 		remaining := totalLines - end
 		footer = fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
@@ -210,6 +219,15 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			footer = fmt.Sprintf("\n\n[%d more lines below. Consider using grep to locate specific content, or offset=%d to continue reading.]",
 				remaining, end+1)
 		}
+	}
+
+	if len(header)+len(output)+len(footer) > maxBytes {
+		// The context anchor is optional; fall back to a compact hint when it crowds out the requested range.
+		header = fmt.Sprintf("[%d lines above omitted. Use offset=1 to read from start.]\n\n", offset-1)
+	}
+	if len(header)+len(output)+len(footer) > maxBytes {
+		return nil, fmt.Errorf("selected range and hints are too large (%d bytes). Use a smaller limit value, e.g. limit=%d",
+			len(header)+len(output)+len(footer), maxBytes/80) // rough line-width estimate
 	}
 
 	output = header + output + footer

@@ -40,7 +40,8 @@ wiki/features/<feature-2>.md             — <一句话描述>
 
 ```
 find_skill("semble", load=true)
-find_skill("mcporter", load=true)
+find_skill("mcp", load=true)
+
 ```
 
 ### 第 4 步：确认加载完成

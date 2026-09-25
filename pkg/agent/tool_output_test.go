@@ -109,7 +109,7 @@ func TestTruncateToolContentOffloadsFullOutput(t *testing.T) {
 		t.Fatalf("truncated text exceeds limit: got %d > 10000", len(text.Text))
 	}
 	path := filepath.Join(sessionDir, "toolout", "callu_offload.txt")
-	if !strings.Contains(text.Text, ", full output: "+path+"…") {
+	if !strings.Contains(text.Text, ", use read tool (offset/limit) on: "+path+"…") {
 		t.Fatalf("marker should point at offload path %s, got: %.200s", path, text.Text)
 	}
 
@@ -176,7 +176,7 @@ func TestOffloadSkipsOversizedOutput(t *testing.T) {
 	if len(text.Text) > 10000 {
 		t.Fatalf("truncated text exceeds limit: %d", len(text.Text))
 	}
-	if strings.Contains(text.Text, "full output:") {
+	if strings.Contains(text.Text, "use read tool") {
 		t.Fatal("marker should not point at an offload file when offload is skipped")
 	}
 }
@@ -215,7 +215,7 @@ func TestTruncateToolContentMultipleTruncatedBlocksUseDistinctFiles(t *testing.T
 			name = "callu_multi-2.txt"
 		}
 		path := filepath.Join(sessionDir, "toolout", name)
-		if !strings.Contains(text.Text, ", full output: "+path+"…") {
+		if !strings.Contains(text.Text, ", use read tool (offset/limit) on: "+path+"…") {
 			t.Fatalf("block %d: marker should point at %s, got: %.200s", i, path, text.Text)
 		}
 		data, err := os.ReadFile(path)
