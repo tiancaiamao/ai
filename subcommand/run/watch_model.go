@@ -438,11 +438,11 @@ func WatchSubcommand() {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
-						result := followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
+		result := followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
 		if result.timedOut {
 			elapsed := ""
 			retryExtra := ""
-						if *watchTimeoutFlag > 0 {
+			if *watchTimeoutFlag > 0 {
 				elapsed = fmt.Sprintf(" after %s", *watchTimeoutFlag)
 				retryExtra = " --timeout " + (*watchTimeoutFlag).String()
 			}
@@ -636,7 +636,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 				break
 			}
 		}
-				if !ended {
+		if !ended {
 			if tui.IsRunning(meta) {
 				fmt.Fprintf(os.Stderr, "--- agent stream closed but process %s still alive (connection lost, not a crash) ---\n", meta.ID)
 			} else {
@@ -710,7 +710,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			break
 		}
 	}
-		if !ended {
+	if !ended {
 		if tui.IsRunning(meta) {
 			fmt.Fprintf(os.Stderr, "--- agent stream closed but process %s still alive (connection lost, not a crash) ---\n", meta.ID)
 		} else {

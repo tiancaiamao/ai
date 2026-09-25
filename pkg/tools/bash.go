@@ -49,7 +49,7 @@ func (t *BashTool) Name() string {
 
 // Description returns the tool description.
 func (t *BashTool) Description() string {
-		return `Execute bash commands in the current working directory.
+	return `Execute bash commands in the current working directory.
 
 ⚠️ Shell is /bin/sh (POSIX). NOT bash. Avoid:
   • Process substitution: <(...) or >(...)
