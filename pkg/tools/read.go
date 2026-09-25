@@ -49,6 +49,12 @@ func getReadLimit() int {
 	return defaultReadLimit
 }
 
+// shellQuote quotes s for safe literal use in a POSIX shell command by
+// wrapping it in single quotes and escaping embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // ReadTool reads file contents with dynamic workspace support.
 type ReadTool struct {
 	workspace *Workspace
@@ -200,11 +206,16 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		// truncation instead of failing, so recovery stays possible. Reserve
 		// room for the continuation hint below plus the compact header and
 		// "more lines" footer that may be appended afterwards (~350 bytes).
+		// Hint must use byte-level tools: awk's substr indexes by character in
+		// UTF-8 locales, which would skip bytes on multi-byte lines. tail -c +N
+		// (1-based) outputs the file starting at byte N, matching the byte
+		// offset semantics of len(shown)+1 exactly. The path is shell-quoted so
+		// paths with spaces or shell metacharacters yield a runnable command.
 		const hintReserve = 640
 		shown := truncate.TrimBytes(output, maxBytes-hintReserve)
 		footer = fmt.Sprintf(
-			"\n\n[%d more bytes in this line. Use a byte-level tool to read the rest, e.g. awk 'NR==%d {print substr($0, %d, 100000)}' %s]",
-			len(output)-len(shown), offset, len(shown)+1, path)
+			"\n\n[%d more bytes in this line. Use a byte-level tool to read the rest, e.g. tail -c +%d %s]",
+			len(output)-len(shown), len(shown)+1, shellQuote(path))
 		output = shown
 	}
 	if len(output) > maxBytes {
