@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/truncate"
 	"golang.org/x/image/webp"
 )
 
@@ -188,15 +189,28 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	selectedLines := lines[start:end]
 	output := strings.Join(selectedLines, "\n")
 
+	var header, footer string
+
 	// Check size of selected content and context anchor.
 	// This allows reading sections of large files via offset/limit without returning oversized context.
 	maxBytes := getReadMaxBytes()
+	if len(output) > maxBytes && len(selectedLines) == 1 {
+		// A single line longer than maxBytes cannot be narrowed by lowering
+		// limit (limit=1 still selects the whole line). Fall back to byte-level
+				// truncation instead of failing, so recovery stays possible. Reserve
+		// room for the continuation hint below plus the compact header and
+		// "more lines" footer that may be appended afterwards (~350 bytes).
+		const hintReserve = 640
+		shown := truncate.TrimBytes(output, maxBytes-hintReserve)
+		footer = fmt.Sprintf(
+			"\n\n[%d more bytes in this line. Use a byte-level tool to read the rest, e.g. awk 'NR==%d {print substr($0, %d, 100000)}' %s]",
+			len(output)-len(shown), offset, len(shown)+1, path)
+		output = shown
+	}
 	if len(output) > maxBytes {
 		return nil, fmt.Errorf("selected range is too large (%d lines, %d bytes). Use a smaller limit value, e.g. limit=%d",
 			len(selectedLines), len(output), maxBytes/80) // rough line-width estimate
 	}
-
-	var header, footer string
 	if offset > 1 {
 		// Include up to 10 preceding lines as context without repeating the selected range.
 		anchorEnd := start
@@ -211,14 +225,17 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		header += "\n\n"
 	}
 
-	if end < totalLines {
+		if end < totalLines {
 		remaining := totalLines - end
-		footer = fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
+		moreLines := fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
 			remaining, end+1)
 		if remaining > 500 {
-			footer = fmt.Sprintf("\n\n[%d more lines below. Consider using grep to locate specific content, or offset=%d to continue reading.]",
+			moreLines = fmt.Sprintf("\n\n[%d more lines below. Consider using grep to locate specific content, or offset=%d to continue reading.]",
 				remaining, end+1)
 		}
+		// Append rather than overwrite: footer may already carry the
+		// byte-level continuation hint for an oversized single line.
+		footer += moreLines
 	}
 
 	if len(header)+len(output)+len(footer) > maxBytes {

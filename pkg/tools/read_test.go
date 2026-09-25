@@ -463,3 +463,45 @@ func TestReadTool_ContextAnchorRespectsMaxBytes(t *testing.T) {
 		t.Fatalf("expected selected line without oversized context anchor, got output length %d", len(text))
 	}
 }
+
+func TestReadTool_SingleLongLineByteTruncation(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "singleline.txt")
+
+	// 2MB single line (e.g. minified JSON / base64). Line-based limit cannot
+	// reduce this; the tool must byte-truncate instead of erroring.
+	content := strings.Repeat("x", 2*1024*1024)
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("expected byte-truncated success for single long line, got error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	maxBytes := getReadMaxBytes()
+	if len(text) > maxBytes {
+		t.Errorf("output %d bytes exceeds max %d", len(text), maxBytes)
+	}
+	if !strings.Contains(text, "more bytes in this line") {
+		t.Errorf("expected byte continuation hint, got tail: %q", text[len(text)-200:])
+	}
+	if !strings.Contains(text, "awk") {
+		t.Errorf("expected byte-level tool hint (awk substr), got tail: %q", text[len(text)-200:])
+	}
+	// Continuation offset in the hint must match the bytes actually shown.
+	if !strings.Contains(text, "more bytes in this line") {
+		t.Fatal("missing hint")
+	}
+	// The hint's substr start should be shown+1 and the prefix must be intact.
+	if !strings.HasPrefix(text, "xxxx") {
+		t.Errorf("expected prefix of the line preserved, got: %q", text[:20])
+	}
+}

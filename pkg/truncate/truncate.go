@@ -144,6 +144,13 @@ func trimUTF8ToBytes(s string, maxBytes int) string {
 	return s[:end]
 }
 
+// TrimBytes trims s to at most maxBytes bytes, preserving UTF-8 validity.
+// Useful for paging files with extremely long (or single) lines where
+// line-based limits cannot reduce the selected size.
+func TrimBytes(s string, maxBytes int) string {
+	return trimUTF8ToBytes(s, maxBytes)
+}
+
 // TruncateString truncates s to at most maxLen bytes, appending "..." if truncated.
 func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
