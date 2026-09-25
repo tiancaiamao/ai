@@ -91,7 +91,8 @@ func truncateToolContent(ctx context.Context, content []agentctx.ContentBlock, l
 				offloadPath := offloadTruncatedToolOutput(b.Text, nameID, sessionDir, runID)
 				markerSuffix := ""
 				if offloadPath != "" {
-					markerSuffix = fmt.Sprintf(", use read tool (offset/limit) on: %s", offloadPath)
+					markerSuffix = fmt.Sprintf(". Full output: %d lines / %s at %s. Use read (offset/limit) or grep",
+						countLines(b.Text), humanByteSize(originalLen), offloadPath)
 				}
 
 				// Apply truncation
@@ -197,4 +198,30 @@ func sanitizeToolOutputFilename(name string) string {
 		}
 	}
 	return name
+}
+
+// countLines counts lines the way editors do: a trailing newline does not
+// start a new line.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
+}
+
+// humanByteSize formats a byte count compactly for truncation markers,
+// e.g. "3.3MB", "512.0KB", "42B".
+func humanByteSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1fKB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", n)
+	}
 }
