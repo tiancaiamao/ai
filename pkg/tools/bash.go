@@ -49,7 +49,13 @@ func (t *BashTool) Name() string {
 
 // Description returns the tool description.
 func (t *BashTool) Description() string {
-	return `Execute bash commands in the current working directory.
+		return `Execute bash commands in the current working directory.
+
+⚠️ Shell is /bin/sh (POSIX). NOT bash. Avoid:
+  • Process substitution: <(...) or >(...)
+  • Bash arrays, [[ ]] tests, &> redirects
+  • Heredoc with complex quoting: $(cat <<'EOF' ...)
+For multi-line text or complex quoting, write to /tmp file first, then use --body-file or cat the file.
 
 Best for quick commands (<2 minutes). For long-running tasks (builds, large tests, servers), use the /tmux skill instead.
 

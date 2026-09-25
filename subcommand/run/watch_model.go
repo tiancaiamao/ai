@@ -438,9 +438,16 @@ func WatchSubcommand() {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
-		result := followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
+						result := followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
 		if result.timedOut {
-			fmt.Fprintln(os.Stderr, "--- watch timeout; agent may still be running, continue watching before cleanup ---")
+			elapsed := ""
+			retryExtra := ""
+						if *watchTimeoutFlag > 0 {
+				elapsed = fmt.Sprintf(" after %s", *watchTimeoutFlag)
+				retryExtra = " --timeout " + (*watchTimeoutFlag).String()
+			}
+			fmt.Fprintf(os.Stderr, "--- watch timeout%s; agent may still be running ---\n", elapsed)
+			fmt.Fprintf(os.Stderr, "--- retry: ai watch --id %s --follow --pretty%s ---\n", meta.ID, retryExtra)
 		}
 		if code := followWatchExitCode(result); code != 0 {
 			os.Exit(code)
@@ -629,8 +636,12 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 				break
 			}
 		}
-		if !ended {
-			fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
+				if !ended {
+			if tui.IsRunning(meta) {
+				fmt.Fprintf(os.Stderr, "--- agent stream closed but process %s still alive (connection lost, not a crash) ---\n", meta.ID)
+			} else {
+				fmt.Fprintf(os.Stderr, "--- agent process %s exited without completing turn (crash or kill) ---\n", meta.ID)
+			}
 		}
 		fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 		return finish(ended)
@@ -699,8 +710,12 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			break
 		}
 	}
-	if !ended {
-		fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
+		if !ended {
+		if tui.IsRunning(meta) {
+			fmt.Fprintf(os.Stderr, "--- agent stream closed but process %s still alive (connection lost, not a crash) ---\n", meta.ID)
+		} else {
+			fmt.Fprintf(os.Stderr, "--- agent process %s exited without completing turn (crash or kill) ---\n", meta.ID)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 	return finish(ended)

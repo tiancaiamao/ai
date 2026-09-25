@@ -65,18 +65,23 @@ func TestReadTool_OffsetAndLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	text := result[0].(agentctx.TextContent).Text
+		text := result[0].(agentctx.TextContent).Text
 
-	// Should contain lines 3-5
+	// Should contain lines 3-5 in the main content
 	if !strings.Contains(text, "line3") || !strings.Contains(text, "line4") || !strings.Contains(text, "line5") {
 		t.Errorf("expected lines 3-5 in output, got: %s", text)
 	}
-	// Should NOT contain lines 1-2 or 6-10
-	if strings.Contains(text, "line1") || strings.Contains(text, "line2") {
-		t.Errorf("should not contain lines 1-2, got: %s", text)
+	// Extract main content (after the context anchor block)
+	mainContent := text
+	if idx := strings.Index(text, "Use offset=1 to read from start.]\n\n"); idx >= 0 {
+		mainContent = text[idx+len("Use offset=1 to read from start.]\n\n"):]
 	}
-	if strings.Contains(text, "line6") {
-		t.Errorf("should not contain lines 6+, got: %s", text)
+	// Main content should NOT contain lines 1-2 or 6-10
+	if strings.Contains(mainContent, "line1\n") || strings.Contains(mainContent, "line2\n") {
+		t.Errorf("main content should not contain lines 1-2, got: %s", mainContent)
+	}
+	if strings.Contains(mainContent, "line6") {
+		t.Errorf("main content should not contain lines 6+, got: %s", mainContent)
 	}
 	// 10 lines total, we read lines 3-5 (3 lines), remaining: 5 lines (6,7,8,9,10)
 	if !strings.Contains(text, "5 more lines below") {
@@ -427,11 +432,22 @@ func TestReadTool_StringOffsetLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	text := result[0].(agentctx.TextContent).Text
+		text := result[0].(agentctx.TextContent).Text
 	if !strings.Contains(text, "line2") || !strings.Contains(text, "line3") {
 		t.Fatalf("expected lines 2 and 3, got: %s", text)
 	}
-	if strings.Contains(text, "line1") || strings.Contains(text, "line4") {
-		t.Fatalf("should not contain line1/line4, got: %s", text)
+	// Context anchor (first 10 lines) will contain line1 for small files.
+	// line4 should NOT be in the main content area (after the anchor block).
+	// Verify the main content is correct by checking it appears after the anchor.
+	mainStart := strings.Index(text, "```\n\n")
+	if mainStart < 0 {
+		mainStart = strings.Index(text, "Use offset=1")
+		if mainStart < 0 {
+			mainStart = 0
+		}
+	}
+	mainContent := text[mainStart:]
+	if strings.Contains(mainContent, "line4") {
+		t.Fatalf("line4 should not be in main content after anchor, got: %s", mainContent)
 	}
 }

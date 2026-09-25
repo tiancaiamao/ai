@@ -196,11 +196,17 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			len(selectedLines), len(output), maxBytes/80) // rough line-width estimate
 	}
 
-	// Add continuation hints when content is truncated
+		// Add continuation hints when content is truncated
 	var header, footer string
 	if offset > 1 {
-		header = fmt.Sprintf("[%d lines above omitted. Use offset=1, limit=%d to read from start.]\n\n",
-			offset-1, offset-1)
+		// Include first 10 lines as context anchor so the agent knows what the file looks like
+		anchorEnd := 10
+		if totalLines < anchorEnd {
+			anchorEnd = totalLines
+		}
+		anchorLines := strings.Join(lines[0:anchorEnd], "\n")
+		header = fmt.Sprintf("[%d lines above omitted. File starts with:\n```\n%s\n```\nUse offset=1 to read from start.]\n\n",
+			offset-1, anchorLines)
 	}
 	if end < totalLines {
 		remaining := totalLines - end
