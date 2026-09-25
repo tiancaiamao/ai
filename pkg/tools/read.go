@@ -197,7 +197,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	if len(output) > maxBytes && len(selectedLines) == 1 {
 		// A single line longer than maxBytes cannot be narrowed by lowering
 		// limit (limit=1 still selects the whole line). Fall back to byte-level
-				// truncation instead of failing, so recovery stays possible. Reserve
+		// truncation instead of failing, so recovery stays possible. Reserve
 		// room for the continuation hint below plus the compact header and
 		// "more lines" footer that may be appended afterwards (~350 bytes).
 		const hintReserve = 640
@@ -225,7 +225,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		header += "\n\n"
 	}
 
-		if end < totalLines {
+	if end < totalLines {
 		remaining := totalLines - end
 		moreLines := fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
 			remaining, end+1)

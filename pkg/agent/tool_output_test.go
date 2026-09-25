@@ -108,7 +108,7 @@ func TestTruncateToolContentOffloadsFullOutput(t *testing.T) {
 	if len(text.Text) > 10000 {
 		t.Fatalf("truncated text exceeds limit: got %d > 10000", len(text.Text))
 	}
-		path := filepath.Join(sessionDir, "toolout", "callu_offload.txt")
+	path := filepath.Join(sessionDir, "toolout", "callu_offload.txt")
 	if !strings.Contains(text.Text, "Full output: 1 lines / "+humanByteSize(len(longText))+" at "+path) {
 		t.Fatalf("marker should include size metadata and path %s, got: %.200s", path, text.Text)
 	}
@@ -218,7 +218,7 @@ func TestTruncateToolContentMultipleTruncatedBlocksUseDistinctFiles(t *testing.T
 			name = "callu_multi-2.txt"
 		}
 		path := filepath.Join(sessionDir, "toolout", name)
-				if !strings.Contains(text.Text, "Full output: 1 lines / "+humanByteSize(len(want))+" at "+path) {
+		if !strings.Contains(text.Text, "Full output: 1 lines / "+humanByteSize(len(want))+" at "+path) {
 			t.Fatalf("block %d: marker should include metadata and point at %s, got: %.200s", i, path, text.Text)
 		}
 		data, err := os.ReadFile(path)
