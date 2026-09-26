@@ -21,7 +21,7 @@ func SendSubcommand() {
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	waitFlag := fs.Bool("wait", false, "wait for agent to finish processing and stream the response")
 	summaryFlag := fs.Bool("summary", false, "with --wait: only show final assistant text (suppress tool output)")
-	timeoutFlag := fs.Duration("timeout", 0, "with --wait: max wait time (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 4*time.Minute, "with --wait: max wait time (default 4m, 0 = unlimited)")
 	fs.Parse(os.Args[1:])
 
 	// Determine the message to send.
@@ -136,7 +136,7 @@ func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, 
 				printSendEvent(evt, &lastKind, &lastTextRole)
 			}
 		case <-deadline:
-			fmt.Fprintln(os.Stderr, "--- timeout ---")
+			fmt.Fprintf(os.Stderr, "--- timeout after %s (raise with --timeout, 0 = unlimited) ---\n", timeout)
 			return
 		}
 	}

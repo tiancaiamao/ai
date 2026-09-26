@@ -60,7 +60,7 @@ Flags for 'send':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
   --wait                   Wait for agent to finish and stream the response
   --summary                With --wait: only show final assistant text
-  --timeout <duration>     With --wait: max wait time (0 = unlimited)
+    --timeout <duration>     With --wait: max wait time (default 4m, 0 = unlimited)
 
 Flags for 'kill':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
