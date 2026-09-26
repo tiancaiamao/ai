@@ -1,13 +1,18 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 func TestReadTool_BasicFile(t *testing.T) {
@@ -461,5 +466,125 @@ func TestReadTool_ContextAnchorRespectsMaxBytes(t *testing.T) {
 	text := result[0].(agentctx.TextContent).Text
 	if !strings.Contains(text, "line3") || strings.Contains(text, strings.Repeat("a", 101)) {
 		t.Fatalf("expected selected line without oversized context anchor, got output length %d", len(text))
+	}
+}
+
+func TestReadTool_SingleLongLineByteTruncation(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "singleline.txt")
+
+	// 2MB single line (e.g. minified JSON / base64). Line-based limit cannot
+	// reduce this; the tool must byte-truncate instead of erroring.
+	content := strings.Repeat("x", 2*1024*1024)
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("expected byte-truncated success for single long line, got error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	maxBytes := getReadMaxBytes()
+	if len(text) > maxBytes {
+		t.Errorf("output %d bytes exceeds max %d", len(text), maxBytes)
+	}
+	if !strings.Contains(text, "more bytes in this line") {
+		t.Errorf("expected byte continuation hint, got tail: %q", text[len(text)-200:])
+	}
+	// Continuation offset in the hint must match the bytes actually shown.
+	if !strings.Contains(text, "more bytes in this line") {
+		t.Fatal("missing hint")
+	}
+	// The hint's tail -c start should be shown+1 and the prefix must be intact.
+	if !strings.Contains(text, "tail -c +") {
+		t.Errorf("expected byte-level tool hint (tail -c +N), got tail: %q", text[len(text)-200:])
+	}
+	if !strings.Contains(text, shellQuote(filePath)) {
+		t.Errorf("expected quoted path %s in hint, got tail: %q", shellQuote(filePath), text[len(text)-200:])
+	}
+	if !strings.HasPrefix(text, "xxxx") {
+		t.Errorf("expected prefix of the line preserved, got: %q", text[:20])
+	}
+}
+
+func TestReadTool_LongLineHintShellQuotesPathWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "single line.txt") // path with a space
+
+	content := strings.Repeat("y", 2*1024*1024)
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	// The path must appear quoted so the hint command is executable as-is.
+	if !strings.Contains(text, shellQuote(filePath)) {
+		t.Errorf("expected quoted path %q in hint, got tail: %q", shellQuote(filePath), text[len(text)-200:])
+	}
+}
+
+func TestReadTool_LongLineTailHintRecoversMultibyteTail(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "multibyte.txt")
+
+	// Single long line full of multi-byte UTF-8 characters. An awk substr
+	// hint would index by character here and skip bytes; the tail -c hint
+	// must recover the exact remaining bytes of the file.
+	content := strings.Repeat("中文é", 400*1024) // 3 bytes * 400K chars ≈ 1.2MB
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	// Extract the hint: tail -c +<N> '<path>'
+	hintRe := regexp.MustCompile(`tail -c \+(\d+) ('[^']*')`)
+	m := hintRe.FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("expected tail -c hint with quoted path, got tail: %q", text[len(text)-200:])
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 || n > len(content) {
+		t.Fatalf("hint offset %d out of range for file of %d bytes", n, len(content))
+	}
+
+	// Execute the hinted command and verify it reproduces the exact remaining
+	// bytes of the original file.
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("tail -c +%d %s", n, m[2]))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hint command failed: %v", err)
+	}
+	if !bytes.Equal(out, []byte(content)[n-1:]) {
+		t.Errorf("hint command output %d bytes, want %d (file bytes from offset %d)", len(out), len(content)-n+1, n)
 	}
 }

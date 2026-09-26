@@ -235,3 +235,22 @@ func TestBashToolParentCancellationStillAborts(t *testing.T) {
 	}
 	t.Fatalf("expected 'Command canceled' message, got blocks: %+v", blocks)
 }
+
+func TestBashToolTimeoutPipeTip(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Piped command that times out: partial output buffered in the pipe is
+	// lost on kill, so the error must include the file-redirect tip.
+	blocks, err := tool.Execute(ctx, map[string]any{
+		"command": "sleep 15 | tail -5",
+		"timeout": float64(1),
+	})
+	assert.NoError(t, err)
+	result := blocks[0].(agentctx.TextContent)
+	assert.Contains(t, result.Text, "timed out")
+	assert.Contains(t, result.Text, "redirect to a file instead")
+}

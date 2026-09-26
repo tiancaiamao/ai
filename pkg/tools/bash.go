@@ -434,6 +434,12 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 				"For long-running tasks, use the /tmux skill for proper background management.",
 			execTimeout, output.Len(), output.String())
 
+		// When the command pipes into head/tail, the buffered partial output
+		// dies with the process group and partial output above is empty.
+		if strings.Contains(command, "|") {
+			resultText += "\n\ntip: piping to head/tail loses partial output on kill; redirect to a file instead (cmd > /tmp/out.log 2>&1)"
+		}
+
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",

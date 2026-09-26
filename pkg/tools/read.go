@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/truncate"
 	"golang.org/x/image/webp"
 )
 
@@ -46,6 +47,12 @@ func getReadLimit() int {
 		}
 	}
 	return defaultReadLimit
+}
+
+// shellQuote quotes s for safe literal use in a POSIX shell command by
+// wrapping it in single quotes and escaping embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ReadTool reads file contents with dynamic workspace support.
@@ -188,15 +195,33 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	selectedLines := lines[start:end]
 	output := strings.Join(selectedLines, "\n")
 
+	var header, footer string
+
 	// Check size of selected content and context anchor.
 	// This allows reading sections of large files via offset/limit without returning oversized context.
 	maxBytes := getReadMaxBytes()
+	if len(output) > maxBytes && len(selectedLines) == 1 {
+		// A single line longer than maxBytes cannot be narrowed by lowering
+		// limit (limit=1 still selects the whole line). Fall back to byte-level
+		// truncation instead of failing, so recovery stays possible. Reserve
+		// room for the continuation hint below plus the compact header and
+		// "more lines" footer that may be appended afterwards (~350 bytes).
+		// Hint must use byte-level tools: awk's substr indexes by character in
+		// UTF-8 locales, which would skip bytes on multi-byte lines. tail -c +N
+		// (1-based) outputs the file starting at byte N, matching the byte
+		// offset semantics of len(shown)+1 exactly. The path is shell-quoted so
+		// paths with spaces or shell metacharacters yield a runnable command.
+		const hintReserve = 640
+		shown := truncate.TrimBytes(output, maxBytes-hintReserve)
+		footer = fmt.Sprintf(
+			"\n\n[%d more bytes in this line. Use a byte-level tool to read the rest, e.g. tail -c +%d %s]",
+			len(output)-len(shown), len(shown)+1, shellQuote(path))
+		output = shown
+	}
 	if len(output) > maxBytes {
 		return nil, fmt.Errorf("selected range is too large (%d lines, %d bytes). Use a smaller limit value, e.g. limit=%d",
 			len(selectedLines), len(output), maxBytes/80) // rough line-width estimate
 	}
-
-	var header, footer string
 	if offset > 1 {
 		// Include up to 10 preceding lines as context without repeating the selected range.
 		anchorEnd := start
@@ -213,12 +238,15 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	if end < totalLines {
 		remaining := totalLines - end
-		footer = fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
+		moreLines := fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
 			remaining, end+1)
 		if remaining > 500 {
-			footer = fmt.Sprintf("\n\n[%d more lines below. Consider using grep to locate specific content, or offset=%d to continue reading.]",
+			moreLines = fmt.Sprintf("\n\n[%d more lines below. Consider using grep to locate specific content, or offset=%d to continue reading.]",
 				remaining, end+1)
 		}
+		// Append rather than overwrite: footer may already carry the
+		// byte-level continuation hint for an oversized single line.
+		footer += moreLines
 	}
 
 	if len(header)+len(output)+len(footer) > maxBytes {
