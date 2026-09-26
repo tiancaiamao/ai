@@ -33,7 +33,6 @@ type RunMeta struct {
 	StartedAt    int64  `json:"started_at"`        // unix timestamp
 	FinishedAt   int64  `json:"finished_at"`       // unix timestamp, 0 if still running
 	Name         string `json:"name"`              // optional human-readable name
-	ParentRun    string `json:"parent_run"`        // optional parent run ID for subagents
 	PidStartTime int64  `json:"pid_start_time"`    // epoch seconds of process start (for PID reuse detection)
 	Session      string `json:"session,omitempty"` // session UUID this run is currently attached to (empty for runs created before this field existed)
 }

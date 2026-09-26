@@ -65,7 +65,6 @@ func TestSaveAndLoadRunMeta(t *testing.T) {
 		Status:    StatusRunning,
 		StartedAt: 1700000000,
 		Name:      "test run",
-		ParentRun: "",
 	}
 	path := filepath.Join(tmpDir, "runs", "abc123", "run.json")
 
