@@ -547,11 +547,17 @@ func followWatchExitCode(result followWatchResult) int {
 	return 0
 }
 
+// defaultFollowWatchTimeout bounds `--follow` when the flag is not set. A
+// stalled turn would otherwise block the watcher forever (and any agent
+// blocking on it with an unbounded bash timeout). On expiry the watcher exits
+// with code 2 and a retry hint — the agent simply re-watches, so long tasks
+// are unaffected.
+const defaultFollowWatchTimeout = 30 * time.Minute
+
 // followWatch streams ACP updates from the agent until the current turn ends
 // (_turn_end update), the connection closes, or the timeout fires.
 func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) followWatchResult {
-	// watchTimeout == -1: flag not set → default behavior (exit on _turn_end)
-	// watchTimeout <= 0: no timer (default: exit on _turn_end, or stream close)
+	// watchTimeout <= 0: no timer (exit on _turn_end, or stream close)
 	// watchTimeout > 0: wait up to this duration
 	client, sid, err := connectACP(tui.SocketPath("", meta.ID))
 	if err != nil {
