@@ -460,7 +460,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			"elapsed", elapsed.Seconds(),
 			"outputSize", output.Len())
 
-				resultText := timeoutWarning + fmt.Sprintf(
+		resultText := timeoutWarning + fmt.Sprintf(
 			"Command timed out after %v and was terminated.\n"+
 				"Partial output (%d bytes):\n%s\n\n"+
 				"For long-running tasks, use the /tmux skill for proper background management.",
@@ -563,18 +563,30 @@ func isBareCDCommand(command string) bool {
 	return true
 }
 
-// hasSleepLoop reports whether the command sleeps inside a while/until loop,
-// e.g. `while kill -0 $PID 2>/dev/null; do sleep 2; done`. Such loops run
-// for an unbounded time even though each individual sleep is small, which
-// bypasses the single-sleep guard.
+// hasSleepLoop reports whether the command sleeps inside a while/until or
+// for loop, e.g. `while kill -0 $PID 2>/dev/null; do sleep 2; done`. Such
+// loops run for an unbounded time even though each individual sleep is
+// small, which bypasses the single-sleep guard. Loop bodies are stripped
+// first so a `sleep` after `done` is not a false positive; the sleep match
+// accepts any argument (variables, decimals) since the duration does not
+// matter — the loop is what makes the wait unbounded.
 func hasSleepLoop(command string) bool {
-	if _, hasSleep := detectSleepCommand(command); !hasSleep {
-		return false
+	for _, re := range [](*regexp.Regexp){loopBodyRe, forLoopBodyRe} {
+		if m := re.FindStringSubmatch(command); m != nil && sleepCmdRe.MatchString(m[1]) {
+			return true
+		}
 	}
-	return loopWithSleepRe.MatchString(command)
+	return false
 }
 
-var loopWithSleepRe = regexp.MustCompile(`(?s)\b(while|until)\b.*\bdo\b.*\bsleep\b`)
+var (
+	// The captured group is the loop body between `do` and the first `done`
+	// (non-greedy), so a `sleep` after `done` is never a false positive and
+	// the sleep is matched even when its duration is a variable or decimal.
+	loopBodyRe    = regexp.MustCompile(`(?s)\b(?:while|until)\b.*?\bdo\b(.*?)\bdone\b`)
+	forLoopBodyRe = regexp.MustCompile(`(?s)\bfor\b.*?\bdo\b(.*?)\bdone\b`)
+	sleepCmdRe    = regexp.MustCompile(`\bsleep\b\s+\S`)
+)
 
 // detectSleepCommand detects sleep commands and returns the duration in seconds.
 // Returns (duration, true) if a sleep command is found, (0, false) otherwise.

@@ -39,6 +39,26 @@ func TestHasSleepLoop(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "for loop with sleep",
+			command: "for i in 1 2 3; do sleep 2; done",
+			want:    true,
+		},
+		{
+			name:    "while loop with variable sleep duration",
+			command: `while kill -0 "$pid" 2>/dev/null; do sleep "$interval"; done`,
+			want:    true,
+		},
+		{
+			name:    "while loop with decimal sleep",
+			command: "while true; do sleep .5; done",
+			want:    true,
+		},
+		{
+			name:    "sleep after loop end is not a loop",
+			command: "while read line; do echo \"$line\"; done < input; sleep 2",
+			want:    false,
+		},
+		{
 			name:    "plain bounded sleep allowed",
 			command: "sleep 2",
 			want:    false,
