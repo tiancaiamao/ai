@@ -212,12 +212,17 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	execTimeout := t.execTimeout
 	var timeoutWarning string
 	if timeoutArg, ok := args["timeout"].(float64); ok {
-		if timeoutArg > 0 {
-			execTimeout = time.Duration(timeoutArg) * time.Second
-			if execTimeout > maxBashTimeout {
-				timeoutWarning = fmt.Sprintf("⚠️ bash timeout clamped: requested %ds exceeds the %s cap, using %s.\nIf you meant milliseconds, this tool's timeout is in SECONDS (e.g. 120000 → 33h was clamped; pass 120 for 120s).\n\n", int64(execTimeout/time.Second), maxBashTimeout, maxBashTimeout)
+				if timeoutArg > 0 {
+			// Compare in seconds BEFORE converting to nanoseconds: a huge
+			// value (e.g. 10000000000) overflows time.Duration (int64 ns)
+			// into a negative number, which would skip the cap and fall
+			// through to the no-timeout branch.
+			if timeoutArg > float64(maxBashTimeout/time.Second) {
+				timeoutWarning = fmt.Sprintf("⚠️ bash timeout clamped: requested %ds exceeds the %s cap, using %s.\nIf you meant milliseconds, this tool's timeout is in SECONDS (e.g. 120000 → 33h was clamped; pass 120 for 120s).\n\n", int64(timeoutArg), maxBashTimeout, maxBashTimeout)
 				execTimeout = maxBashTimeout
 				slog.Warn("[Bash] timeout parameter exceeds cap, clamped", "requested", int64(timeoutArg), "cappedTo", maxBashTimeout.Seconds(), "command", command)
+			} else {
+				execTimeout = time.Duration(timeoutArg) * time.Second
 			}
 			slog.Info("[Bash] Custom timeout set", "timeout", execTimeout.Seconds(), "command", command)
 		} else {
@@ -566,10 +571,11 @@ func isBareCDCommand(command string) bool {
 // hasSleepLoop reports whether the command sleeps inside a while/until or
 // for loop, e.g. `while kill -0 $PID 2>/dev/null; do sleep 2; done`. Such
 // loops run for an unbounded time even though each individual sleep is
-// small, which bypasses the single-sleep guard. Loop bodies are stripped
-// first so a `sleep` after `done` is not a false positive; the sleep match
-// accepts any argument (variables, decimals) since the duration does not
-// matter — the loop is what makes the wait unbounded.
+// small, which bypasses the single-sleep guard. Only the captured loop
+// body (between `do` and the first `done`) is inspected, so a `sleep`
+// after `done` is not a false positive, and the sleep match accepts any
+// argument (variables, decimals) — the loop is what makes the wait
+// unbounded, not the duration.
 func hasSleepLoop(command string) bool {
 	for _, re := range [](*regexp.Regexp){loopBodyRe, forLoopBodyRe} {
 		if m := re.FindStringSubmatch(command); m != nil && sleepCmdRe.MatchString(m[1]) {

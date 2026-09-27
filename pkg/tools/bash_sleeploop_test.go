@@ -151,6 +151,38 @@ func TestBashTool_TimeoutClamped(t *testing.T) {
 	}
 }
 
+// TestBashTool_TimeoutOverflowClamped guards the int64 overflow bypass:
+// timeout values whose nanosecond conversion overflows time.Duration (e.g.
+// 10^10 s) would wrap negative and skip the cap, falling through to the
+// no-timeout branch.
+func TestBashTool_TimeoutOverflowClamped(t *testing.T) {
+	old := maxBashTimeout
+	maxBashTimeout = 2 * time.Second
+	defer func() { maxBashTimeout = old }()
+
+	tool := NewBashTool(&Workspace{})
+	args := map[string]any{"command": "sleep 8", "timeout": float64(10000000000)}
+
+	start := time.Now()
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute() returned unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Fatalf("overflowed timeout bypassed the cap: command ran %s (expected ~2s)", elapsed)
+	}
+	if len(result) == 0 {
+		t.Fatal("Execute() should return a result")
+	}
+	text, ok := result[0].(agentctx.TextContent)
+	if !ok {
+		t.Fatalf("Execute() result[0] should be TextContent, got %T", result[0])
+	}
+	if !strings.Contains(text.Text, "timeout clamped") {
+		t.Errorf("result should contain the clamp warning:\ngot: %s", text.Text)
+	}
+}
+
 // TestBashTool_TimeoutWithinCapUnchanged verifies a normal timeout still
 // applies without the clamp warning.
 func TestBashTool_TimeoutWithinCapUnchanged(t *testing.T) {
