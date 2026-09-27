@@ -410,7 +410,7 @@ func WatchSubcommand() {
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
 	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until the turn ends (machine-readable)")
-	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait before giving up (default: exit when the turn ends; 0 means no time limit)")
+	watchTimeoutFlag := fs.Duration("timeout", defaultFollowWatchTimeout, "with --follow: max duration to wait before giving up (default 10m; 0 means no time limit)")
 	prettyFlag := fs.Bool("pretty", false, "with --follow: format output as readable conversation instead of raw JSONL")
 	summaryFlag := fs.Bool("summary", false, "with --follow --pretty: only show final assistant text (no intermediate thinking/tools)")
 	fs.Parse(os.Args[1:])
@@ -547,11 +547,17 @@ func followWatchExitCode(result followWatchResult) int {
 	return 0
 }
 
+// defaultFollowWatchTimeout bounds `--follow` when the flag is not set. A
+// stalled turn would otherwise block the watcher forever (and any agent
+// blocking on it with an unbounded bash timeout). On expiry the watcher exits
+// with code 2 and a retry hint — the agent simply re-watches, so long tasks
+// are unaffected.
+const defaultFollowWatchTimeout = 10 * time.Minute
+
 // followWatch streams ACP updates from the agent until the current turn ends
 // (_turn_end update), the connection closes, or the timeout fires.
 func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) followWatchResult {
-	// watchTimeout == -1: flag not set → default behavior (exit on _turn_end)
-	// watchTimeout <= 0: no timer (default: exit on _turn_end, or stream close)
+	// watchTimeout <= 0: no timer (exit on _turn_end, or stream close)
 	// watchTimeout > 0: wait up to this duration
 	client, sid, err := connectACP(tui.SocketPath("", meta.ID))
 	if err != nil {

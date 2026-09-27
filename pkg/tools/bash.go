@@ -26,6 +26,13 @@ import (
 // grace period bounds the drain without truncating actively-written output.
 const exitGracePeriod = 250 * time.Millisecond
 
+// maxBashTimeout caps the user-supplied timeout parameter. Models frequently
+// pass millisecond values (e.g. 120000 meaning 120s) where the schema asks
+// for seconds — unclamped, that becomes a 33-hour timeout and effectively
+// disables the safety net. 4h is far beyond any legitimate one-shot command.
+// A var (not const) so tests can lower it.
+var maxBashTimeout = 4 * time.Hour
+
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
 	workspace   *Workspace
@@ -61,7 +68,7 @@ Best for quick commands (<2 minutes). For long-running tasks (builds, large test
 
 Timeout behavior:
   • Default: 120 seconds
-  • Override: Set timeout parameter (in seconds)
+  • Override: Set timeout parameter (in SECONDS, not milliseconds; max 14400 = 4h)
   • No limit: Set timeout=0 to wait indefinitely
   • On timeout: Command is killed (hard termination)
 
@@ -93,7 +100,7 @@ func (t *BashTool) Parameters() map[string]any {
 			},
 			"timeout": map[string]any{
 				"type":        "integer",
-				"description": "Timeout in seconds (default: 120, 0 for no timeout). On timeout, command is killed.",
+				"description": "Timeout in SECONDS (not milliseconds; default: 120, 0 for no timeout, max 14400). On timeout, command is killed.",
 				"minimum":     0,
 			},
 		},
@@ -168,6 +175,25 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		}, nil
 	}
 
+	// Block sleep inside while/until loops: `while ...; do sleep N; done`
+	// runs indefinitely even with a small N, defeating the sleep guard and
+	// the command timeout (which models often pass as milliseconds).
+	if hasSleepLoop(command) {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "⛔ Blocked: sleep inside a while/until loop (`while ...; do sleep ...; done`) can run for an unbounded time.\n\n" +
+					"Use one of these instead:\n" +
+					"  • Wait for an ai run to finish its turn:  ai watch --id <id> --follow --pretty\n" +
+					"    (note: `ai serve` processes are long-lived servers that do NOT exit when\n" +
+					"     their turn completes — never wait for their PID to die; use watch for turn completion)\n" +
+					"  • Wait for a tmux session:  ~/.ai/skills/tmux/bin/tmux_wait.sh <session> [timeout]\n" +
+					"  • Bounded one-shot wait (no loop):  sleep 6\n\n" +
+					"For anything longer, use the /tmux skill for background management.",
+			},
+		}, nil
+	}
+
 	if isBareCDCommand(command) {
 		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. For directory changes that must span multiple commands (e.g. after creating/selecting a git worktree), use the change_workspace tool. 'cd <dir> && <command>' is valid only for a one-off command")
 	}
@@ -184,9 +210,20 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Handle timeout parameter (default: 120 seconds)
 	execTimeout := t.execTimeout
+	var timeoutWarning string
 	if timeoutArg, ok := args["timeout"].(float64); ok {
 		if timeoutArg > 0 {
-			execTimeout = time.Duration(timeoutArg) * time.Second
+			// Compare in seconds BEFORE converting to nanoseconds: a huge
+			// value (e.g. 10000000000) overflows time.Duration (int64 ns)
+			// into a negative number, which would skip the cap and fall
+			// through to the no-timeout branch.
+			if timeoutArg > float64(maxBashTimeout/time.Second) {
+				timeoutWarning = fmt.Sprintf("⚠️ bash timeout clamped: requested %ds exceeds the %s cap, using %s.\nIf you meant milliseconds, this tool's timeout is in SECONDS (e.g. 120000 → 33h was clamped; pass 120 for 120s).\n\n", int64(timeoutArg), maxBashTimeout, maxBashTimeout)
+				execTimeout = maxBashTimeout
+				slog.Warn("[Bash] timeout parameter exceeds cap, clamped", "requested", int64(timeoutArg), "cappedTo", maxBashTimeout.Seconds(), "command", command)
+			} else {
+				execTimeout = time.Duration(timeoutArg) * time.Second
+			}
 			slog.Info("[Bash] Custom timeout set", "timeout", execTimeout.Seconds(), "command", command)
 		} else {
 			// timeout=0 means no timeout - wait for command to complete
@@ -428,7 +465,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			"elapsed", elapsed.Seconds(),
 			"outputSize", output.Len())
 
-		resultText := fmt.Sprintf(
+		resultText := timeoutWarning + fmt.Sprintf(
 			"Command timed out after %v and was terminated.\n"+
 				"Partial output (%d bytes):\n%s\n\n"+
 				"For long-running tasks, use the /tmux skill for proper background management.",
@@ -478,6 +515,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Build result
 	var result strings.Builder
+	if timeoutWarning != "" {
+		result.WriteString(timeoutWarning)
+	}
 	result.WriteString(outputText)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -527,6 +567,32 @@ func isBareCDCommand(command string) bool {
 	}
 	return true
 }
+
+// hasSleepLoop reports whether the command sleeps inside a while/until or
+// for loop, e.g. `while kill -0 $PID 2>/dev/null; do sleep 2; done`. Such
+// loops run for an unbounded time even though each individual sleep is
+// small, which bypasses the single-sleep guard. Only the captured loop
+// body (between `do` and the first `done`) is inspected, so a `sleep`
+// after `done` is not a false positive, and the sleep match accepts any
+// argument (variables, decimals) — the loop is what makes the wait
+// unbounded, not the duration.
+func hasSleepLoop(command string) bool {
+	for _, re := range [](*regexp.Regexp){loopBodyRe, forLoopBodyRe} {
+		if m := re.FindStringSubmatch(command); m != nil && sleepCmdRe.MatchString(m[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	// The captured group is the loop body between `do` and the first `done`
+	// (non-greedy), so a `sleep` after `done` is never a false positive and
+	// the sleep is matched even when its duration is a variable or decimal.
+	loopBodyRe    = regexp.MustCompile(`(?s)\b(?:while|until)\b.*?\bdo\b(.*?)\bdone\b`)
+	forLoopBodyRe = regexp.MustCompile(`(?s)\bfor\b.*?\bdo\b(.*?)\bdone\b`)
+	sleepCmdRe    = regexp.MustCompile(`\bsleep\b\s+\S`)
+)
 
 // detectSleepCommand detects sleep commands and returns the duration in seconds.
 // Returns (duration, true) if a sleep command is found, (0, false) otherwise.

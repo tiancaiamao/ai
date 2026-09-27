@@ -21,7 +21,7 @@ func SendSubcommand() {
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	waitFlag := fs.Bool("wait", false, "wait for agent to finish processing and stream the response")
 	summaryFlag := fs.Bool("summary", false, "with --wait: only show final assistant text (suppress tool output)")
-	timeoutFlag := fs.Duration("timeout", 0, "with --wait: max wait time (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 4*time.Minute, "with --wait: max wait time (default 4m, 0 = unlimited)")
 	fs.Parse(os.Args[1:])
 
 	// Determine the message to send.
@@ -76,7 +76,7 @@ func SendSubcommand() {
 	defer client.Close()
 
 	if *waitFlag {
-		sendAndWait(client, sid, message, *summaryFlag, *timeoutFlag)
+		os.Exit(sendAndWait(client, sid, message, *summaryFlag, *timeoutFlag, meta.ID))
 		return
 	}
 
@@ -90,7 +90,12 @@ func SendSubcommand() {
 
 // sendAndWait sends a message and blocks until the agent finishes processing
 // it (_turn_end), streaming the response in real-time.
-func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, timeout time.Duration) {
+//
+// Returns a process exit code: 0 = turn completed; 2 = timed out (the agent's
+// turn is still in flight — the response is incomplete); 1 = error (stream
+// closed without _turn_end, or request error). Callers MUST propagate it,
+// otherwise a timed-out wait looks like success to the agent.
+func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, timeout time.Duration, runID string) int {
 	updates := client.Updates()
 	var deadline <-chan time.Time
 	if timeout > 0 {
@@ -99,7 +104,7 @@ func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, 
 
 	if err := client.PromptAsync(sid, message); err != nil {
 		fmt.Fprintf(os.Stderr, "error sending message: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	var currentText strings.Builder
@@ -111,18 +116,18 @@ func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, 
 			if !ok {
 				// Stream closed without _turn_end (e.g. agent process exited).
 				finishSend(summary, currentText.String())
-				fmt.Fprintln(os.Stderr, "--- agent stream ended ---")
-				return
+				fmt.Fprintln(os.Stderr, "--- agent stream ended without turn completion (agent exited or connection lost) ---")
+				return 1
 			}
 			if u.SessionUpdate == protocol.ACPUpdateRequestError {
 				if e, ok := u.Meta.(protocol.ACPUpdateError); ok {
 					fmt.Fprintf(os.Stderr, "error: %s failed: %s\n", e.Method, e.Message)
 				}
-				return
+				return 1
 			}
 			if u.SessionUpdate == "_turn_end" {
 				finishSend(summary, currentText.String())
-				return
+				return 0
 			}
 
 			evt := tui.ParseACPUpdate(u)
@@ -136,8 +141,11 @@ func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, 
 				printSendEvent(evt, &lastKind, &lastTextRole)
 			}
 		case <-deadline:
-			fmt.Fprintln(os.Stderr, "--- timeout ---")
-			return
+			// Timeout is NOT a completed turn: report it as an explicit failure
+			// (exit 2, same convention as `ai watch --follow --timeout`).
+			fmt.Fprintf(os.Stderr, "--- timeout after %s: agent's turn is STILL IN FLIGHT, the response above is INCOMPLETE ---\n", timeout)
+			fmt.Fprintf(os.Stderr, "--- agent may still be working; retry to resume waiting: ai watch --id %s --follow --pretty --timeout %s ---\n", runID, timeout)
+			return 2
 		}
 	}
 }
