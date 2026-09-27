@@ -29,6 +29,7 @@ func (app *App) setSession(newSess *session.Session, newID, newName string) {
 	// archive files are written to the correct session dir.
 	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, app.model.ContextWindow, newSess.GetDir())
 	app.compactor.SetRunID(app.runID)
+	app.compactor.SetSessionID(newID)
 	app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
 	app.compactor.SetThinkingLevel(app.currentThinkingLevel)
 	app.sessionComp.Update(app.compactor)

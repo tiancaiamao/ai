@@ -370,7 +370,7 @@ func StreamOpenAIResponses(
 			traceevent.Field{Key: "json", Value: string(jsonBody)},
 		)
 
-		headers := responsesHeaders(model, apiKey)
+		headers := responsesHeaders(model, apiKey, llmCtx.SessionID)
 		resp, err := doResponsesRequest(ctx, responsesRequestOptions{
 			Endpoint:            responsesEndpoint(model),
 			Body:                jsonBody,

@@ -91,6 +91,9 @@ func streamAssistantResponse(
 		Tools:         llmTools,
 		ThinkingLevel: thinkingLevel,
 	}
+	if config.GetSessionID != nil {
+		llmCtxParams.SessionID = config.GetSessionID()
+	}
 
 	// Stream LLM response
 	llmStart := time.Now()

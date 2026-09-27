@@ -152,7 +152,32 @@ func TestStreamLLMCapturesTrailingUsageChunk(t *testing.T) {
 	}
 }
 
+func TestStreamLLMSendsOpenCodeSessionHeader(t *testing.T) {
+	const sessionID = "session-123"
+	var gotHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("x-opencode-session")
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	model := Model{ID: "test-model", Provider: "opencode", BaseURL: server.URL, API: "openai-completions"}
+	llmCtx := LLMContext{
+		SessionID: sessionID,
+		Messages:  []LLMMessage{{Role: "user", Content: "ping"}},
+	}
+	for range StreamLLM(context.Background(), model, llmCtx, "test-key", 0).Iterator(context.Background()) {
+	}
+
+	if gotHeader != sessionID {
+		t.Fatalf("x-opencode-session = %q, want %q", gotHeader, sessionID)
+	}
+}
+
 // TestStreamLLMRequestsStreamUsage asserts the request opts into usage
+
 // reporting via stream_options.include_usage — without it, OpenAI-compatible
 // servers may omit the usage chunk entirely.
 func TestStreamLLMRequestsStreamUsage(t *testing.T) {
