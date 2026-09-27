@@ -212,7 +212,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	execTimeout := t.execTimeout
 	var timeoutWarning string
 	if timeoutArg, ok := args["timeout"].(float64); ok {
-				if timeoutArg > 0 {
+		if timeoutArg > 0 {
 			// Compare in seconds BEFORE converting to nanoseconds: a huge
 			// value (e.g. 10000000000) overflows time.Duration (int64 ns)
 			// into a negative number, which would skip the cap and fall
