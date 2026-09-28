@@ -43,7 +43,7 @@ tools:
 | Type | Description |
 |------|-------------|
 | `AgentConfig` | Parsed agent.yaml configuration |
-| `ValidThinkingLevels` | Accepted `thinking_level` values |
+| `AgentConfig.ThinkingLevel` | Optional model-native `thinking_level` value, validated against selected model at runtime |
 | `ToolEntry` | Single tool reference with enable flag and params |
 | `MiddlewareEntry` | Single middleware reference with enable flag and params |
 

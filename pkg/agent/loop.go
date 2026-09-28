@@ -51,7 +51,7 @@ type LoopConfig struct {
 	Compactor  agentctx.Compactor // Context compression
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
 	ToolCallCutoff int
-	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
+	// ThinkingLevel is the model-native reasoning effort; empty selects model default.
 	ThinkingLevel string
 	// MaxLLMRetries is the maximum number of retries for LLM calls.
 	MaxLLMRetries int
@@ -108,7 +108,7 @@ func getEffectiveAPIKey(config *LoopConfig) string {
 func DefaultLoopConfig() *LoopConfig {
 	return &LoopConfig{
 		ToolCallCutoff:          10,
-		ThinkingLevel:           "high",
+		ThinkingLevel:           "",
 		MaxLLMRetries:           defaultLLMMaxRetries,
 		RetryBaseDelay:          defaultRetryBaseDelay,
 		Executor:                NewToolExecutor(10, 60),

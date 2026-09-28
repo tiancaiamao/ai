@@ -129,17 +129,16 @@ Config file: `~/.ai/config.json`
     "api": "openai-completions",
     "maxTokens": 16384
   },
-  "thinkingLevel": "off",
   "compactor": {
     "maxMessages": 50,
     "maxTokens": 8000,
     "keepRecent": 5,
     "keepRecentTokens": 20000,
     "reserveTokens": 16384,
-        "toolCallCutoff": 10,
+    "toolCallCutoff": 10,
     "autoCompact": true
   },
-    "concurrency": {
+  "concurrency": {
     "maxConcurrentTools": 5,
     "queueTimeout": 60
   },

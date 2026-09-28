@@ -11,19 +11,22 @@ import (
 
 // ModelSpec represents a resolved model entry from models.json.
 type ModelSpec struct {
-	ID               string
-	Name             string
-	Provider         string
-	BaseURL          string
-	API              string
-	Proxy            string
-	Reasoning        bool
-	ReasoningEfforts []string // supported reasoning_effort values; empty = unrestricted
-	ReasoningContext string   // reasoning.context value required by the gateway (e.g. "all_turns"); empty = not required
-	Input            []string
-	ContextWindow    int
-	MaxTokens        int
-	SupportsVision   bool // true when Input includes image/vision
+	ID        string
+	Name      string
+	Provider  string
+	BaseURL   string
+	API       string
+	Proxy     string
+	Reasoning bool
+	// ReasoningEfforts lists the model-native values exposed by /set thinking-level.
+	ReasoningEfforts []string // supported native reasoning effort values
+
+	DefaultReasoningEffort string // model's default native reasoning effort
+	ReasoningContext       string // reasoning.context value required by the gateway (e.g. "all_turns"); empty = not required
+	Input                  []string
+	ContextWindow          int
+	MaxTokens              int
+	SupportsVision         bool // true when Input includes image/vision
 }
 
 type modelsFile struct {
@@ -38,16 +41,18 @@ type providerConfig struct {
 }
 
 type modelConfig struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name,omitempty"`
-	BaseURL          string   `json:"baseUrl,omitempty"`
-	API              string   `json:"api,omitempty"`
-	Reasoning        bool     `json:"reasoning,omitempty"`
-	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
-	ReasoningContext string   `json:"reasoningContext,omitempty"`
-	Input            []string `json:"input,omitempty"`
-	ContextWindow    int      `json:"contextWindow,omitempty"`
-	MaxTokens        int      `json:"maxTokens,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	BaseURL   string `json:"baseUrl,omitempty"`
+	API       string `json:"api,omitempty"`
+	Reasoning bool   `json:"reasoning,omitempty"`
+	// ReasoningEfforts lists selectable model-native values, not an ordered strength scale.
+	ReasoningEfforts       []string `json:"reasoningEfforts,omitempty"`
+	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty"`
+	ReasoningContext       string   `json:"reasoningContext,omitempty"`
+	Input                  []string `json:"input,omitempty"`
+	ContextWindow          int      `json:"contextWindow,omitempty"`
+	MaxTokens              int      `json:"maxTokens,omitempty"`
 }
 
 // GetDefaultModelsPath returns the default models file path.
@@ -98,19 +103,20 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				continue
 			}
 			specs = append(specs, ModelSpec{
-				ID:               id,
-				Name:             strings.TrimSpace(model.Name),
-				Provider:         provider,
-				BaseURL:          firstNonEmpty(model.BaseURL, baseURL),
-				API:              firstNonEmpty(model.API, api),
-				Proxy:            proxy,
-				Reasoning:        model.Reasoning,
-				ReasoningEfforts: model.ReasoningEfforts,
-				ReasoningContext: model.ReasoningContext,
-				Input:            model.Input,
-				ContextWindow:    model.ContextWindow,
-				MaxTokens:        model.MaxTokens,
-				SupportsVision:   supportsVision(model.Input),
+				ID:                     id,
+				Name:                   strings.TrimSpace(model.Name),
+				Provider:               provider,
+				BaseURL:                firstNonEmpty(model.BaseURL, baseURL),
+				API:                    firstNonEmpty(model.API, api),
+				Proxy:                  proxy,
+				Reasoning:              model.Reasoning,
+				ReasoningEfforts:       model.ReasoningEfforts,
+				DefaultReasoningEffort: model.DefaultReasoningEffort,
+				ReasoningContext:       model.ReasoningContext,
+				Input:                  model.Input,
+				ContextWindow:          model.ContextWindow,
+				MaxTokens:              model.MaxTokens,
+				SupportsVision:         supportsVision(model.Input),
 			})
 		}
 	}

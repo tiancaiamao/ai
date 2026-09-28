@@ -263,6 +263,9 @@ func (b *Builder) cleanupEmptySections(prompt string) string {
 
 // ThinkingInstruction returns the thinking instruction for the given level.
 func ThinkingInstruction(level string) string {
+	if strings.TrimSpace(level) == "" {
+		return ""
+	}
 	level = NormalizeThinkingLevel(level)
 	switch level {
 	case "off":
@@ -284,14 +287,7 @@ func ThinkingInstruction(level string) string {
 
 // NormalizeThinkingLevel normalizes the thinking level string.
 func NormalizeThinkingLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "off", "minimal", "low", "medium", "high", "xhigh":
-		return strings.ToLower(strings.TrimSpace(level))
-	case "":
-		return "high"
-	default:
-		return "high"
-	}
+	return strings.TrimSpace(level)
 }
 
 // CompactCheckPrompt returns the prompt template for asking the LLM

@@ -11,7 +11,6 @@ Loads configuration from `~/.ai/config.json` (or `AI_CONFIG_PATH`). Configuratio
 ```go
 type Config struct {
     Model         ModelConfig        `json:"model"`
-    ThinkingLevel string             `json:"thinkingLevel,omitempty"` // off, minimal, low, medium, high, xhigh
     Compactor     *compact.Config    `json:"compactor,omitempty"`
     Concurrency   *ConcurrencyConfig `json:"concurrency,omitempty"`
     ToolOutput    *ToolOutputConfig  `json:"toolOutput,omitempty"`
@@ -19,7 +18,10 @@ type Config struct {
 }
 ```
 
-## Model Configuration
+Model effort options and defaults are model-specific metadata in `models.json`
+(`reasoningEfforts` and `defaultReasoningEffort`). They are not stored in the
+shared `config.json`; `/set thinking-level` lists and validates the active
+model's native values.
 
 ```go
 type ModelConfig struct {

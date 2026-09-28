@@ -3,6 +3,19 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Reasoning effort options are model-native (2026-09)
+
+**What changed**: `config.json` no longer has a global `thinkingLevel`. Model
+entries declare native `reasoningEfforts` and an optional
+`defaultReasoningEffort`; the runtime forwards selected values unchanged and
+`/set thinking-level` lists and validates against the active model.
+
+**Why**: Reasoning option labels and supported values differ by model. A
+shared low/medium/high ladder and strength-based clamping can silently send an
+unsupported or unintended value. Model metadata now owns the available values
+and default, while an empty selection leaves the provider's own default in
+place.
+
 ## Skill score decay is measured in agent sessions, not wall-clock (2026-09)
 
 **What changed**: `SkillStatsFile` no longer computes

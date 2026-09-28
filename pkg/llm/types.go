@@ -18,11 +18,10 @@ type Model struct {
 	MaxTokens      int    `json:"maxTokens,omitempty"`
 	Reasoning      bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
 	SupportsVision bool   `json:"-"`                   // model supports image input (from models.json "input")
-	// ReasoningEfforts lists the wire-level reasoning_effort values this model
-	// accepts (from models.json "reasoningEfforts"), e.g. low/high/max. Empty
-	// means no restriction; requested levels outside the list are clamped to
-	// the nearest supported value.
-	ReasoningEfforts []string `json:"-"`
+	// ReasoningEfforts lists this model's selectable native effort values.
+	ReasoningEfforts       []string `json:"-"`
+	DefaultReasoningEffort string   `json:"-"`
+
 	// ReasoningContext, when set, is sent as reasoning.context on every
 	// request (from models.json "reasoningContext", e.g. "all_turns"). Some
 	// gateways (e.g. Codex Responses Lite) reject requests without it.
@@ -34,7 +33,7 @@ type LLMContext struct {
 	SystemPrompt  string       `json:"systemPrompt,omitempty"`
 	Messages      []LLMMessage `json:"messages"`
 	Tools         []LLMTool    `json:"tools,omitempty"`
-	ThinkingLevel string       `json:"thinkingLevel,omitempty"` // normalized: off/minimal/low/medium/high/xhigh
+	ThinkingLevel string       `json:"thinkingLevel,omitempty"` // native model reasoning effort; empty uses model default
 }
 
 // LLMMessage represents a message in the LLM conversation.

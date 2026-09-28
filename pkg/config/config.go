@@ -21,9 +21,6 @@ type Config struct {
 	// Model configuration
 	Model ModelConfig `json:"model"`
 
-	// Thinking level: off, minimal, low, medium, high, xhigh
-	ThinkingLevel string `json:"thinkingLevel,omitempty"`
-
 	// Compactor configuration
 	Compactor *compact.Config `json:"compactor,omitempty"`
 
@@ -228,11 +225,10 @@ func DefaultConfig() *Config {
 			BaseURL:  "https://api.z.ai/api/coding/paas/v4",
 			API:      "openai-completions",
 		},
-		ThinkingLevel: "high",
-		Compactor:     compact.DefaultConfig(),
-		Concurrency:   DefaultConcurrencyConfig(),
-		ToolOutput:    DefaultToolOutputConfig(),
-		Log:           DefaultLogConfig(),
+		Compactor:   compact.DefaultConfig(),
+		Concurrency: DefaultConcurrencyConfig(),
+		ToolOutput:  DefaultToolOutputConfig(),
+		Log:         DefaultLogConfig(),
 	}
 }
 

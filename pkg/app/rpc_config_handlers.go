@@ -98,29 +98,47 @@ func (app *App) handleModelSet(args string) (any, error) {
 		return nil, err
 	}
 
+	app.stateMu.Lock()
+	currentEffort := app.currentThinkingLevel
+	app.stateMu.Unlock()
+	if currentEffort != "" && !containsString(spec.ReasoningEfforts, currentEffort) {
+		currentEffort = ""
+	}
+	if currentEffort == "" {
+		currentEffort = spec.DefaultReasoningEffort
+	}
+
 	app.model = llm.Model{
-		ID:               spec.ID,
-		Provider:         spec.Provider,
-		BaseURL:          spec.BaseURL,
-		API:              spec.API,
-		Proxy:            spec.Proxy,
-		ContextWindow:    spec.ContextWindow,
-		MaxTokens:        spec.MaxTokens,
-		Reasoning:        spec.Reasoning,
-		ReasoningEfforts: spec.ReasoningEfforts,
-		SupportsVision:   spec.SupportsVision,
+		ID:                     spec.ID,
+		Provider:               spec.Provider,
+		BaseURL:                spec.BaseURL,
+		API:                    spec.API,
+		Proxy:                  spec.Proxy,
+		ContextWindow:          spec.ContextWindow,
+		MaxTokens:              spec.MaxTokens,
+		Reasoning:              spec.Reasoning,
+		ReasoningEfforts:       spec.ReasoningEfforts,
+		DefaultReasoningEffort: spec.DefaultReasoningEffort,
+
+		SupportsVision: spec.SupportsVision,
 	}
 	app.apiKey = newAPIKey
 
 	app.ag.SetModel(app.model)
 	app.ag.SetAPIKey(app.apiKey)
-
+	app.stateMu.Lock()
+	app.currentThinkingLevel = currentEffort
+	app.stateMu.Unlock()
+	app.ag.SetThinkingLevel(currentEffort)
 	// Recreate compactor with new model
+
 	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, spec.ContextWindow, app.sess.GetDir())
 	app.compactor.SetRunID(app.runID)
 	app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
-	app.compactor.SetThinkingLevel(app.currentThinkingLevel)
-	app.sessionComp.Update(app.compactor)
+	app.compactor.SetThinkingLevel(currentEffort)
+	if app.sessionComp != nil {
+		app.sessionComp.Update(app.compactor)
+	}
 	app.ag.SetCompactor(app.sessionComp)
 	app.ag.SetContextWindow(spec.ContextWindow)
 
@@ -130,6 +148,7 @@ func (app *App) handleModelSet(args string) (any, error) {
 	app.currentContextWindow = spec.ContextWindow
 	app.stateMu.Unlock()
 	return &info, nil
+
 }
 
 func (app *App) handleModelList() (any, error) {
@@ -172,17 +191,27 @@ func (app *App) handleSetAutoCompaction(value string) (any, error) {
 	return map[string]any{"setting": "auto-compaction", "value": val}, nil
 }
 
-func (app *App) handleSetThinkingLevel(value string, validLevels map[string]bool) (any, error) {
-	level := strings.ToLower(strings.TrimSpace(value))
+func (app *App) handleSetThinkingLevel(value string) (any, error) {
 	var jsonData struct {
 		Level string `json:"level"`
 	}
 	if app.parseJSONArgs(value, &jsonData) {
-		level = strings.ToLower(strings.TrimSpace(jsonData.Level))
+		value = jsonData.Level
 	}
-	if !validLevels[level] {
-		return nil, fmt.Errorf("invalid thinking level; valid: off, minimal, low, medium, high, xhigh")
+	app.stateMu.Lock()
+	currentLevel := app.currentThinkingLevel
+	app.stateMu.Unlock()
+	if level := strings.TrimSpace(value); level == "" {
+		if currentLevel == "" {
+			currentLevel = app.model.DefaultReasoningEffort
+		}
+		return map[string]any{"setting": "thinking-level", "value": currentLevel, "options": app.model.ReasoningEfforts}, nil
 	}
+	level := strings.TrimSpace(value)
+	if len(app.model.ReasoningEfforts) > 0 && !containsString(app.model.ReasoningEfforts, level) {
+		return nil, fmt.Errorf("invalid thinking level %q; valid values: %s", level, strings.Join(app.model.ReasoningEfforts, ", "))
+	}
+
 	app.stateMu.Lock()
 	app.currentThinkingLevel = level
 	app.stateMu.Unlock()
@@ -191,6 +220,15 @@ func (app *App) handleSetThinkingLevel(value string, validLevels map[string]bool
 		app.compactor.SetThinkingLevel(level)
 	}
 	return map[string]any{"setting": "thinking-level", "value": level}, nil
+}
+
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (app *App) handleSetFollowUpMode(value string, validModes map[string]bool) (any, error) {
@@ -396,7 +434,7 @@ func (app *App) handleSetAutoRetry(value string) (any, error) {
 	return map[string]any{"setting": "auto-retry", "value": val}, nil
 }
 
-func (app *App) handleSet(args string, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) (any, error) {
+func (app *App) handleSet(args string, validToolSummaryAutomations, validSteeringModes, validFollowUpModes map[string]bool) (any, error) {
 	parts := strings.Fields(args)
 	if len(parts) == 0 || parts[0] == "help" {
 		return SetUsage(), nil
@@ -448,7 +486,7 @@ func (app *App) handleSet(args string, validToolSummaryAutomations, validSteerin
 		return map[string]any{"setting": "thinking-display", "value": app.showThinking}, nil
 
 	case "thinking-level":
-		return app.handleSetThinkingLevel(value, validThinkingLevels)
+		return app.handleSetThinkingLevel(value)
 
 	case "tool-call-cutoff":
 		return app.handleSetToolCallCutoff(value)
@@ -541,9 +579,10 @@ func (app *App) handleShow(args string) (any, error) {
 }
 
 // registerConfigHandlers registers configuration-related slash commands.
-func (app *App) registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) {
+func (app *App) registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes map[string]bool) {
 	app.commands.Register("set", "Configure agent settings", func(args string) (any, error) {
-		return app.handleSet(args, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
+		return app.handleSet(args, validToolSummaryAutomations, validSteeringModes, validFollowUpModes)
+
 	})
 
 	app.commands.RegisterHidden("set_model", "Set the active model by ID (internal, use /model instead)", func(args string) (any, error) {
@@ -554,7 +593,7 @@ func (app *App) registerConfigHandlers(validToolSummaryAutomations, validSteerin
 		return app.handleModel(args)
 	})
 
-	app.commands.Register("thinking", "Set thinking level (off/low/medium/high)", func(args string) (any, error) {
+	app.commands.Register("thinking", "Set model reasoning effort", func(args string) (any, error) {
 		h, ok := app.commands.Get("set")
 		if !ok {
 			return nil, fmt.Errorf("unknown command: set")

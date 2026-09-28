@@ -20,7 +20,8 @@ type Model struct {
     MaxTokens     int          `json:"maxTokens,omitempty"`
             Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
     SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
-    ReasoningEfforts []string  `json:"-"`                        // Supported reasoning_effort values (from models.json "reasoningEfforts")
+    ReasoningEfforts []string  `json:"-"`                        // Model-native reasoning_effort values (from models.json "reasoningEfforts")
+    DefaultReasoningEffort string `json:"-"`                      // Model-native default reasoning effort
     ReasoningContext string    `json:"-"`                        // reasoning.context value required by the gateway (from models.json "reasoningContext")
 }
 ```
@@ -40,7 +41,7 @@ type LLMContext struct {
     SystemPrompt  string       `json:"systemPrompt,omitempty"`
     Messages      []LLMMessage `json:"messages"`
     Tools         []LLMTool    `json:"tools,omitempty"`
-    ThinkingLevel string       `json:"thinkingLevel,omitempty"` // off/minimal/low/medium/high/xhigh
+    ThinkingLevel string       `json:"thinkingLevel,omitempty"` // Model-native reasoning effort; empty uses model/provider default
 }
 ```
 

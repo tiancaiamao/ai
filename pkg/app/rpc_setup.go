@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -145,10 +146,8 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 		}
 	}
 
-	// Apply agent config's default thinking level (overrides global config).
 	if agentCfg != nil && agentCfg.ThinkingLevel != "" {
 		slog.Info("Applying agent config thinking level", "level", agentCfg.ThinkingLevel)
-		cfg.ThinkingLevel = agentCfg.ThinkingLevel
 	}
 
 	// --- Model override from CLI (highest priority) ---
@@ -162,9 +161,14 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 		return nil, err
 	}
 
+	// Validate agent override against selected model; the native effort is model-scoped.
+	if agentCfg != nil && agentCfg.ThinkingLevel != "" && len(model.ReasoningEfforts) > 0 && !containsString(model.ReasoningEfforts, agentCfg.ThinkingLevel) {
+		return nil, fmt.Errorf("agent config thinking_level %q is not supported by model %s/%s; supported values: %s", agentCfg.ThinkingLevel, model.Provider, model.ID, strings.Join(model.ReasoningEfforts, ", "))
+	}
 	currentModelInfo := modelInfoFromSpec(activeSpec)
 	currentModelInfo.MaxTokens = model.MaxTokens
 	currentModelInfo.ContextWindow = model.ContextWindow
+
 	currentContextWindow := activeSpec.ContextWindow
 	if currentContextWindow <= 0 {
 		currentContextWindow = model.ContextWindow
@@ -216,7 +220,10 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 
 	skillResult, skillStats := loadSkills(agentDir, cwd, registry, skillStatsPath)
 
-	// --- Build App ---
+	currentThinkingLevel := model.DefaultReasoningEffort
+	if agentCfg != nil && agentCfg.ThinkingLevel != "" {
+		currentThinkingLevel = agentCfg.ThinkingLevel
+	}
 	app := &App{
 		customSystemPrompt:   params.CustomSystemPrompt,
 		maxTurns:             params.MaxTurns,
@@ -250,7 +257,7 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 		agentConfig:           agentCfg,
 		steeringMode:          "all",
 		followUpMode:          "one-at-a-time",
-		currentThinkingLevel:  cfg.ThinkingLevel,
+		currentThinkingLevel:  currentThinkingLevel,
 		showThinking:          true,
 		showTools:             true,
 		showPrefix:            true,

@@ -32,12 +32,6 @@ type AgentConfig struct {
 	dir string
 }
 
-// ValidThinkingLevels lists the accepted thinking_level values.
-var ValidThinkingLevels = map[string]bool{
-	"off": true, "minimal": true, "low": true,
-	"medium": true, "high": true, "xhigh": true,
-}
-
 // GetEnabledTools returns a list of tool names that should be enabled.
 // Returns nil if no tools config is set (meaning all tools are enabled).
 func (c *AgentConfig) GetEnabledTools() []string {
@@ -77,11 +71,8 @@ func Load(path string) (*AgentConfig, error) {
 		return nil, fmt.Errorf("unsupported agent config version: %d", cfg.Version)
 	}
 
-	if cfg.ThinkingLevel != "" {
-		level := strings.ToLower(strings.TrimSpace(cfg.ThinkingLevel))
-		if !ValidThinkingLevels[level] {
-			return nil, fmt.Errorf("invalid thinking_level %q in agent config: valid values are off, minimal, low, medium, high, xhigh", cfg.ThinkingLevel)
-		}
+	level := strings.TrimSpace(cfg.ThinkingLevel)
+	if level != "" {
 		cfg.ThinkingLevel = level
 	}
 

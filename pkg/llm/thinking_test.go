@@ -48,40 +48,27 @@ func TestBuildThinkingParams(t *testing.T) {
 			"reasoning_effort": "xhigh",
 		}},
 
-		// DeepSeek: only high/max supported; minimal→disabled.
-		{"ds off", dsModel, "off", map[string]any{"thinking": map[string]string{"type": "disabled"}}},
-		{"ds minimal", dsModel, "minimal", map[string]any{"thinking": map[string]string{"type": "disabled"}}},
-		{"ds low", dsModel, "low", map[string]any{
-			"thinking":         map[string]string{"type": "enabled"},
-			"reasoning_effort": "high",
-		}},
-		{"ds medium", dsModel, "medium", map[string]any{
-			"thinking":         map[string]string{"type": "enabled"},
-			"reasoning_effort": "high",
-		}},
-		{"ds high", dsModel, "high", map[string]any{
-			"thinking":         map[string]string{"type": "enabled"},
-			"reasoning_effort": "high",
-		}},
-		{"ds xhigh", dsModel, "xhigh", map[string]any{
-			"thinking":         map[string]string{"type": "enabled"},
-			"reasoning_effort": "max",
-		}},
+		// Provider/model metadata controls supported values; supplied values are not translated.
+		{"ds minimal", dsModel, "minimal", map[string]any{"thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "minimal"}},
+		{"ds low", dsModel, "low", map[string]any{"thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "low"}},
+		{"ds medium", dsModel, "medium", map[string]any{"thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "medium"}},
+		{"ds high", dsModel, "high", map[string]any{"thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "high"}},
+		{"ds xhigh", dsModel, "xhigh", map[string]any{"thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "xhigh"}},
+		{"native effort passthrough", Model{Provider: "openai", Reasoning: true, ReasoningEfforts: []string{"low", "high", "max"}}, "max", map[string]any{"reasoning_effort": "max"}},
+		{"model default effort", Model{Provider: "openai", Reasoning: true, DefaultReasoningEffort: "balanced"}, "", map[string]any{"reasoning_effort": "balanced"}},
 
 		// Generic OpenAI-compat: reasoning_effort only, no thinking object.
 		{"generic off", genericModel, "off", nil},
 		{"generic minimal", genericModel, "minimal", map[string]any{"reasoning_effort": "minimal"}},
 		{"generic high", genericModel, "high", map[string]any{"reasoning_effort": "high"}},
-		{"generic xhigh", genericModel, "xhigh", map[string]any{"reasoning_effort": "high"}},
+		{"generic xhigh", genericModel, "xhigh", map[string]any{"reasoning_effort": "xhigh"}},
 
-		// Model-declared supported efforts (e.g. ox-alpha-free: low/high/max,
-		// always thinking) — unsupported levels are clamped to the nearest
-		// supported value, ties resolving upward.
-		{"clamped medium→high", clampedModel, "medium", map[string]any{"reasoning_effort": "high"}},
-		{"clamped minimal→low", clampedModel, "minimal", map[string]any{"reasoning_effort": "low"}},
-		{"clamped low passthrough", clampedModel, "low", map[string]any{"reasoning_effort": "low"}},
-		{"clamped high passthrough", clampedModel, "high", map[string]any{"reasoning_effort": "high"}},
-		{"clamped xhigh→max", clampedModel, "xhigh", map[string]any{"reasoning_effort": "max"}},
+		// Native values are passed without strength-based substitution.
+		{"native medium", clampedModel, "medium", map[string]any{"reasoning_effort": "medium"}},
+		{"native minimal", clampedModel, "minimal", map[string]any{"reasoning_effort": "minimal"}},
+		{"native low", clampedModel, "low", map[string]any{"reasoning_effort": "low"}},
+		{"native high", clampedModel, "high", map[string]any{"reasoning_effort": "high"}},
+		{"native xhigh", clampedModel, "xhigh", map[string]any{"reasoning_effort": "xhigh"}},
 	}
 
 	for _, tt := range tests {

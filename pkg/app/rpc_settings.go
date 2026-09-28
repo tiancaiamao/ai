@@ -78,7 +78,8 @@ func SetUsage() map[string]any {
 			"session-name <name>",
 			"steering-mode <all|immediate|one-at-a-time>",
 			"thinking-display <on|off|toggle>",
-			"thinking-level <off|minimal|low|medium|high|xhigh>",
+			"thinking-level [value]",
+
 			"tool-call-cutoff <n>",
 			"tool-summary-automation <off|fallback|always>",
 			"tool-summary-strategy <llm|heuristic|off>",

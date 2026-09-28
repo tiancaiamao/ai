@@ -542,24 +542,18 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 		reqBody["tools"] = tools
 	}
 
-	// Add reasoning parameters if the model supports it. Honor the
-	// requested thinking level; default to medium when unspecified.
+	// Add reasoning parameters if the model supports it. The model's configured
+	// default is used when no effort is requested; values pass through unchanged.
 	if model.Reasoning {
-		effort := "medium"
-		switch llmCtx.ThinkingLevel {
-		case "minimal", "low", "medium", "high":
-			effort = llmCtx.ThinkingLevel
-		case "xhigh":
-			effort = "high" // Responses API has no xhigh
-		case "off":
-			// No API-level disable for Responses; omit the parameter so the
-			// provider default applies.
+		effort := llmCtx.ThinkingLevel
+		if effort == "" {
+			effort = model.DefaultReasoningEffort
+		}
+		if effort == "off" && !containsEffort(model.ReasoningEfforts, effort) {
 			effort = ""
 		}
 		if effort != "" {
-			reqBody["reasoning"] = map[string]any{
-				"effort": clampEffort(model, effort),
-			}
+			reqBody["reasoning"] = map[string]any{"effort": effort}
 		}
 	}
 

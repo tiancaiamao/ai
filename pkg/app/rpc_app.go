@@ -415,12 +415,12 @@ func (app *App) handlePrompt(message string, raw bool, streamingBehavior string)
 // Handler methods are distributed across topic-specific files; this method
 // wires up protocol commands and delegates slash command registration.
 func (app *App) registerHandlers(
-	validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
+	validToolSummaryAutomations, validSteeringModes, validFollowUpModes map[string]bool,
 ) {
 	// === Slash command handlers (topic-specific registration) ===
 	app.registerSessionHandlers()
 	app.registerMessageHandlers()
-	app.registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
+	app.registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes)
 	app.registerHelpHandlers()
 }
 

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
-	"github.com/tiancaiamao/ai/pkg/agentconfig"
 	"github.com/tiancaiamao/ai/pkg/config"
 )
 
@@ -91,7 +90,7 @@ func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
-	ag.SetThinkingLevel(app.cfg.ThinkingLevel)
+	ag.SetThinkingLevel(app.currentThinkingLevel)
 	app.ag = ag
 
 	slog.Info("Auto-compact enabled", "maxTokens", app.compactorConfig.MaxTokens)
@@ -107,13 +106,11 @@ func (app *App) registerAllHandlers() {
 	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
 	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
 	validFollowUpModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
-	validThinkingLevels := agentconfig.ValidThinkingLevels
 
 	app.registerHandlers(
 		validToolSummaryAutomations,
 		validSteeringModes,
 		validFollowUpModes,
-		validThinkingLevels,
 	)
 }
 

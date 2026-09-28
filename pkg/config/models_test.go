@@ -105,6 +105,17 @@ func TestApplyModelLimitsFromSpec_ReasoningContext(t *testing.T) {
 	}
 }
 
+func TestApplyModelLimitsFromSpec_ReasoningEfforts(t *testing.T) {
+	model := ApplyModelLimitsFromSpec(llm.Model{}, ModelSpec{
+		Reasoning:              true,
+		ReasoningEfforts:       []string{"effort-a", "effort-b"},
+		DefaultReasoningEffort: "effort-b",
+	})
+	if !model.Reasoning || len(model.ReasoningEfforts) != 2 || model.ReasoningEfforts[0] != "effort-a" || model.DefaultReasoningEffort != "effort-b" {
+		t.Fatalf("model reasoning metadata = %+v", model)
+	}
+}
+
 func TestLoadModelSpecsReasoningEfforts(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
@@ -112,7 +123,7 @@ func TestLoadModelSpecsReasoningEfforts(t *testing.T) {
   "providers": {
     "opencode": {
       "models": [
-        { "id": "always-thinking", "reasoning": true, "reasoningEfforts": ["low", "high", "max"] },
+        { "id": "always-thinking", "reasoning": true, "reasoningEfforts": ["low", "high", "max"], "defaultReasoningEffort": "high" },
         { "id": "unrestricted", "reasoning": true }
       ]
     }
@@ -142,6 +153,9 @@ func TestLoadModelSpecsReasoningEfforts(t *testing.T) {
 		if got.ReasoningEfforts[i] != want[i] {
 			t.Fatalf("reasoningEfforts = %v, want %v", got.ReasoningEfforts, want)
 		}
+	}
+	if got.DefaultReasoningEffort != "high" {
+		t.Errorf("defaultReasoningEffort = %q, want high", got.DefaultReasoningEffort)
 	}
 	if got := byID["unrestricted"].ReasoningEfforts; got != nil {
 		t.Errorf("unrestricted reasoningEfforts = %v, want nil", got)

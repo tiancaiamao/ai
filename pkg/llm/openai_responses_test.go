@@ -589,11 +589,11 @@ func TestBuildOpenAIResponsesRequest_ReasoningEffort(t *testing.T) {
 		level string
 		want  any // nil means no reasoning key
 	}{
-		{"", "medium"},
+		{"", nil},
 		{"low", "low"},
 		{"medium", "medium"},
 		{"high", "high"},
-		{"xhigh", "high"},
+		{"xhigh", "xhigh"},
 		{"off", nil},
 	}
 	for _, tc := range cases {

@@ -159,15 +159,15 @@ func TestThinkingInstruction(t *testing.T) {
 		{"medium", "Thinking level is medium"},
 		{"high", "Thinking level is high"},
 		{"xhigh", "Thinking level is xhigh"},
-		{"", "Thinking level is high"},        // default
-		{"invalid", "Thinking level is high"}, // default for invalid
+		{"", ""},
+		{"effort-x", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.level, func(t *testing.T) {
 			result := ThinkingInstruction(tt.level)
 
-			if !contains(result, tt.contains) {
+			if tt.contains != "" && !contains(result, tt.contains) {
 				t.Errorf("ThinkingInstruction(%q) = %q, want to contain %q", tt.level, result, tt.contains)
 			}
 		})
@@ -180,14 +180,14 @@ func TestNormalizeThinkingLevel(t *testing.T) {
 		output string
 	}{
 		{"off", "off"},
-		{"OFF", "off"},
+		{"OFF", "OFF"},
 		{"minimal", "minimal"},
 		{"low", "low"},
 		{"medium", "medium"},
 		{"high", "high"},
 		{"xhigh", "xhigh"},
-		{"", "high"},        // default
-		{"invalid", "high"}, // default for invalid
+		{"", ""},
+		{" effort-x ", "effort-x"},
 	}
 
 	for _, tt := range tests {
