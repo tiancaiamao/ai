@@ -40,6 +40,8 @@ type LoopConfig struct {
 	GetStartupPath func() string
 	// GetSessionDir returns the session directory for checkpoint management.
 	GetSessionDir func() string
+	// GetSessionID returns the active conversation ID for provider request metadata.
+	GetSessionID func() string
 	// RunID is the run ID assigned by the parent ai serve process.
 	// Empty when running standalone (ai acp without ai serve).
 	RunID string

@@ -131,6 +131,8 @@ type Compactor struct {
 	// sessionDir is the session directory used for archiving old messages
 	// that are removed during compaction. When empty, archiving is skipped.
 	sessionDir string
+	sessionID  string
+
 	// runID is the run ID of this agent, inlined into the archive note so the
 	// post-compaction history CLI commands are copy-paste ready. When empty,
 	// the note falls back to `--session <sessionDir>`.
@@ -161,6 +163,10 @@ func (c *Compactor) SetCanaryValue(val string) {
 // `ai history` commands into the post-compaction archive note.
 func (c *Compactor) SetRunID(id string) {
 	c.runID = id
+}
+
+func (c *Compactor) SetSessionID(id string) {
+	c.sessionID = id
 }
 
 // NewCompactor creates a new Compactor.
@@ -742,6 +748,7 @@ func buildCacheFriendlyLLMContext(
 	trailingInstruction string,
 	thinkingLevel string,
 	supportsVision bool,
+	sessionID string,
 ) llm.LLMContext {
 	llmMessages := agentctx.ConvertMessagesToLLM(messages)
 	// Same capability filtering as the agent loop: a session created with a
@@ -766,6 +773,7 @@ func buildCacheFriendlyLLMContext(
 		Messages:      llmMessages,
 		Tools:         agentctx.ConvertToolsToLLM(tools),
 		ThinkingLevel: thinkingLevel,
+		SessionID:     sessionID,
 	}
 }
 
@@ -823,6 +831,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		askContent,
 		c.thinkingLevel,
 		c.model.SupportsVision,
+		c.sessionID,
 	)
 
 	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)

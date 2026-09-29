@@ -33,10 +33,14 @@ func responsesEndpoint(model Model) string {
 	return raw + "/codex/responses"
 }
 
-func responsesHeaders(model Model, apiKey string) http.Header {
+func responsesHeaders(model Model, apiKey, sessionID string) http.Header {
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Authorization", "Bearer "+apiKey)
+	if model.Provider == "opencode" && sessionID != "" {
+		headers.Set("x-opencode-session", sessionID)
+	}
+
 	if model.API != "openai-codex-responses" {
 		return headers
 	}

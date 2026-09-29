@@ -158,6 +158,9 @@ func StreamLLM(
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+		if model.Provider == "opencode" && llmCtx.SessionID != "" {
+			req.Header.Set("x-opencode-session", llmCtx.SessionID)
+		}
 
 		// Execute request — derive total timeout from context deadline so the
 		// HTTP client enforces a hard ceiling even when SetReadDeadline is

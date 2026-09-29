@@ -431,7 +431,11 @@ func (app *App) Commands() *command.Registry { return app.commands }
 func (app *App) Skills() *skill.LoadResult { return app.skillResult }
 
 // SessionID returns the active session identifier.
-func (app *App) SessionID() string { return app.sessionID }
+func (app *App) SessionID() string {
+	app.stateMu.Lock()
+	defer app.stateMu.Unlock()
+	return app.sessionID
+}
 
 // CurrentWorkdir returns the process working directory bound to the app.
 func (app *App) CurrentWorkdir() string { return app.cwd }

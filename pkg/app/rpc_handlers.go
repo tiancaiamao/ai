@@ -75,6 +75,7 @@ func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 		}
 		return ""
 	}
+	loopCfg.GetSessionID = app.SessionID
 
 	// Set max turns limit if specified
 	if maxTurns > 0 {

@@ -35,6 +35,7 @@ type LLMContext struct {
 	Messages      []LLMMessage `json:"messages"`
 	Tools         []LLMTool    `json:"tools,omitempty"`
 	ThinkingLevel string       `json:"thinkingLevel,omitempty"` // normalized: off/minimal/low/medium/high/xhigh
+	SessionID     string       `json:"-"`                       // stable conversation ID for providers that route by session
 }
 
 // LLMMessage represents a message in the LLM conversation.

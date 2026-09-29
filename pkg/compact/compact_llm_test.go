@@ -29,6 +29,7 @@ func TestBuildCacheFriendlyLLMContext_FiltersImagesForTextOnlyModel(t *testing.T
 			"summarize",
 			"",
 			supportsVision,
+			"",
 		)
 
 		images := 0
