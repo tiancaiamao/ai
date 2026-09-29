@@ -270,8 +270,32 @@ func sseTextResponse(text string) string {
 	return strings.Join(chunks, "\n\n") + "\n\n"
 }
 
+func TestGenerateSummary_SendsOpenCodeSessionHeader(t *testing.T) {
+	var gotSessionID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSessionID = r.Header.Get("x-opencode-session")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseTextResponse("the summary"))
+	}))
+	defer server.Close()
+
+	model := llm.Model{ID: "m", Provider: "opencode", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
+	c := NewCompactor(DefaultConfig(), model, "k", "sys", 0, "")
+	c.SetSessionID("session-for-compaction")
+
+	_, err := c.GenerateSummary(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil)
+	if err != nil {
+		t.Fatalf("GenerateSummary failed: %v", err)
+	}
+	if gotSessionID != "session-for-compaction" {
+		t.Fatalf("x-opencode-session = %q, want %q", gotSessionID, "session-for-compaction")
+	}
+}
+
 func TestGenerateSummary_LLMSuccessAndFailures(t *testing.T) {
 	// Success path: LLM returns text → summary returned.
+
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&attempts, 1)
