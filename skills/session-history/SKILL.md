@@ -76,7 +76,7 @@ ai history read --id X --entry <E>                       # 3. read one in full
 
 Looking for a specific phrase? Skip `windows` and go straight to `search` — it returns entry ids, and its `window=` column tells you which generation each hit came from.
 
-Text output starts with a column legend (`WINDOW_ID` / `ENTRY_ID`, and `(UTC)` on timestamps) for exactly this reason. `read --entry` on a window id fails with the command to use instead.
+Text output starts with a column legend (`WINDOW_ID` / `ENTRY_ID`, and `(UTC)` on timestamps) for exactly this reason. Addressing a window id with `read --entry` / `list --entry` fails with a message naming the mistake and the flag to use instead — keep your existing `--id` / `--session` when you run it.
 
 ## JSON schema
 

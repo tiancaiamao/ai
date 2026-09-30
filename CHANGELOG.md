@@ -6,8 +6,9 @@ Not a git log mirror — focus on what changed at the design level, not just wha
 ## `ai history` output names its own columns and points at the next command (2026-09)
 
 **What changed**: Three output-level changes to the `ai history` CLI, all
-driven by a review of real agent sessions (478 files, 110 `ai history`
-invocations) in `docs/session-history-skill-review.md`.
+driven by a review of real agent sessions (478 session files, 110 `ai history`
+invocations, of which 11 sessions loaded the skill and 9 actually used it).
+
 
 - Text mode for `windows` / `list` / `search` now begins with a column legend
   (`WINDOW_ID` / `ENTRY_ID`, timestamps marked `(UTC)`). `--json` is unchanged.

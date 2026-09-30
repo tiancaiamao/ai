@@ -152,7 +152,7 @@ ai history search <query> --id <run-id|prefix> [--window <window-id>] [--role ..
 ## 6. 边界条件和特殊情况
 
 - `read --entry` 的 offset 超出 total → 空 content + `total_chars`，退出码 0（"到头了"是合法状态）。
-- entry_id 不存在 → 明确错误，非零退出（不静默空返回）。若该 id 实为 window_id（session header id 或 compaction entry id，均由 `windows` 报出），错误信息额外给出对应的 `list --window <id> --oldest-first`：这种误用结构上不可能成功，只回一句 “not found” 会逼调用方去猜 entry id 的形状。
+- entry_id 不存在 → 明确错误，非零退出（不静默空返回）。若该 id 实为 window_id（session header id 或 compaction entry id，均由 `windows` 报出），错误信息额外指出该用哪个 flag 展开：这种误用结构上不可能成功，只回一句 “not found” 会逼调用方去猜 entry id 的形状。提示只给 action + flag，不给整条命令——session 层不知道调用方是用 `--id` 还是 `--session` 寻址的，照抄一条缺了寻址 flag 的命令等于把一个坑换成另一个。
 - flag 解析失败 → 只列出该 action 实际注册的 flag（从 FlagSet 读回，不会与注册漂移）+ 一行指向 `ai history help`，不再 dump 整份 usage。该 CLI 的读者是模型，让它从 30 行 usage 里反推“这个 action 没有这个 flag”是纯粹的认知负担。
 - search 无命中 → 空列表 + `total_count: 0`，退出码 0。
 - snapshot 文件缺失/损坏 → stderr 警告 + 跳过该 snapshot，其余命中正常返回。

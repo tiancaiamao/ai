@@ -98,28 +98,52 @@ func TestRunHistoryRejectsWindowIDAsEntry(t *testing.T) {
 		t.Fatalf("windows failed: %s", stdout)
 	}
 	windows := decodeJSONLines(t, stdout)
-	if len(windows) == 0 {
-		t.Fatal("expected at least one window")
-	}
-	windowID, _ := windows[len(windows)-1]["window_id"].(string)
-	if windowID == "" {
-		t.Fatalf("window_id missing in %v", windows[len(windows)-1])
+	if len(windows) < 2 {
+		t.Fatalf("need a header window and a compaction window, got %d", len(windows))
 	}
 
-	// A window id is a compaction entry id, which never appears in the item
-	// list, so the error must name the case and hand back the next command
-	// instead of leaving the caller to guess an entry id shape.
-	_, stderr, code := runCapture("read", "--session", dir, "--entry", windowID)
-	if code == 0 {
-		t.Fatal("expected non-zero exit code reading a window id as an entry")
-	}
-	if !strings.Contains(stderr, "window id") || !strings.Contains(stderr, "list --window "+windowID) {
-		t.Errorf("expected a directed window-id error, got %q", stderr)
-	}
+	// Every window id must be routed. Two kinds exist and they are different
+	// ids: the session header id and a compaction entry id (short hex, the form
+	// agents actually misread as an entry id). Only compaction windows carry a
+	// summary, which is what tells the two apart here — id length does not, the
+	// header id is whatever the session was created with. Iterate all of them
+	// and assert both kinds were seen, so neither branch loses coverage quietly.
+	kinds := map[string]bool{"compaction": false, "header": false}
+	for _, win := range windows {
+		id, _ := win["window_id"].(string)
+		if id == "" {
+			t.Fatalf("window_id missing in %v", win)
+		}
+		summary, _ := win["summary_preview"].(string)
+		if summary == "" {
+			kinds["header"] = true
+		} else {
+			kinds["compaction"] = true
+		}
 
-	_, stderr, code = runCapture("list", "--session", dir, "--entry", windowID)
-	if code == 0 || !strings.Contains(stderr, "list --window "+windowID) {
-		t.Errorf("expected the same direction from list --entry, got code %d stderr %q", code, stderr)
+		// A window id is never an item, so the error must name the case and
+		// hand back the next step instead of leaving the caller to guess an
+		// entry id shape. The hint names the action, not a whole command, so
+		// it must not imply a bare runnable invocation.
+		_, stderr, code := runCapture("read", "--session", dir, "--entry", id)
+		if code == 0 {
+			t.Fatalf("%s: expected non-zero exit code reading a window id as an entry", id)
+		}
+		if !strings.Contains(stderr, "window id") ||
+			!strings.Contains(stderr, "list --window "+id) ||
+			!strings.Contains(stderr, "--id") {
+			t.Errorf("%s: expected a directed window-id hint naming the target flags, got %q", id, stderr)
+		}
+
+		_, stderr, code = runCapture("list", "--session", dir, "--entry", id)
+		if code == 0 || !strings.Contains(stderr, "list --window "+id) {
+			t.Errorf("%s: expected the same direction from list --entry, got code %d stderr %q", id, code, stderr)
+		}
+	}
+	for kind, covered := range kinds {
+		if !covered {
+			t.Errorf("no %s-id window exercised; both id forms must be covered", kind)
+		}
 	}
 }
 
