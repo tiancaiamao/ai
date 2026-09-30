@@ -54,6 +54,9 @@ func runWindows(args []string, stdout, stderr io.Writer) int {
 	}
 
 	out := &boundedWriter{json: *jsonOutput}
+	if !*jsonOutput {
+		out.emitRecord(formatHeader("window"), "")
+	}
 	for _, win := range windows {
 		out.emitRecord(formatWindow(win), win)
 	}
@@ -107,6 +110,9 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	total, totalKnown := totalItemCount(sess, opts)
 
 	out := &boundedWriter{json: *jsonOutput}
+	if !*jsonOutput {
+		out.emitRecord(formatHeader("item"), "")
+	}
 	for _, item := range items {
 		out.emitRecord(formatItem(item), item)
 	}
@@ -278,6 +284,9 @@ func runSearch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	out := &boundedWriter{json: *jsonOutput}
+	if !*jsonOutput {
+		out.emitRecord(formatHeader("search"), "")
+	}
 	for _, result := range response.Results {
 		out.emitRecord(formatSearchResult(result), result)
 	}

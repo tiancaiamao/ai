@@ -37,9 +37,46 @@ All actions accept the global flags `--id <run-id|prefix>` and `--json` (JSONL o
 | `read` | Read one entry in full, character-paginated | `--entry <id>` (required), `--offset-chars <n>`, `--max-chars <n>` (default 20000, max 50000) |
 | `search` | Literal substring search over messages and compaction snapshots | `<query>` (required, 1..1000 chars), `--window <id>`, `--role <role>`, `--no-tool`, `--limit <n>` (default 20, max 100), `--case-sensitive` |
 
-`search` results include `entry_id`, `window_id`, a match excerpt, and `total_count`. Note that search scans tool results too — an agent's own earlier search output gets recorded as tool messages and self-matches; pass `--no-tool` to suppress that noise.
+`search` results include `entry_id`, `window_id`, a match excerpt, and `total_count`. Use `search` first to locate an entry, then `read` it.
 
-Truncation is always `--max-chars` (all actions); `read` adds `--offset-chars` for paging.
+`--max-chars` is accepted by `list` and `read` only. `windows` and `search` have no content-length flag: their output volume is bounded by `--limit` and the global 40000-character cap. Passing `--max-chars` to them is an error that lists the flags each action does accept.
+
+## `search` Matches Literal Substrings, Not Patterns
+
+`search` is a plain substring test (case-insensitive unless `--case-sensitive`). It is **not** grep: no regex, no multi-word AND, no cross-field matching. Every character you pass must appear contiguously inside one message.
+
+```
+❌ search "spawn.*Generator"          # * and . are literal characters
+❌ search "M6-T1 implementation"      # the whole string, space included, must appear as-is
+❌ search "[2e2e2e]"                  # [ ] are not a character class
+❌ search "make test > /tmp/x.log"    # a whole command line is not a substring of anything
+✅ search "spawn" --limit 20          # one token, coarse pass
+✅ search "M6-T1" --role user         # narrow by role to where the answer likely lives
+```
+
+Note that some metacharacters are legitimate literal queries — `search "[2e2e2e]"` is how you look up a git object id, and `search " | "` finds pipes. The output tells you which case you are in: a metacharacter query that returns matches was understood as intended.
+
+**When a query returns 0 matches, do not make it longer or more specific.** Escalating `"Same Generator"` → `"spawn.*Generator"` → `"M6-T1 implementation"` moves away from every hit, because the original token was already as short as it can get. Do this instead:
+
+1. Re-run the **shortest single token** you can think of, with `--limit 20`.
+2. Add `--role user` or `--role assistant` to aim the search.
+3. If you know roughly *when*, use `windows --oldest-first` / `list --window` to browse structure, then read the entries that look relevant.
+
+## Window IDs Are Not Entry IDs
+
+`windows` (and the `window=` column of `search`) reports **window ids** — compaction generations, one per summarization. `search` and `list` report **entry ids** — individual messages. Both are short hex strings and look alike, so check which one you are holding before passing it to `read --entry`.
+
+The standard path is `windows` → `list` → `read`:
+
+```
+ai history windows --id X                                # 1. find the relevant generation, note the WINDOW_ID column
+ai history list --id X --window <W> --oldest-first       # 2. expand it, collect entry_ids
+ai history read --id X --entry <E>                       # 3. read one in full
+```
+
+Looking for a specific phrase? Skip `windows` and go straight to `search` — it returns entry ids, and its `window=` column tells you which generation each hit came from.
+
+Text output starts with a column legend (`WINDOW_ID` / `ENTRY_ID`, and `(UTC)` on timestamps) for exactly this reason. `read --entry` on a window id fails with the command to use instead.
 
 ## JSON schema
 
@@ -85,13 +122,16 @@ ai history read --entry e12ab34 --id cbbcf4 --offset-chars 20000 --max-chars 200
 - **Binding a session to a run ID**: preferred: `grep -l '"session": "<session-uuid>"' ~/.ai/runs/*/run.json` pairs run id ↔ session directly (newer runs record the session UUID in run.json; some older runs lack the field). Fallback for those: correlate the agent's **reply timestamp with the session file's mtime** (second-level match) — weaker, since resumed runs and message appends also bump mtime.
 - **Confirm a candidate**: `ai history list --session <path> --role user --oldest-first --max-chars 800` shows the session's opening task; then proceed with search → read.
 
-## Forensics: keep tool messages
+## Forensics: keep tool messages, but expect self-matches
 
-`--no-tool` answers "what did the assistant conclude". When reconstructing *what happened* (archaeology, incident review, verifying an agent's claims), **tool messages are the goldmine** — the commands that were run and the output they produced. Do not pass `--no-tool`; or use `--role tool` to target commands and outputs directly.
+`search` scans tool results, because for archaeology they *are* the goldmine — the commands that ran and the output they produced. The cost is self-matching: every `ai history` invocation is itself recorded as a tool message, so the **next** `search` in the same session matches the previous one's output. That noise is the newest content, so it ranks at the top, and repeated searching in one session makes it worse each time. Choose by question:
+
+- **What did the assistant conclude?** → `search ... --no-tool`, usually with `--role assistant`.
+- **What actually happened?** (commands run, errors emitted) → keep tool messages, use `--role tool` to aim at them, and prefer `windows` / `list --window` to narrow to a generation. A full-library search will drown in your own earlier search output.
 
 ## Timestamps are UTC
 
-Entry timestamps are UTC. Log lines *inside* message content that the agent printed itself are usually local time. Mind the offset (e.g. UTC+8) when correlating the two — an 8-hour gap is a timezone artifact, not a missing record.
+Entry timestamps are UTC — the `(UTC)` in the text-mode column legend marks this at the point of use. Log lines *inside* message content that the agent printed itself are usually local time. Mind the offset (e.g. UTC+8) when correlating the two — an 8-hour gap is a timezone artifact, not a missing record. `--json` output is always UTC.
 
 ## Discipline
 

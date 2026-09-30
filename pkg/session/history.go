@@ -154,7 +154,7 @@ func (s *Session) ReadItem(entryID string, offset, limit int) (HistoryItem, erro
 	}
 	item, ok := s.findHistoryItemLocked(entryID)
 	if !ok {
-		return HistoryItem{}, fmt.Errorf("history entry %q not found", entryID)
+		return HistoryItem{}, s.historyIDErrorLocked(entryID)
 	}
 	if offset < 0 {
 		return HistoryItem{}, fmt.Errorf("offset must not be negative")
@@ -271,7 +271,7 @@ func (s *Session) historyItemsLocked(opts HistoryItemsOptions) ([]HistoryItem, e
 	if opts.EntryID != "" {
 		items, ok := s.itemsToEntryLocked(path, opts.EntryID)
 		if !ok {
-			return nil, fmt.Errorf("history entry %q not found", opts.EntryID)
+			return nil, s.historyIDErrorLocked(opts.EntryID)
 		}
 		return filterHistoryItems(items, opts), nil
 	}
@@ -286,6 +286,33 @@ func (s *Session) historyItemsLocked(opts HistoryItemsOptions) ([]HistoryItem, e
 		}
 	}
 	return nil, fmt.Errorf("history window %q not found", opts.WindowID)
+}
+
+// historyIDErrorLocked builds the error for an id that resolves to no message
+// entry. A window id — the session header id or a compaction entry id, both
+// reported by `windows` — never appears in the item list (compaction entries
+// only contribute their snapshot's messages), so addressing one as an entry
+// can never succeed. Naming that case turns a dead end into the next command.
+func (s *Session) historyIDErrorLocked(id string) error {
+	if s.isHistoryWindowIDLocked(id) {
+		return fmt.Errorf("history entry %q not found: it is a window id (a compaction generation), "+
+			"not a message entry; expand it with `ai history list --window %s --oldest-first`", id, id)
+	}
+	return fmt.Errorf("history entry %q not found", id)
+}
+
+// isHistoryWindowIDLocked reports whether id addresses a window rather than a
+// message entry.
+func (s *Session) isHistoryWindowIDLocked(id string) bool {
+	if s.header.ID == id {
+		return true
+	}
+	for _, entry := range pathToLeaf(s.entries, s.leafID, s.byID) {
+		if entry.Type == EntryTypeCompaction && entry.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) itemsToEntryLocked(path []*SessionEntry, id string) ([]HistoryItem, bool) {

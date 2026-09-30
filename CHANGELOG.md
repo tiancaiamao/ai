@@ -3,6 +3,46 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## `ai history` output names its own columns and points at the next command (2026-09)
+
+**What changed**: Three output-level changes to the `ai history` CLI, all
+driven by a review of real agent sessions (478 files, 110 `ai history`
+invocations) in `docs/session-history-skill-review.md`.
+
+- Text mode for `windows` / `list` / `search` now begins with a column legend
+  (`WINDOW_ID` / `ENTRY_ID`, timestamps marked `(UTC)`). `--json` is unchanged.
+- Reading a window id as an entry (`read --entry` / `list --entry`) reports
+  that it is a window id and prints the `list --window <id> --oldest-first`
+  command to expand it, instead of a bare `not found`.
+- An undefined flag reports the flags that action actually accepts, plus a
+  pointer to `ai history help`, instead of dumping the whole 30-line usage.
+
+**Why**: `window_id` is a compaction entry id, and compaction entries never
+appear in the item list — so addressing one as a message entry can never
+succeed, for any window. Agents did not know that and burned ~6 tool calls per
+occurrence: two not-found retries, a guess at a full-UUID entry shape, then a
+`--help` probe. Window ids and entry ids are both short hex and the old
+rendering made them indistinguishable, so nothing in the output said which was
+which. Timestamps had the same problem in a milder form: the UTC warning lived
+in a later section of SKILL.md, so it was invisible at the point of use and an
+8-hour offset got read as missing records — the legend marks the zone where the
+timestamps are actually printed.
+
+The flag-error change follows the same logic. The CLI's reader is a model
+(design D1: the skill is a trigger, the CLI is the stable surface), and
+`flag provided but not defined: -max-chars` reads like a typo rather than
+"this action does not accept it" — while dumping the full usage makes the
+caller diff the rejected name against four action sections to conclude the
+same. The valid list is read back off the `FlagSet`, so it cannot drift from
+what is registered. `ai history help` still carries the full reference.
+
+Deliberately not changed: `search` stays a literal substring match (design D4,
+aligned with Codex), and a zero-match search still exits 0 — it is a normal
+result in the `search --json | jq` pipelines the skill recommends, and making
+it an error would break them. The literal-match trap is addressed in SKILL.md
+instead, including the case where metacharacters are the intended query.
+
+
 ## Skill score decay is measured in agent sessions, not wall-clock (2026-09)
 
 **What changed**: `SkillStatsFile` no longer computes
