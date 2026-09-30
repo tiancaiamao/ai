@@ -124,7 +124,9 @@ func TestRunHistoryRejectsWindowIDAsEntry(t *testing.T) {
 		// A window id is never an item, so the error must name the case and
 		// hand back the next step instead of leaving the caller to guess an
 		// entry id shape. The hint names the action, not a whole command, so
-		// it must not imply a bare runnable invocation.
+		// it must not imply a bare runnable invocation. It must also not call
+		// the id "a compaction generation": the first window is the session
+		// header, which is not one, and the wording would be wrong there.
 		_, stderr, code := runCapture("read", "--session", dir, "--entry", id)
 		if code == 0 {
 			t.Fatalf("%s: expected non-zero exit code reading a window id as an entry", id)
@@ -133,6 +135,9 @@ func TestRunHistoryRejectsWindowIDAsEntry(t *testing.T) {
 			!strings.Contains(stderr, "list --window "+id) ||
 			!strings.Contains(stderr, "--id") {
 			t.Errorf("%s: expected a directed window-id hint naming the target flags, got %q", id, stderr)
+		}
+		if strings.Contains(stderr, "compaction") {
+			t.Errorf("%s: hint must not claim the id is a compaction generation: %q", id, stderr)
 		}
 
 		_, stderr, code = runCapture("list", "--session", dir, "--entry", id)

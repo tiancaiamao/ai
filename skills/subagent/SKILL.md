@@ -81,7 +81,10 @@ spawn 时不传任务，然后用 `send --wait` 发送任务。`send --wait` 同
 - 不带 `--input` spawn 空壳是支持的用法（如预热、条件分发、多轮交互），但务必在流程中安排好后续 `ai send`，避免遗忘导致空跑浪费 token。
 
 **⚠️ 推荐用 `--role`，避免手写 `--system-prompt`：** 大多数场景应使用 `--role coder`（默认值），`ai` 会自动加载对应的 system prompt。仅在需要高度定制化的 role（如 validator with specific checklist）时才用 `--system-prompt`。注意：同时设置两者时，`--system-prompt` 会覆盖 `--role`。
-**🩹 防泄漏纪律（2026-09-26 实测修正）：** `ai serve` **无论是否加 `--max-turns` 都不会自动退出**——实测 `--max-turns 1` 的 agent turn 完成 45s 后进程仍存活（且仍能接受 `ai send`）。`--max-turns` 只约束对话轮数，不约束进程生命周期。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；session 命名必须守 `agent-$RUN_ID-*` 约定，否则 recipe 的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。# 从 runtime_state 获取自己的 run ID
+**🩹 防泄漏纪律（2026-09-26 实测修正）：** `ai serve` **无论是否加 `--max-turns` 都不会自动退出**——实测 `--max-turns 1` 的 agent turn 完成 45s 后进程仍存活（且仍能接受 `ai send`）。`--max-turns` 只约束对话轮数，不约束进程生命周期。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；session 命名必须守 `agent-$RUN_ID-*` 约定，否则 recipe 的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。
+
+```bash
+# 从 runtime_state 获取自己的 run ID
 RUN_ID=<your run_id from runtime_state>
 
 # 生成唯一的 tmux session 名和 id-file 路径
@@ -242,10 +245,13 @@ tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^agent-$RUN_ID-" | w
 done
 
 # ⚠️ tmux kill-session 不保证杀死 ai serve 进程（2026-09-26 实测：杀 8 个 session
-# 后 6 个 serve 成孤儿继续存活，最老 3 天）。必须两步：
-# 1. kill-session（清 session）
-# 2. pkill -f "id-file /tmp/agent-$RUN_ID-"（清孤儿进程；或按 task 文件路径 pkill -f "$RUN_ID"）
-# 只验证 session 数=0 不算清理完成，须 pgrep 确认进程也归零。
+# 后 6 个 serve 成孤儿继续存活，最老 3 天）。所以下面是两步，不是一步，
+# 且 pkill / pgrep 都限定在 $RUN_ID 前缀上——绝不用 ai kill --all 或 pkill -f "ai serve"，
+# 那会杀掉其他 agent 的进程。
+pkill -f "id-file /tmp/agent-$RUN_ID-" 2>/dev/null
+
+# 验证：tmux session 数归零不算清理完成，必须确认进程也归零
+pgrep -af "id-file /tmp/agent-$RUN_ID-" || echo "no ai serve processes left for $RUN_ID"
 
 # 清理 id 文件
 rm -f /tmp/agent-$RUN_ID-*.id

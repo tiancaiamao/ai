@@ -243,7 +243,7 @@ Design (用户需求)
 1. **Orchestrator 永不写实现代码** — 所有对源文件的 edit/write 交给 Generator。这是流程策略（保持验收中立、防 self-evaluation bias），非能力限制；允许操作白名单见 Three Roles 章节
 2. **Validate against spec, not against tasks** — tasks are means, spec is the end
 3. **Generator and Evaluator are separate agents** — self-evaluation is unreliable
-4. **FAIL/卡住时首选 `ai send` 指导**（保持上下文连续性）——实测 send 对 turn 已完成的 agent 有效（2026-09-26：完成 45s 后 send 仍被立即执行）。指导内容：eval 报告路径 + 问题清单 + 关键指引（如"extern 声明照 buffer.ta 先例"）。send 连续两轮无响应（僵尸）时：先 `pgrep` 确认进程存活再决定——进程在则重发，进程亡则 kill 残骸、带完整失败上下文重新 spawn
+4. **FAIL/卡住时首选 `ai send` 指导**（保持上下文连续性）——实测 send 对 turn 已完成的 agent 有效（2026-09-26：完成 45s 后 send 仍被立即执行）。指导内容：eval 报告路径 + 问题清单 + 关键指引（如"extern 声明照 buffer.ta 先例"）。send 连续两轮无响应时按上表 hung 分支走：`pgrep` 只能证明进程还在、不能证明它还能处理 send，所以**不要因为进程活着就无限重发**——先看 `git diff`，有产出就按有产出处理，无产出就 kill 重来
 5. **Generator 在 task 循环内保持存活**（为 send 指导保留通道），配 `--timeout` 兜底；eval PASS + commit 后立即 kill。Evaluator 一次性报告型，kill 时机同前——注意 `--max-turns` 不会让进程自动退出（实测），kill 没有替代品
 6. **Eval report 是门禁** — 文件必须存在且 PASS，才能进入下一个 task
 7. **每个 task PASS 后更新 state.md** — 按需更新 Task Status + Next Task（必做）+ Attempt Log（条件）+ Phase Log（条件）。见 State Tracking 章节；compaction 后恢复上下文唯一依据

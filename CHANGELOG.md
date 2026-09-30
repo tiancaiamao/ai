@@ -18,16 +18,17 @@ invocations, of which 11 sessions loaded the skill and 9 actually used it).
 - An undefined flag reports the flags that action actually accepts, plus a
   pointer to `ai history help`, instead of dumping the whole 30-line usage.
 
-**Why**: `window_id` is a compaction entry id, and compaction entries never
-appear in the item list — so addressing one as a message entry can never
-succeed, for any window. Agents did not know that and burned ~6 tool calls per
-occurrence: two not-found retries, a guess at a full-UUID entry shape, then a
-`--help` probe. Window ids and entry ids are both short hex and the old
-rendering made them indistinguishable, so nothing in the output said which was
-which. Timestamps had the same problem in a milder form: the UTC warning lived
-in a later section of SKILL.md, so it was invisible at the point of use and an
-8-hour offset got read as missing records — the legend marks the zone where the
-timestamps are actually printed.
+**Why**: `windows` reports the session header id for the first window and a
+compaction entry id for each generation after it, and neither a header nor a
+compaction entry is a message — compaction entries only contribute their
+snapshot's messages. So addressing any window id as a message entry can never
+succeed. Agents did not know that and burned ~6 tool calls per occurrence: two
+not-found retries, a guess at a full-UUID entry shape, then a `--help` probe. A
+window id and an entry id sat in the same column in the same bare form, so
+nothing in the output said which was which. Timestamps had the same problem in
+a milder form: the UTC warning lived in a later section of SKILL.md, so it was
+invisible at the point of use and an 8-hour offset got read as missing records —
+the legend marks the zone where the timestamps are actually printed.
 
 The flag-error change follows the same logic. The CLI's reader is a model
 (design D1: the skill is a trigger, the CLI is the stable surface), and

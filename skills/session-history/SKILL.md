@@ -64,7 +64,12 @@ Note that some metacharacters are legitimate literal queries — `search "[2e2e2
 
 ## Window IDs Are Not Entry IDs
 
-`windows` (and the `window=` column of `search`) reports **window ids** — compaction generations, one per summarization. `search` and `list` report **entry ids** — individual messages. Both are short hex strings and look alike, so check which one you are holding before passing it to `read --entry`.
+`windows` (and the `window=` column of `search`) reports **window ids**. `search` and `list` report **entry ids** — individual messages. A window id is never a message, so passing one to `read --entry` cannot work.
+
+The two id forms are easy to confuse because both sit in the same bare column:
+
+- The **first** window is the session header id — a UUID in normal use, or the directory name under the `--session` escape hatch. It does **not** correspond to a summarization.
+- **Every later** window is a compaction generation, and its id looks like a short hex string.
 
 The standard path is `windows` → `list` → `read`:
 

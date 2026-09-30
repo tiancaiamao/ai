@@ -67,9 +67,10 @@ func (w *boundedWriter) flush(out io.Writer) {
 
 // formatHeader returns the text-mode legend printed once ahead of the records.
 // It names the leading ID column and marks the timestamp zone, so a reader does
-// not have to infer either from the surrounding prose: window ids and entry ids
-// are both 8 hex characters, and a UTC/local mix-up turns into an eight-hour
-// phantom gap. JSON mode omits it — JSONL consumers read field names.
+// not have to infer either from the surrounding prose: a window id and an entry
+// id are both bare identifiers in the same position, and a UTC/local mix-up
+// turns into an eight-hour phantom gap. JSON mode omits the legend — JSONL
+// consumers read field names.
 func formatHeader(kind string) string {
 	switch kind {
 	case "window":

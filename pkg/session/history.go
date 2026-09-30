@@ -289,18 +289,20 @@ func (s *Session) historyItemsLocked(opts HistoryItemsOptions) ([]HistoryItem, e
 }
 
 // historyIDErrorLocked builds the error for an id that resolves to no message
-// entry. A window id — the session header id or a compaction entry id, both
-// reported by `windows` — never appears in the item list (compaction entries
-// only contribute their snapshot's messages), so addressing one as an entry
-// can never succeed. Naming that case turns a dead end into the next step.
+// entry. A window id never appears in the item list: `windows` reports the
+// session header id for the first window and a compaction entry id for each
+// generation after it, and neither a header nor a compaction entry is a message
+// (compaction entries only contribute their snapshot's messages). Addressing
+// one as an entry therefore cannot succeed, for any window. Naming that case
+// turns a dead end into the next step.
 //
 // The hint names the action rather than printing a whole command: the session
 // layer does not know how the caller addressed the run, so a command quoted
 // here would be missing its `--id`/`--session` and would fail on paste.
 func (s *Session) historyIDErrorLocked(id string) error {
 	if s.isHistoryWindowIDLocked(id) {
-		return fmt.Errorf("history entry %q not found: it is a window id (a compaction generation), "+
-			"not a message entry; expand it with `list --window %s --oldest-first`, "+
+		return fmt.Errorf("history entry %q not found: it is a window id, not a message entry; "+
+			"expand it with `list --window %s --oldest-first`, "+
 			"reusing the same --id/--session target as this call", id, id)
 	}
 	return fmt.Errorf("history entry %q not found", id)

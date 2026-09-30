@@ -88,7 +88,7 @@ ai history search <query> --id <run-id|prefix> [--window <window-id>] [--role ..
 
 **全局有界**：所有 list/search `--limit` 默认 20、上限 100；单次调用输出总量上限 40000 字符（约 10k token），超出截断并标注 `…[output truncated at 40000 chars, refine your query]`。数值为实现期常量，集中定义便于调整。
 
-**文本模式列头**：`windows` / `list` / `search` 的首行是一行列头（`WINDOW_ID` / `ENTRY_ID` + `TIMESTAMP(UTC)`），`--json` 不输出。存在的原因是 window_id 与 entry_id 都是短 hex、渲染上不可区分，而误把 window_id 喂给 `read --entry` **结构上不可能**成功（compaction entry 本身永不进入 item 列表）；把列名与时区标在使用现场，省去从散文里推断。
+**文本模式列头**：`windows` / `list` / `search` 的首行是一行列头（`WINDOW_ID` / `ENTRY_ID` + `TIMESTAMP(UTC)`），`--json` 不输出。存在的原因是 window_id 与 entry_id 在同一列以同一种裸形式出现，误把 window_id 喂给 `read --entry` **结构上不可能**成功（header 与 compaction entry 都不是 message，后者只贡献其 snapshot 里的 message）；把列名与时区标在使用现场，省去从散文里推断。注意首个 window 的 id 是 session header id（生产 session 通常是 UUID，逃逸门 `--session` 下可能是目录名），只有后续 window 才是短 hex 的 compaction entry id。
 
 ### 4.2 Run → Session 挂接
 
@@ -152,7 +152,7 @@ ai history search <query> --id <run-id|prefix> [--window <window-id>] [--role ..
 ## 6. 边界条件和特殊情况
 
 - `read --entry` 的 offset 超出 total → 空 content + `total_chars`，退出码 0（"到头了"是合法状态）。
-- entry_id 不存在 → 明确错误，非零退出（不静默空返回）。若该 id 实为 window_id（session header id 或 compaction entry id，均由 `windows` 报出），错误信息额外指出该用哪个 flag 展开：这种误用结构上不可能成功，只回一句 “not found” 会逼调用方去猜 entry id 的形状。提示只给 action + flag，不给整条命令——session 层不知道调用方是用 `--id` 还是 `--session` 寻址的，照抄一条缺了寻址 flag 的命令等于把一个坑换成另一个。
+- entry_id 不存在 → 明确错误，非零退出（不静默空返回）。若该 id 实为 window_id（首个 window 报的是 session header id，其后每个代次报 compaction entry id），错误信息额外指出该用哪个 flag 展开：这种误用结构上不可能成功，只回一句 “not found” 会逼调用方去猜 entry id 的形状。提示只给 action + flag，不给整条命令——session 层不知道调用方是用 `--id` 还是 `--session` 寻址的，照抄一条缺了寻址 flag 的命令等于把一个坑换成另一个。
 - flag 解析失败 → 只列出该 action 实际注册的 flag（从 FlagSet 读回，不会与注册漂移）+ 一行指向 `ai history help`，不再 dump 整份 usage。该 CLI 的读者是模型，让它从 30 行 usage 里反推“这个 action 没有这个 flag”是纯粹的认知负担。
 - search 无命中 → 空列表 + `total_count: 0`，退出码 0。
 - snapshot 文件缺失/损坏 → stderr 警告 + 跳过该 snapshot，其余命中正常返回。
