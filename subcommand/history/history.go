@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -66,14 +67,27 @@ func newFlagSet(action string) *flag.FlagSet {
 	return fs
 }
 
-// parseActionFlags parses action-specific flags. Parse failures are reported
-// on stderr with the usage text and mapped to exit code 1.
+// parseActionFlags parses action-specific flags. A parse failure is reported as
+// the flags the action actually accepts rather than the full command reference:
+// this CLI is read by a model, and dumping 30 lines of usage means the caller
+// has to diff the rejected name against every action section to learn that the
+// flag exists elsewhere. The list is read back off the flag set, so it cannot
+// drift from what is registered.
 func parseActionFlags(fs *flag.FlagSet, args []string, stderr io.Writer) bool {
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "error: %v\n\n%s", err, usageText())
+		fmt.Fprintf(stderr, "error: %v\n\nvalid for '%s': %s\nrun `ai history help` for the full command reference.\n",
+			err, fs.Name(), strings.Join(definedFlags(fs), " "))
 		return false
 	}
 	return true
+}
+
+// definedFlags returns the flag names registered on fs, in lexical order.
+func definedFlags(fs *flag.FlagSet) []string {
+	names := make([]string, 0, 8)
+	fs.VisitAll(func(f *flag.Flag) { names = append(names, "--"+f.Name) })
+	sort.Strings(names)
+	return names
 }
 
 // addGlobalFlags registers the flags shared by every action.

@@ -90,6 +90,122 @@ func TestRunHistoryUnknownAction(t *testing.T) {
 	}
 }
 
+func TestRunHistoryRejectsWindowIDAsEntry(t *testing.T) {
+	dir, _ := newTestSessionDir(t)
+
+	stdout, _, code := runCapture("windows", "--session", dir, "--json")
+	if code != 0 {
+		t.Fatalf("windows failed: %s", stdout)
+	}
+	windows := decodeJSONLines(t, stdout)
+	if len(windows) < 2 {
+		t.Fatalf("need a header window and a compaction window, got %d", len(windows))
+	}
+
+	// Every window id must be routed. Two kinds exist and they are different
+	// ids: the session header id and a compaction entry id (short hex, the form
+	// agents actually misread as an entry id). Only compaction windows carry a
+	// summary, which is what tells the two apart here — id length does not, the
+	// header id is whatever the session was created with. Iterate all of them
+	// and assert both kinds were seen, so neither branch loses coverage quietly.
+	kinds := map[string]bool{"compaction": false, "header": false}
+	for _, win := range windows {
+		id, _ := win["window_id"].(string)
+		if id == "" {
+			t.Fatalf("window_id missing in %v", win)
+		}
+		summary, _ := win["summary_preview"].(string)
+		if summary == "" {
+			kinds["header"] = true
+		} else {
+			kinds["compaction"] = true
+		}
+
+		// A window id is never an item, so the error must name the case and
+		// hand back the next step instead of leaving the caller to guess an
+		// entry id shape. The hint names the action, not a whole command, so
+		// it must not imply a bare runnable invocation. It must also not call
+		// the id "a compaction generation": the first window is the session
+		// header, which is not one, and the wording would be wrong there.
+		_, stderr, code := runCapture("read", "--session", dir, "--entry", id)
+		if code == 0 {
+			t.Fatalf("%s: expected non-zero exit code reading a window id as an entry", id)
+		}
+		if !strings.Contains(stderr, "window id") ||
+			!strings.Contains(stderr, "list --window "+id) ||
+			!strings.Contains(stderr, "--id") {
+			t.Errorf("%s: expected a directed window-id hint naming the target flags, got %q", id, stderr)
+		}
+		if strings.Contains(stderr, "compaction") {
+			t.Errorf("%s: hint must not claim the id is a compaction generation: %q", id, stderr)
+		}
+
+		_, stderr, code = runCapture("list", "--session", dir, "--entry", id)
+		if code == 0 || !strings.Contains(stderr, "list --window "+id) {
+			t.Errorf("%s: expected the same direction from list --entry, got code %d stderr %q", id, code, stderr)
+		}
+	}
+	for kind, covered := range kinds {
+		if !covered {
+			t.Errorf("no %s-id window exercised; both id forms must be covered", kind)
+		}
+	}
+}
+
+func TestRunHistoryTextHeadersNameColumnsAndZone(t *testing.T) {
+	dir, _ := newTestSessionDir(t)
+
+	// Without the legend, WINDOW_ID and ENTRY_ID are both bare 8-hex tokens
+	// and CREATED/TIMESTAMP look local, which is how a window id gets fed to
+	// `read --entry` and an 8-hour phantom gap gets read as missing records.
+	for _, tc := range []struct {
+		action string
+		args   []string
+		want   string
+	}{
+		{"windows", nil, "WINDOW_ID\tCREATED(UTC)"},
+		{"list", nil, "ENTRY_ID\tROLE\tTIMESTAMP(UTC)"},
+		{"search", []string{"hello"}, "ENTRY_ID\tROLE\tWINDOW_ID\tTIMESTAMP(UTC)"},
+	} {
+		args := append([]string{tc.action, "--session", dir}, tc.args...)
+		stdout, stderr, code := runCapture(args...)
+		if code != 0 {
+			t.Fatalf("%s failed: %s", tc.action, stderr)
+		}
+		if !strings.HasPrefix(stdout, tc.want) {
+			t.Errorf("%s stdout does not start with %q:\n%s", tc.action, tc.want, stdout)
+		}
+		// JSONL consumers read field names; a legend would break jq.
+		stdout, _, code = runCapture(append(args, "--json")...)
+		if code != 0 {
+			t.Fatalf("%s --json failed", tc.action)
+		}
+		decodeJSONLines(t, stdout)
+	}
+}
+
+func TestRunHistoryUnknownFlagListsValidFlagsForAction(t *testing.T) {
+	_, stderr, code := runCapture("search", "--max-chars", "400", "x")
+	if code == 0 {
+		t.Fatal("expected non-zero exit code for an undefined flag")
+	}
+	if !strings.Contains(stderr, "valid for 'search':") {
+		t.Fatalf("expected per-action flag list, got %q", stderr)
+	}
+	// The point of the message: the rejected name must be visibly absent from
+	// the action's own set, and present on the actions that do accept it.
+	valid := stderr[strings.Index(stderr, "valid for 'search':"):]
+	if strings.Contains(valid, "--max-chars") {
+		t.Errorf("--max-chars reported as valid for 'search':\n%s", stderr)
+	}
+	if !strings.Contains(valid, "--case-sensitive") {
+		t.Errorf("expected the action's real flags to be listed, got %q", valid)
+	}
+	if strings.Contains(stderr, "Usage:") {
+		t.Errorf("expected the full usage dump to be replaced, got %q", stderr)
+	}
+}
+
 func TestRunHistoryReadRequiresEntry(t *testing.T) {
 	_, stderr, code := runCapture("read")
 	if code == 0 {

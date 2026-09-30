@@ -154,7 +154,7 @@ func (s *Session) ReadItem(entryID string, offset, limit int) (HistoryItem, erro
 	}
 	item, ok := s.findHistoryItemLocked(entryID)
 	if !ok {
-		return HistoryItem{}, fmt.Errorf("history entry %q not found", entryID)
+		return HistoryItem{}, s.historyIDErrorLocked(entryID)
 	}
 	if offset < 0 {
 		return HistoryItem{}, fmt.Errorf("offset must not be negative")
@@ -271,7 +271,7 @@ func (s *Session) historyItemsLocked(opts HistoryItemsOptions) ([]HistoryItem, e
 	if opts.EntryID != "" {
 		items, ok := s.itemsToEntryLocked(path, opts.EntryID)
 		if !ok {
-			return nil, fmt.Errorf("history entry %q not found", opts.EntryID)
+			return nil, s.historyIDErrorLocked(opts.EntryID)
 		}
 		return filterHistoryItems(items, opts), nil
 	}
@@ -286,6 +286,40 @@ func (s *Session) historyItemsLocked(opts HistoryItemsOptions) ([]HistoryItem, e
 		}
 	}
 	return nil, fmt.Errorf("history window %q not found", opts.WindowID)
+}
+
+// historyIDErrorLocked builds the error for an id that resolves to no message
+// entry. A window id never appears in the item list: `windows` reports the
+// session header id for the first window and a compaction entry id for each
+// generation after it, and neither a header nor a compaction entry is a message
+// (compaction entries only contribute their snapshot's messages). Addressing
+// one as an entry therefore cannot succeed, for any window. Naming that case
+// turns a dead end into the next step.
+//
+// The hint names the action rather than printing a whole command: the session
+// layer does not know how the caller addressed the run, so a command quoted
+// here would be missing its `--id`/`--session` and would fail on paste.
+func (s *Session) historyIDErrorLocked(id string) error {
+	if s.isHistoryWindowIDLocked(id) {
+		return fmt.Errorf("history entry %q not found: it is a window id, not a message entry; "+
+			"expand it with `list --window %s --oldest-first`, "+
+			"reusing the same --id/--session target as this call", id, id)
+	}
+	return fmt.Errorf("history entry %q not found", id)
+}
+
+// isHistoryWindowIDLocked reports whether id addresses a window rather than a
+// message entry.
+func (s *Session) isHistoryWindowIDLocked(id string) bool {
+	if s.header.ID == id {
+		return true
+	}
+	for _, entry := range pathToLeaf(s.entries, s.leafID, s.byID) {
+		if entry.Type == EntryTypeCompaction && entry.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) itemsToEntryLocked(path []*SessionEntry, id string) ([]HistoryItem, bool) {

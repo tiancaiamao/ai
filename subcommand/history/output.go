@@ -65,6 +65,24 @@ func (w *boundedWriter) flush(out io.Writer) {
 	fmt.Fprintln(out, outputTruncatedMarker)
 }
 
+// formatHeader returns the text-mode legend printed once ahead of the records.
+// It names the leading ID column and marks the timestamp zone, so a reader does
+// not have to infer either from the surrounding prose: a window id and an entry
+// id are both bare identifiers in the same position, and a UTC/local mix-up
+// turns into an eight-hour phantom gap. JSON mode omits the legend — JSONL
+// consumers read field names.
+func formatHeader(kind string) string {
+	switch kind {
+	case "window":
+		return "WINDOW_ID\tCREATED(UTC)\tTOKENS_BEFORE\tITEMS\n"
+	case "item":
+		return "ENTRY_ID\tROLE\tTIMESTAMP(UTC)\tCHARS\n"
+	case "search":
+		return "ENTRY_ID\tROLE\tWINDOW_ID\tTIMESTAMP(UTC)\n"
+	}
+	return ""
+}
+
 // formatWindow renders one window as a human-readable text block.
 func formatWindow(win session.HistoryWindow) string {
 	summary := win.SummaryPreview
