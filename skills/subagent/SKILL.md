@@ -81,6 +81,7 @@ spawn 时不传任务，然后用 `send --wait` 发送任务。`send --wait` 同
 - 不带 `--input` spawn 空壳是支持的用法（如预热、条件分发、多轮交互），但务必在流程中安排好后续 `ai send`，避免遗忘导致空跑浪费 token。
 
 **⚠️ 推荐用 `--role`，避免手写 `--system-prompt`：** 大多数场景应使用 `--role coder`（默认值），`ai` 会自动加载对应的 system prompt。仅在需要高度定制化的 role（如 validator with specific checklist）时才用 `--system-prompt`。注意：同时设置两者时，`--system-prompt` 会覆盖 `--role`。
+**🩹 防泄漏纪律（2026-09-26 实测修正）：** `ai serve` **无论是否加 `--max-turns` 都不会自动退出**——实测 `--max-turns 1` 的 agent turn 完成 45s 后进程仍存活（且仍能接受 `ai send`）。`--max-turns` 只约束对话轮数，不约束进程生命周期。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；session 命名必须守 `agent-$RUN_ID-*` 约定，否则 recipe 的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。
 
 ```bash
 # 从 runtime_state 获取自己的 run ID
@@ -243,6 +244,15 @@ tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^agent-$RUN_ID-" | w
   tmux kill-session -t "$s" 2>/dev/null
 done
 
+# ⚠️ tmux kill-session 不保证杀死 ai serve 进程（2026-09-26 实测：杀 8 个 session
+# 后 6 个 serve 成孤儿继续存活，最老 3 天）。所以下面是两步，不是一步，
+# 且 pkill / pgrep 都限定在 $RUN_ID 前缀上——绝不用 ai kill --all 或 pkill -f "ai serve"，
+# 那会杀掉其他 agent 的进程。
+pkill -f "id-file /tmp/agent-$RUN_ID-" 2>/dev/null
+
+# 验证：tmux session 数归零不算清理完成，必须确认进程也归零
+pgrep -af "id-file /tmp/agent-$RUN_ID-" || echo "no ai serve processes left for $RUN_ID"
+
 # 清理 id 文件
 rm -f /tmp/agent-$RUN_ID-*.id
 
@@ -250,13 +260,14 @@ rm -f /tmp/agent-$RUN_ID-*.id
 rm -f ~/.ai/runs/$RUN_ID/subagent
 ```
 
-**为什么不自动退出：** `ai serve` 的设计就是后台服务模式，可以接收多轮 `ai send`。退出应由调用方（即你）负责。这是 `ai serve` 的正确行为。
-
+**为什么会泄漏（真实根因，2026-09-26 实测）：**
+1. `ai serve` 是长驻服务，**任何 flag 都不会让它自动退出**（`--max-turns` 也不行，实测 45s 仍存活）——退出只能由调用方显式 kill，没有例外。
+2. session 命名偏离 `agent-$RUN_ID-*` 约定（如自定义 `pge5-gen`、`b7t3-eval` 等前缀）会让上面的 cleanup recipe `grep "^agent-$RUN_ID-"` 匹配不到任何东西，整批泄漏。命名规则不是建议，是 cleanup recipe 能工作的前提。
 ### 生命周期铁律
 
 | 规则 | 违反后果 |
 |------|---------|
-| **每个 spawn 必须对应一个 kill** | 进程堆积，内存泄漏（每个 ~20MB） |
+| **每个 spawn 必须对应一个 kill**（无任何 flag 可替代） | 进程堆积，内存泄漏（每个 ~20MB） |
 | **任务确认完成后立即 kill** | 延迟 kill = 忘记 kill。watch 超时不等于完成——先检查再决定 |
 | **异常路径也要 kill** | 主 agent 崩溃会留下孤儿进程 |
 | **spawn 后必须写入 subagent 文件** | 无法追踪子 agent，可能忘记 cleanup |
