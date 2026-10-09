@@ -20,11 +20,11 @@ The LLM ask is a cache-friendly request that mirrors a normal agent turn prefix,
 
 The `askLLM` call also performs a context retention check when enabled:
 
-1. On the first `askLLM` call, a random canary value (e.g. `<agent:canary value="a1b2c3d4e5f6"/>`) is **appended** to `RecentMessages` as an agent-visible user message. The expected value is stored in `Compactor.canaryValue`.
-2. On subsequent `askLLM` calls, the LLM is asked to report the canary value from the conversation.
+1. After every successful compaction, a random canary value (e.g. `<agent:canary value="a1b2c3d4e5f6"/>`) is **planted once** in `RecentMessages` as an agent-visible user message (`PlantCanary` → `InsertCanary`). The expected value is stored in `Compactor.canaryValue`.
+2. On every subsequent `askLLM` call, the LLM is asked to report the canary value from the conversation.
 3. If the LLM answers correctly → proceed with normal confirm/reject logic.
 4. If the LLM answers incorrectly → context is likely degraded → **force compaction** (overrides LLM decision).
-5. After each `askLLM` call, old canary messages are cleaned and a new canary is appended for the next round.
+5. The canary stays in `RecentMessages` until the next compaction, which removes it (`RemoveAllCanaries`) and resets `canaryValue`, starting a fresh cycle. `askLLM` never plants or cleans canaries itself.
 
 The canary is appended (never inserted mid-list), so the provider prefix-cache for earlier messages is unaffected. As new tool call/result messages accumulate, the canary naturally sinks to the "lost in the middle" zone.
 

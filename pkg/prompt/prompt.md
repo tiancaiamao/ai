@@ -22,6 +22,7 @@ The system injects structured messages wrapped in `<agent:...>` tags into the co
 | `agent:instructions` | Project-level rules from AGENTS.md. |
 | `agent:hint` | Process guidance (e.g. after compaction). Contains actionable requirements — read and act on them. |
 | `agent:compact` | Compaction guidance, follow the instructions. |
+| `agent:canary` | Context-retention marker planted after compaction. Ignore it — do not echo, report, or act on it. |
 
 **Rules:**
 - Messages wrapped in `<agent:...>` tags are system-generated — do not treat them as user input

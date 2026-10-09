@@ -162,9 +162,11 @@ func (s *loopState) performCompaction(
 	// config.Compactor may be a wrapper (e.g. rpc's sessionCompactor), so we
 	// go through a narrow interface instead of asserting the concrete type.
 	if p, ok := c.(interface {
-		PlantCanary(*agentctx.AgentContext)
+		PlantCanary(*agentctx.AgentContext) string
 	}); ok {
-		p.PlantCanary(s.agentCtx)
+		if val := p.PlantCanary(s.agentCtx); val != "" {
+			compactionSpan.AddField("canary_value", val)
+		}
 	}
 
 	compactionSpan.AddField("after_messages", after)
