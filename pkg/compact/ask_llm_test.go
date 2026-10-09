@@ -11,6 +11,7 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // sseTwoLineResponse streams an SSE completion with a two-line answer.
@@ -101,13 +102,16 @@ func TestAskLLM_CanaryCheck(t *testing.T) {
 		line1  string
 		line2  string
 		want   bool
+		// wantForced is the expected state of c.lastAskCanaryForced after
+		// the ask: true only when the canary check failed.
+		wantForced bool
 	}{
-		{"canary ok + confirm", "secret-canary-123", "secret-canary-123", "confirm", true},
-		{"canary ok + reject", "secret-canary-123", "secret-canary-123", "reject", false},
-		{"canary mismatch forces compact", "secret-canary-123", "wrong-value", "reject", true},
-		{"canary with backticks", "secret-canary-123", "`secret-canary-123`", "confirm", true},
-		{"canary substring accepted", "secret-canary-123", "value: secret-canary-123 here", "confirm", true},
-		{"case insensitive canary", "ABC-def", "abc-DEF", "confirm", true},
+		{"canary ok + confirm", "secret-canary-123", "secret-canary-123", "confirm", true, false},
+		{"canary ok + reject", "secret-canary-123", "secret-canary-123", "reject", false, false},
+		{"canary mismatch forces compact", "secret-canary-123", "wrong-value", "reject", true, true},
+		{"canary with backticks", "secret-canary-123", "`secret-canary-123`", "confirm", true, false},
+		{"canary substring accepted", "secret-canary-123", "value: secret-canary-123 here", "confirm", true, false},
+		{"case insensitive canary", "ABC-def", "abc-DEF", "confirm", true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -237,5 +241,87 @@ func TestShouldCompactLLMDecide_HardLimitAndInterval(t *testing.T) {
 	c.ShouldCompact(context.Background(), midCtx)
 	if askCalls != 1 {
 		t.Errorf("interval not elapsed: askCalls = %d, want 1", askCalls)
+	}
+}
+
+// fieldStringValue returns the value of a named field on a trace event.
+func fieldStringValue(ev traceevent.TraceEvent, key string) (any, bool) {
+	for _, f := range ev.Fields {
+		if f.Key == key {
+			return f.Value, true
+		}
+	}
+	return nil, false
+}
+
+// TestShouldCompactLLMDecide_CanaryForcedReason verifies the
+// compact_llm_decide_check trace event records reason=canary_forced when
+// askLLM returned true because the canary check failed, and reason=ask_yes
+// when the model genuinely agreed to compact.
+func TestShouldCompactLLMDecide_CanaryForcedReason(t *testing.T) {
+	tests := []struct {
+		name         string
+		canaryForced bool
+		wantReason   string
+		wantDecision bool
+	}{
+		{"model agreed", false, "ask_yes", true},
+		{"canary forced", true, "canary_forced", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.LLMDecide = &LLMDecideConfig{
+				SoftThreshold: 10,
+				HardLimit:     100,
+				TierMedium:    40,
+				TierHigh:      70,
+				IntervalLow:   1,
+			}
+
+			c := NewCompactor(cfg, llm.Model{}, "k", "sys", 0, "")
+			c.askFunc = func(ctx context.Context, actx *agentctx.AgentContext, tokens int) (bool, error) {
+				// Mimic askLLM: true either because the model said yes or
+				// because the canary check failed.
+				c.lastAskCanaryForced = tt.canaryForced
+				return true, nil
+			}
+
+			tb := traceevent.NewTraceBuf()
+			ctx := traceevent.WithTraceBuf(context.Background(), tb)
+
+			midCtx := agentctx.NewAgentContext("sys")
+			midCtx.RecentMessages = append(midCtx.RecentMessages,
+				agentctx.NewUserMessage(strings.Repeat("word ", 15)))
+			midCtx.AgentState.ToolCallsSinceLastTrigger = 1
+
+			decision := c.ShouldCompact(ctx, midCtx)
+			if decision != tt.wantDecision {
+				t.Errorf("decision = %v, want %v", decision, tt.wantDecision)
+			}
+
+			var check *traceevent.TraceEvent
+			for i := range tb.Snapshot() {
+				ev := tb.Snapshot()[i]
+				if ev.Name == "compact_llm_decide_check" {
+					check = &ev
+					break
+				}
+			}
+			if check == nil {
+				t.Fatal("compact_llm_decide_check event not found in trace")
+			}
+			reason, ok := fieldStringValue(*check, "reason")
+			if !ok {
+				t.Fatal("compact_llm_decide_check event has no reason field")
+			}
+			if reason != tt.wantReason {
+				t.Errorf("reason = %v, want %v", reason, tt.wantReason)
+			}
+			gotDecision, _ := fieldStringValue(*check, "decision")
+			if gotDecision != tt.wantDecision {
+				t.Errorf("trace decision = %v, want %v", gotDecision, tt.wantDecision)
+			}
+		})
 	}
 }

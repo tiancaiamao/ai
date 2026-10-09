@@ -104,11 +104,11 @@ Since all but the trailing question is a prefix of the normal conversation, prov
 
 The `askLLM` call also runs a context retention check using a canary value:
 
-1. **Planting**: On each `askLLM` call, an agent-visible `<agent:canary value="..."/>` message is **appended** to `RecentMessages` (after cleaning old canaries). The expected value is stored in `Compactor.canaryValue`.
-2. **Recall test**: On the next `askLLM` call, the LLM is asked to report the canary value from the conversation. The canary message still exists in `RecentMessages`, having naturally sunk toward the middle as new tool call/result messages accumulated.
+1. **Planting**: After each successful compaction, a single agent-visible `<agent:canary value="..."/>` message is **appended** to `RecentMessages` (`PlantCanary` → `InsertCanary`). The expected value is stored in `Compactor.canaryValue`. The canary is planted once and lives until the next compaction — it is not re-planted on askLLM calls.
+2. **Recall test**: On each `askLLM` call, the LLM is asked to report the canary value from the conversation. The canary message still exists in `RecentMessages`, having naturally sunk toward the middle as new tool call/result messages accumulated.
 3. **Result**: If the LLM answers correctly → continue with normal confirm/reject logic. If incorrectly → context is degraded → **force compaction** (overrides LLM decision).
 4. **Cache impact**: The canary is appended (never inserted mid-list), so provider prefix-cache for earlier messages is unaffected.
-5. **Compaction**: `Compact()` calls `RemoveAllCanaries()` to clean canary messages, and resets `canaryValue` to start a fresh cycle.
+5. **Reset**: `Compact()` calls `RemoveAllCanaries()` to clean canary messages and resets `canaryValue`, starting a fresh retention cycle after the next compaction.
 
 ### Idempotency
 

@@ -50,15 +50,18 @@ func (sc *sessionCompactor) Compact(ctx context.Context, agentCtx *agentctx.Agen
 // PlantCanary appends a canary message to the agent context and records its
 // value on the underlying compactor. Called by the agent loop after each
 // successful compaction; the loop reaches the compactor through this method
-// because it only holds the sessionCompactor wrapper.
-func (sc *sessionCompactor) PlantCanary(agentCtx *agentctx.AgentContext) {
+// because it only holds the sessionCompactor wrapper. Returns the planted
+// canary value ("" when the underlying compactor is not a compact.Compactor).
+func (sc *sessionCompactor) PlantCanary(agentCtx *agentctx.AgentContext) string {
 	sc.mu.Lock()
 	comp := sc.compactor
 	sc.mu.Unlock()
 	if c, ok := comp.(*compact.Compactor); ok {
 		val := compact.InsertCanary(agentCtx)
 		c.SetCanaryValue(val)
+		return val
 	}
+	return ""
 }
 
 // --- sessionWriter: single-goroutine serializer for session writes ---

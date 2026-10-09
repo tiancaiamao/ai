@@ -494,10 +494,10 @@ A companion `multi_edit` tool applies several replacements to one file atomicall
 
 **Solution**: Added a canary-based context retention check to the LLMDecide `askLLM` flow:
 
-1. Each `askLLM` call appends an agent-visible `<agent:canary value="..."/>` message to `RecentMessages` (after cleaning old canaries). The expected value is stored in `Compactor.canaryValue`.
-2. On the next `askLLM` call, the LLM is asked to report the canary value from the conversation.
+1. After each successful compaction, an agent-visible `<agent:canary value="..."/>` message is planted once in `RecentMessages`. The expected value is stored in `Compactor.canaryValue`.
+2. On each subsequent `askLLM` call, the LLM is asked to report the canary value from the conversation.
 3. A correct answer → proceed with normal confirm/reject logic. An incorrect answer → context degraded → **force compaction** (overrides LLM decision).
-4. After each `askLLM` call, old canaries are cleaned and a new one is appended for the next round.
+4. The canary stays in `RecentMessages` until the next compaction, which removes it and resets `canaryValue`, starting a fresh cycle.
 
 The canary is appended (never inserted mid-list), so the provider prefix-cache for earlier messages is unaffected. The canary naturally sinks to the "lost in the middle" zone as tool call/result messages accumulate.
 

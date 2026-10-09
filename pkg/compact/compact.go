@@ -151,6 +151,12 @@ type Compactor struct {
 	// canaryValue is the expected value for the next context retention check.
 	// Set by InsertCanary after compaction, checked by askLLM, reset on compaction.
 	canaryValue string
+
+	// lastAskCanaryForced records whether the last askLLM call returned
+	// confirmed=true because the canary recall check failed (forced
+	// compaction) rather than the model answering "confirm". Written and
+	// read by the same goroutine, like llmDecideLastAskCount.
+	lastAskCanaryForced bool
 }
 
 // SetCanaryValue sets the canary value for context retention checks.
@@ -702,6 +708,12 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 		slog.Info("[Compact] LLM decided to compact",
 			"tokens", tokens,
 			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+		if c.lastAskCanaryForced {
+			// The model did not agree to compact; askLLM returned true only
+			// because the canary recall check failed. Record it so the trace
+			// can distinguish "model agreed" from "canary forced compaction".
+			reason = "canary_forced"
+		}
 	}
 
 	// Record the counter when the last ask happened.
@@ -794,6 +806,10 @@ func buildCacheFriendlyLLMContext(
 func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
 	span := traceevent.StartSpan(ctx, "compact_llm_decide_ask", traceevent.CategoryLLM)
 	defer span.End()
+
+	// Reset the stale forced flag from a previous ask; the canary-mismatch
+	// branch below sets it back to true when this ask is canary-forced.
+	c.lastAskCanaryForced = false
 
 	if c.askPrompt == "" {
 		c.askPrompt = prompt.CompactCheckPrompt()
@@ -889,6 +905,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 
 		if !canaryOK {
 			confirmed = true
+			c.lastAskCanaryForced = true
 			slog.Warn("[Compact] Canary check failed — context may be degraded, forcing compaction",
 				"expected", canaryVal,
 				"got", canaryAnswer)
