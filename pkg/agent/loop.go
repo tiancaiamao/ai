@@ -160,9 +160,14 @@ func RunLoop(
 		}
 
 		newMessages := append([]agentctx.AgentMessage{}, turnPrompts...)
+		// Copy history onto a fresh backing array: processPrompt's event
+		// writebacks (AddMessage) append to agentCtx.RecentMessages from its
+		// own goroutine, so appending in place here would make this loop
+		// write and read the same slots concurrently (data race flagged by
+		// TestSteerMidThinking_NextRequestCarriesPartialThinking under -race).
 		currentCtx := &agentctx.AgentContext{
 			SystemPrompt:   agentCtx.SystemPrompt,
-			RecentMessages: append(agentCtx.RecentMessages, turnPrompts...),
+			RecentMessages: append(append([]agentctx.AgentMessage{}, agentCtx.RecentMessages...), turnPrompts...),
 			Tools:          agentCtx.Tools,
 			AgentState:     agentCtx.AgentState,
 		}

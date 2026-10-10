@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // IterResult represents a single iteration result.
@@ -135,8 +136,17 @@ func (es *EventStream[T, R]) Iterator(ctx context.Context) <-chan IterResult[T] 
 				if result.Done {
 					return
 				}
+				if ctx.Err() != nil {
+					// Canceled while parked: park the delivered event for a
+					// late DrainQueued instead of handing it to a consumer
+					// that is about to exit, then exit so the drain processes
+					// it exactly once.
+					es.parkResult(result)
+					return
+				}
 				ch <- result
 			case <-ctx.Done():
+				es.abandonWaiter(waiter)
 				return
 			}
 		}
@@ -145,9 +155,78 @@ func (es *EventStream[T, R]) Iterator(ctx context.Context) <-chan IterResult[T] 
 	return ch
 }
 
+// abandonWaiter deregisters the iterator's waiter when the iterator exits via
+// ctx cancellation, and rescues an event Push already delivered into it.
+// Without this, the next Push pops the orphaned waiter and the event is lost
+// to DrainQueued.
+func (es *EventStream[T, R]) abandonWaiter(waiter chan IterResult[T]) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+
+	for i, w := range es.waiting {
+		if w == waiter {
+			es.waiting = append(es.waiting[:i], es.waiting[i+1:]...)
+			break
+		}
+	}
+	select {
+	case result := <-waiter:
+		if !result.Done {
+			es.queue = append([]T{result.Value}, es.queue...)
+		}
+	default:
+	}
+}
+
+// parkResult re-queues an event the iterator received after its context was
+// canceled, preserving push order (the event was delivered before any
+// subsequently pushed event reaches the queue). Done markers are discarded:
+// End() already recorded the final state.
+func (es *EventStream[T, R]) parkResult(result IterResult[T]) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if !result.Done {
+		es.queue = append([]T{result.Value}, es.queue...)
+	}
+}
+
 // Result returns a channel that delivers the final result.
 func (es *EventStream[T, R]) Result() <-chan R {
 	return es.finalResultCh
+}
+
+// WaitDone blocks until the stream reaches the done state or timeout
+// elapses, returning whether the done state was observed. Producers signal
+// done via a completing Push or End; after that no further events can be
+// queued, so the queue is stable for draining.
+func (es *EventStream[T, R]) WaitDone(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		es.mu.Lock()
+		done := es.done
+		es.mu.Unlock()
+		if done {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// DrainQueued removes and returns all events still sitting in the queue.
+// A consumer whose Iterator returned early (e.g. on ctx cancellation) uses
+// this to observe tail events the producer pushed afterwards.
+func (es *EventStream[T, R]) DrainQueued() []T {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if len(es.queue) == 0 {
+		return nil
+	}
+	queued := es.queue
+	es.queue = nil
+	return queued
 }
 
 // IsDone returns true if the stream is complete.
