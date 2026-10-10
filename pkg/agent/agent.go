@@ -376,12 +376,22 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 
 	// When ctx is canceled mid-run (steer/abort), Iterator returns on
 	// ctx.Done() without draining events the loop pushed afterwards — the
-	// salvaged "aborted" assistant message plus its turn_end/agent_end among
-	// them. Wait briefly for the producer to finish, then process whatever is
+	// salvaged "aborted" assistant message plus its turn_end among them.
+	// Wait briefly for the producer to finish, then process whatever is
 	// queued so the aborted message reaches a.context (and session
 	// persistence) instead of being silently dropped.
+	//
+	// Drained agent_end events are skipped: abortCurrentStream already emits
+	// its synthetic copy directly (re-emitting here would duplicate the
+	// subscriber signal), and its snapshot may predate the salvage in this
+	// same batch — reprocessing the overwrite would wipe the turn_end
+	// writeback above. Baseline parity also gives steer's old run no
+	// agent_end; loop-side compaction still syncs via EventCompactionEnd.
 	stream.WaitDone(eventDrainTimeout)
 	for _, tail := range stream.DrainQueued() {
+		if tail.Type == EventAgentEnd {
+			continue
+		}
 		handleEvent(llm.IterResult[AgentEvent]{Value: tail})
 	}
 	span.AddField("error", hadError)

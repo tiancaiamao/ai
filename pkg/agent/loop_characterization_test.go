@@ -736,3 +736,137 @@ func TestCharacterization_ToolExecutionEvents(t *testing.T) {
 		t.Error("expected EventAgentEnd")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression: post-cancel drain must not let a stale agent_end snapshot wipe
+// a same-batch salvage, nor duplicate abortCurrentStream's direct emit.
+// ---------------------------------------------------------------------------
+
+// TestDrainAfterCancelKeepsSalvageDespiteAgentEnd reproduces the drain-order
+// hazard: when the post-cancel drain sees both the loop's salvage turn_end and
+// a pre-salvage agent_end snapshot (abort ordering can queue them together),
+// the agent_end context overwrite must not wipe the salvaged message.
+func TestDrainAfterCancelKeepsSalvageDespiteAgentEnd(t *testing.T) {
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+	defer ag.Shutdown()
+
+	started := make(chan struct{})
+	ag.runLoopFn = func(ctx context.Context, _ []agentctx.AgentMessage, _ *agentctx.AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+		stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
+			func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+			func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
+		)
+		go func() {
+			stream.Push(NewAgentStartEvent())
+			close(started)
+			<-ctx.Done()
+
+			salvage := agentctx.NewAssistantMessage()
+			salvage.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "partial thinking salvaged"},
+			}
+			salvage.StopReason = "aborted"
+			msg := salvage
+			stream.Push(NewTurnEndEvent(&msg, nil))
+			// Pre-salvage snapshot pushed right after, mirroring the abort
+			// ordering (loop salvage squeeze + abortCurrentStream snapshot).
+			stream.Push(NewAgentEndEvent([]agentctx.AgentMessage{agentctx.NewUserMessage("stale history")}))
+		}()
+		return stream
+	}
+
+	ag.SetContext(&agentctx.AgentContext{
+		SystemPrompt:   "test",
+		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("before")},
+	})
+
+	if err := ag.Prompt("trigger"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	<-started
+
+	// Consume agent_start to prove the consumer is live, then let the
+	// iterator re-park as a waiter before cancelling.
+	timeout := time.After(2 * time.Second)
+waitStart:
+	for {
+		select {
+		case ev := <-ag.Events():
+			if ev.Type == EventAgentStart {
+				break waitStart
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for agent_start")
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	ag.cancel() // steer-style cancellation; producer pushes the tail afterwards
+	ag.Wait()
+
+	for _, m := range ag.GetMessages() {
+		if m.ExtractText() == "partial thinking salvaged" {
+			return // salvage survived the drain
+		}
+	}
+	t.Fatal("salvaged assistant message lost after drain (wiped by agent_end snapshot)")
+}
+
+// TestAbortEmitsSingleAgentEnd verifies Abort() delivers exactly one
+// EventAgentEnd to subscribers: abortCurrentStream emits its synthetic copy
+// directly for UI/state reset, and the post-cancel drain must not re-emit the
+// copy it pushed into the stream.
+func TestAbortEmitsSingleAgentEnd(t *testing.T) {
+	proceed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseToolCallsResponse(
+			[]map[string]any{
+				{"id": "call-slow", "name": "echo", "arguments": map[string]any{"input": "test"}},
+			},
+			"",
+			"tool_calls",
+		))
+		<-proceed
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
+	cfg := DefaultLoopConfig()
+	cfg.MaxTurns = 100
+
+	model := llm.Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+
+	agent := NewAgentFromConfigWithContext(model, "test-key", agentCtx, cfg)
+	agent.AddTool(&characterizationTestTool{name: "echo"})
+
+	if err := agent.Prompt("start tool loop"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	agent.Abort()
+	close(proceed)
+	agent.Wait()
+
+	count := 0
+drainEvents:
+	for {
+		select {
+		case ev := <-agent.Events():
+			if ev.Type == EventAgentEnd {
+				count++
+			}
+		default:
+			break drainEvents
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 EventAgentEnd after Abort(), got %d", count)
+	}
+}

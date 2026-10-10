@@ -136,14 +136,58 @@ func (es *EventStream[T, R]) Iterator(ctx context.Context) <-chan IterResult[T] 
 				if result.Done {
 					return
 				}
+				if ctx.Err() != nil {
+					// Canceled while parked: park the delivered event for a
+					// late DrainQueued instead of handing it to a consumer
+					// that is about to exit, then exit so the drain processes
+					// it exactly once.
+					es.parkResult(result)
+					return
+				}
 				ch <- result
 			case <-ctx.Done():
+				es.abandonWaiter(waiter)
 				return
 			}
 		}
 	}()
 
 	return ch
+}
+
+// abandonWaiter deregisters the iterator's waiter when the iterator exits via
+// ctx cancellation, and rescues an event Push already delivered into it.
+// Without this, the next Push pops the orphaned waiter and the event is lost
+// to DrainQueued.
+func (es *EventStream[T, R]) abandonWaiter(waiter chan IterResult[T]) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+
+	for i, w := range es.waiting {
+		if w == waiter {
+			es.waiting = append(es.waiting[:i], es.waiting[i+1:]...)
+			break
+		}
+	}
+	select {
+	case result := <-waiter:
+		if !result.Done {
+			es.queue = append([]T{result.Value}, es.queue...)
+		}
+	default:
+	}
+}
+
+// parkResult re-queues an event the iterator received after its context was
+// canceled, preserving push order (the event was delivered before any
+// subsequently pushed event reaches the queue). Done markers are discarded:
+// End() already recorded the final state.
+func (es *EventStream[T, R]) parkResult(result IterResult[T]) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if !result.Done {
+		es.queue = append([]T{result.Value}, es.queue...)
+	}
 }
 
 // Result returns a channel that delivers the final result.

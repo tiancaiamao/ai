@@ -149,3 +149,62 @@ func TestEventStreamWaitDoneAfterEnd(t *testing.T) {
 		t.Fatal("WaitDone should observe End()")
 	}
 }
+
+// TestEventStreamDrainQueuedSeesPushAfterCancel pins the waiter lifecycle on
+// ctx cancellation: an Iterator that exits via ctx.Done() must deregister its
+// waiter. Otherwise the next Push delivers into the abandoned channel, the
+// event is invisible to DrainQueued, and the consumer loses it — the exact
+// loss reviewer found for steer/abort tail events.
+func TestEventStreamDrainQueuedSeesPushAfterCancel(t *testing.T) {
+	es := NewEventStream[int, int](func(e int) bool { return e == -1 }, func(e int) int { return e })
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := es.Iterator(ctx)
+
+	// Give the iterator time to park in its select with a registered waiter.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	// Wait until the iterator goroutine has fully exited (channel closed),
+	// which is when a leaked waiter would still be sitting in es.waiting.
+	for range ch {
+	}
+
+	es.Push(42)
+	got := es.DrainQueued()
+	if len(got) != 1 || got[0] != 42 {
+		t.Fatalf("DrainQueued() = %v, want [42]", got)
+	}
+}
+
+// TestEventStreamEventConservationAcrossCancel runs the cancel/push
+// interleaving many times: whatever the scheduler does, a pushed event must
+// end up either delivered through the iterator or visible in DrainQueued —
+// exactly once, never lost.
+func TestEventStreamEventConservationAcrossCancel(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		es := NewEventStream[int, int](func(e int) bool { return e == -1 }, func(e int) int { return e })
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := es.Iterator(ctx)
+
+		time.Sleep(time.Millisecond) // let the iterator park as a waiter
+		cancel()
+		es.Push(i) // may race the iterator's exit; both orders must conserve
+
+		var delivered []int
+		for r := range ch {
+			if !r.Done {
+				delivered = append(delivered, r.Value)
+			}
+		}
+		queued := es.DrainQueued()
+
+		if len(delivered)+len(queued) != 1 {
+			t.Fatalf("iteration %d: event lost (delivered=%v queued=%v)", i, delivered, queued)
+		}
+		if len(delivered) == 1 && delivered[0] != i {
+			t.Fatalf("iteration %d: delivered %v, want [%d]", i, delivered, i)
+		}
+		if len(queued) == 1 && queued[0] != i {
+			t.Fatalf("iteration %d: queued %v, want [%d]", i, queued, i)
+		}
+	}
+}
