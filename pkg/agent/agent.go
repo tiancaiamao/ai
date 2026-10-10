@@ -22,6 +22,13 @@ const (
 	traceFlushEvery  = 256
 	traceFlushWindow = 1 * time.Second
 	traceFlushTick   = 200 * time.Millisecond
+
+	// eventDrainTimeout bounds how long processPrompt waits for the loop to
+	// finish pushing its tail events after the run's ctx was canceled
+	// (steer/abort) before draining them for context writeback. Salvage
+	// pushes happen within milliseconds of cancellation; the bound keeps
+	// Steer responsive when a producer is wedged in a ctx-unaware tool.
+	eventDrainTimeout = 500 * time.Millisecond
 )
 
 func shouldLogAgentEvent(eventType string) bool {
@@ -242,12 +249,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 	// Emit events to channel
 	slog.Info("[Agent] Starting event iteration")
 	eventCount := 0
-	for event := range stream.Iterator(ctx) {
-		if event.Done {
-			slog.Info("[Agent] Event stream done", "totalEvents", eventCount)
-			break
-		}
-
+	handleEvent := func(event llm.IterResult[AgentEvent]) {
 		traceFields := []traceevent.Field{
 			{Key: "event_at", Value: event.Value.EventAt},
 		}
@@ -362,6 +364,25 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 
 		// Send to event channel
 		a.emitEvent(event.Value)
+	}
+
+	for event := range stream.Iterator(ctx) {
+		if event.Done {
+			slog.Info("[Agent] Event stream done", "totalEvents", eventCount)
+			break
+		}
+		handleEvent(event)
+	}
+
+	// When ctx is canceled mid-run (steer/abort), Iterator returns on
+	// ctx.Done() without draining events the loop pushed afterwards — the
+	// salvaged "aborted" assistant message plus its turn_end/agent_end among
+	// them. Wait briefly for the producer to finish, then process whatever is
+	// queued so the aborted message reaches a.context (and session
+	// persistence) instead of being silently dropped.
+	stream.WaitDone(eventDrainTimeout)
+	for _, tail := range stream.DrainQueued() {
+		handleEvent(llm.IterResult[AgentEvent]{Value: tail})
 	}
 	span.AddField("error", hadError)
 	if hadError {

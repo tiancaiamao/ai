@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // IterResult represents a single iteration result.
@@ -148,6 +149,40 @@ func (es *EventStream[T, R]) Iterator(ctx context.Context) <-chan IterResult[T] 
 // Result returns a channel that delivers the final result.
 func (es *EventStream[T, R]) Result() <-chan R {
 	return es.finalResultCh
+}
+
+// WaitDone blocks until the stream reaches the done state or timeout
+// elapses, returning whether the done state was observed. Producers signal
+// done via a completing Push or End; after that no further events can be
+// queued, so the queue is stable for draining.
+func (es *EventStream[T, R]) WaitDone(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		es.mu.Lock()
+		done := es.done
+		es.mu.Unlock()
+		if done {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// DrainQueued removes and returns all events still sitting in the queue.
+// A consumer whose Iterator returned early (e.g. on ctx cancellation) uses
+// this to observe tail events the producer pushed afterwards.
+func (es *EventStream[T, R]) DrainQueued() []T {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if len(es.queue) == 0 {
+		return nil
+	}
+	queued := es.queue
+	es.queue = nil
+	return queued
 }
 
 // IsDone returns true if the stream is complete.

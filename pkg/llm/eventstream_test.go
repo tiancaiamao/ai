@@ -99,3 +99,53 @@ func TestEventStreamEndIdempotent(t *testing.T) {
 		// would have blocked — the lock guards against this by short-circuiting.
 	}
 }
+
+// TestEventStreamWaitDoneAndDrainQueued covers the late-consumer API used by
+// processPrompt after a canceled ctx: wait for the producer to finish, then
+// drain tail events the Iterator left behind in the queue.
+func TestEventStreamWaitDoneAndDrainQueued(t *testing.T) {
+	stream := NewEventStream[int, int](
+		func(e int) bool { return e == -1 }, // -1 completes the stream
+		func(e int) int { return e },
+	)
+
+	// Not done yet: WaitDone returns false after the timeout.
+	if stream.WaitDone(20 * time.Millisecond) {
+		t.Fatal("WaitDone should time out while the stream is open")
+	}
+
+	// Events pushed with no consumer stay queued.
+	stream.Push(1)
+	stream.Push(2)
+
+	// Producer finishes.
+	stream.Push(-1)
+
+	if !stream.WaitDone(time.Second) {
+		t.Fatal("WaitDone should observe the done state")
+	}
+
+	got := stream.DrainQueued()
+	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != -1 {
+		t.Fatalf("DrainQueued = %v, want [1 2 -1]", got)
+	}
+	if again := stream.DrainQueued(); again != nil {
+		t.Fatalf("second DrainQueued should be nil, got %v", again)
+	}
+}
+
+// TestEventStreamWaitDoneAfterEnd covers the End() path: producers that exit
+// without a completing Push still signal done.
+func TestEventStreamWaitDoneAfterEnd(t *testing.T) {
+	stream := NewEventStream[int, int](
+		func(int) bool { return false },
+		func(e int) int { return e },
+	)
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		stream.End(7)
+	}()
+	if !stream.WaitDone(time.Second) {
+		t.Fatal("WaitDone should observe End()")
+	}
+}

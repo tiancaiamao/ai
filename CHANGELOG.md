@@ -3,6 +3,30 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Steering keeps the aborted turn's partial thinking (2026-10)
+
+**What changed**: `processPrompt` no longer abandons the event queue when the
+run's context is canceled. After `stream.Iterator(ctx)` returns it waits up to
+`eventDrainTimeout` (500ms) for the loop to finish, then processes
+`stream.DrainQueued()` through the same `handleEvent` path as normally
+consumed events (context writeback *and* subscriber emission). Backed by two
+new `EventStream` methods: `WaitDone(timeout)` and `DrainQueued()`.
+
+**Why**: Steering (issuing a new prompt mid-run) cancels the old run's
+context. The loop salvages the partial thinking into an `aborted` assistant
+message and pushes `message_end`/`turn_end`/`agent_end`, but the consumer
+exited on `ctx.Done()` without draining the queue — so the writeback to
+`AgentContext` never happened and session persistence never saw the events.
+The steering request went out with no assistant round and no
+`reasoning_content`, deterministically losing the aborted turn's thinking
+(10/10 reproductions). A favorable-timing race could already deliver these
+events when the consumer happened to be mid-receive at cancellation; the
+drain makes that the guaranteed path instead of a coin flip. The 500ms bound
+keeps `Steer` responsive when a producer is wedged in a ctx-unaware tool —
+`Steer` blocks on `a.mu` until the old `processPrompt` returns. Known
+limitation: `Abort()` still replaces the context with a pre-salvage snapshot
+(`abortCurrentStream`), so `/abort` does not gain this writeback.
+
 ## `ai history` output names its own columns and points at the next command (2026-09)
 
 **What changed**: Three output-level changes to the `ai history` CLI, all
