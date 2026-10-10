@@ -79,6 +79,11 @@ func TestAgentSteer(t *testing.T) {
 	if ctx == nil {
 		t.Error("Context should not be nil after steer")
 	}
+
+	// Steer starts a run asynchronously via Prompt. Wait for it: a leaked
+	// loop goroutine outlives this test and its retries read the global
+	// streamAssistantResponseFn, racing with later tests that swap it.
+	agent.Wait()
 }
 
 // TestAgentAbort tests abort functionality.
@@ -93,6 +98,11 @@ func TestAgentAbort(t *testing.T) {
 	if err != nil {
 		t.Errorf("Failed to prompt after abort: %v", err)
 	}
+
+	// Prompt runs the loop asynchronously. Wait for it so the run doesn't
+	// leak past this test: its retry attempts read the global
+	// streamAssistantResponseFn, racing with later tests that swap it.
+	agent.Wait()
 }
 
 // TestAgentEvents tests the event channel.
