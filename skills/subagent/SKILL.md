@@ -17,11 +17,6 @@ description: 使用 ai serve/send/watch/kill 控制子 agent 的通用指引。�
 
 **不要用于：** 简单的 bash 命令（直接执行即可）
 
-## ⚠️ Concurrency Limit
-
-**主 agent + 子 agent 同时运行总数不得超过 3**（即最多 2 个子 agent 同时运行）。
-LLM 提供商限流：并发稍高即触发 API rate limit，导致子 agent 卡住或失败。
-
 ## How to Get Your Run ID
 
 你的 run ID 在 `<agent:runtime_state>` 的 `run_id` 字段中。例如：
@@ -471,6 +466,64 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | `--input` 内联多行长文本 | ⚠️ tmux quoting 会导致 serve 立即退出。长文本（>100 chars）必须用 `--input-file /tmp/task.md` |
 | kill 前不确认子 agent 是否在推进 | 连续两轮 watch 无输出且 `git diff` 无变化才考虑 kill |
 | kill 后发现有产出却从零重做 | ⛔ 先 `git diff` 检查子 agent 产出，在此基础上继续 |
+| 编排多任务时 watch 死等每一个 | ⛔ 用 NOTIFY 回调模式：任务书写明完成时 `ai send --id <父RUN_ID>`，父 agent 事件驱动 |
+| 死掉的 agent 用新任务书从头交代 | 用 `/resume <旧id>` 原位复活（同工作目录 serve 空壳 + send '/resume'），上下文零损失 |
+| 相信 `ai ls` 的 running 状态 | 进程死后 status 可能仍显示 running；用 ps + tmux pane_dead + send 探针三件套确认 |
+
+## Event-Driven Orchestration（NOTIFY 回调模式）
+
+**适用：** 编排多个长任务子 agent 时，父 agent 不应阻塞在 watch 上。让子 agent 完成时**主动唤醒**父 agent：
+
+1. 任务 prompt 中写入 NOTIFY 规则：`完成/失败/GATE 时执行 ai send --id <父RUN_ID> 'NOTIFY <任务名> <状态> <结果文件路径>'`
+2. 父 agent 工具调用协议停下也无妨——`ai send` 会作为新消息唤醒它
+3. 父 agent 醒来只做：读结果文件首行 STATUS → 记账 → 派下一棒
+
+```bash
+# 任务书模板（写入 /tmp/task.md 后 --input-file 传入）
+# 完成时必须：ai send --id <父RUN_ID> 'NOTIFY issue-123 MERGED /tmp/result.md'
+```
+
+**配套约定：**
+- 结果文件首行必须是机器可读的 `STATUS: <STATE>`（SUCCESS/GATE-BLOCKED/MERGED:<sha>/REVIEW_STALLED...）
+- 并发上限纪律：限流事故后 ≤5 个活动子 agent；子 agent 自派的孙 agent 也必须追加登记到 `~/.ai/runs/$RUN_ID/subagent`（kill 安全依赖此文件，任务书中显式要求）
+- 重负载任务书写明资源纪律：单次单个构建/测试命令、只跑 scoped 测试、外部集群用完即拆（并行 worktree 各自构建极易挤爆内存/触发 OOM 连环杀死 serve 进程）
+
+## Crash Recovery（/resume 原位复活）
+
+子 agent 进程死了（OOM/限流/宿主重启）但 session 数据还在时，**不必重新交代任务书**：
+
+```bash
+# 1. 在与原 agent 相同的工作目录起一个新 serve 空壳
+tmux new-session -d -s "agent-$RUN_ID-issue-XXr" \
+  "cd <原agent工作目录> && ai serve --name issue-XXr --id-file /tmp/agent-$RUN_ID-issue-XXr.id"
+sleep 3; NEW_ID=$(cat /tmp/agent-$RUN_ID-issue-XXr.id)
+echo "$NEW_ID" >> ~/.ai/runs/$RUN_ID/subagent   # 新 id 也要登记
+
+# 2. 用 slash 命令恢复旧 session（旧 id 即 session id）
+ai send --id "$NEW_ID" '/resume <旧RUN_ID>'
+
+# 3. 可选：补发一条纪律/上下文更新消息
+ai send --id "$NEW_ID" '恢复继续，注意 ...'
+```
+
+要求：新 serve 的工作目录必须与原 agent 一致。恢复后子 agent 带全部历史上下文继续，零重复 briefing。
+
+## Health Check（真实探活三件套）
+
+**`ai ls` 的 status 会撒谎**：进程被 OOM 杀死后仍可能显示 `running`。怀疑群体死亡时按序检查：
+
+```bash
+# 1. ps 里找 serve 进程（按 --name 或 --input-file 特征过滤）
+ps aux | grep 'ai serve' | grep -v grep
+
+# 2. tmux pane 死活（进程退出后 session 会消失，pane_dead 也可查）
+tmux list-panes -a -F '#{session_name} dead=#{pane_dead}'
+
+# 3. send 探针：报 "run X is not running" 即死（这条例外允许 send——探活优先于打断风险）
+ai send --id "$CHILD_ID" 'STATUS CHECK: 一行回报当前阶段' 2>&1 | head -2
+```
+
+**死亡现场的抢救顺序：** 先清点 worktree/结果文件（工作通常都在，零损失）→ 按 /resume 原位复活或用「现场文件+新任务书」接盘 → 复活消息中附带资源纪律。
 
 ## Relationship to Other Skills
 
