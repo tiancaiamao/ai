@@ -148,6 +148,8 @@ type EventStream[T any, R any] struct { ... }
 
 Generic push-based stream. Consumers iterate via `stream.Iterator(ctx)` channel. The final result is available via `stream.Result()` channel after the events stream closes.
 
+A consumer whose `Iterator` returned early (e.g. `ctx` canceled) can still observe tail events pushed afterwards: `WaitDone(timeout)` blocks until the producer finishes the stream, then `DrainQueued()` pops whatever remained in the queue. The `Iterator` itself is lossless across cancellation: exiting via `ctx.Done()` deregisters its waiter and rescues an already-delivered event back into the queue (`abandonWaiter`), and an event received after cancellation is parked for `DrainQueued` instead of delivered (`parkResult`) — otherwise the first push after cancel would land in an orphaned waiter and be lost.
+
 ### LLMEvent (interface)
 
 ```go

@@ -102,9 +102,7 @@ func ServeSubcommand(binPath string) {
 	<-sp.done
 
 	status := sp.status
-	sp.meta.Status = status
-	sp.meta.FinishedAt = time.Now().Unix()
-	tui.SaveRunMeta(sp.meta, sp.metaPath)
+	_ = sp.writeFinalMeta()
 
 	// Exit non-zero on failure so callers (e.g. `ai run`) can detect it.
 	if status == tui.StatusFailed {
@@ -132,9 +130,7 @@ func StdioServe(cfg ServeConfig) error {
 
 	<-sp.done
 
-	sp.meta.Status = sp.status
-	sp.meta.FinishedAt = time.Now().Unix()
-	if err := tui.SaveRunMeta(sp.meta, sp.metaPath); err != nil {
+	if err := sp.writeFinalMeta(); err != nil {
 		return fmt.Errorf("save run meta: %w", err)
 	}
 
@@ -193,6 +189,20 @@ func (sp *serveApp) finish(status string) {
 	sp.finished = true
 	sp.status = status
 	close(sp.done)
+}
+
+// writeFinalMeta persists the terminal status to run.json. It reloads the
+// on-disk meta first so fields written after sp was built — notably the
+// session id set by SetRunSession when a session is created or resumed — are
+// not clobbered by the stale in-memory copy.
+func (sp *serveApp) writeFinalMeta() error {
+	meta := sp.meta
+	if loaded, err := tui.LoadRunMeta(sp.metaPath); err == nil {
+		meta = loaded
+	}
+	meta.Status = sp.status
+	meta.FinishedAt = time.Now().Unix()
+	return tui.SaveRunMeta(meta, sp.metaPath)
 }
 
 // Close releases the control connection, hub, socket and log file.

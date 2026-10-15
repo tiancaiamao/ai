@@ -23,15 +23,9 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 **⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。未加载时不要凭猜测操作子 agent。**
 
-## ⛔ CONCURRENCY LIMIT: 最多 2 个子 agent 同时运行
+## ⛔ 并发上限
 
-**主 agent + 子 agent 同时运行总数不得超过 3**（即最多 2 个子 agent）。
-
-原因：LLM 提供商在并发稍高时即触发 rate limit，导致子 agent 卡住或失败。
-
-**规则**：
-- 单次 spawn 上限：2 个子 agent
-- 需要探索 3+ 个目标时，必须分批：先 spawn 2 个 → wait → cleanup → 再 spawn 下一批
+并发上限以 `subagent` 技能为准（**不要在此重复数字**）。需要探索的目标数超过该上限时，必须分批：spawn 一批 → wait → cleanup → 再 spawn 下一批。
 
 **你的角色（调度 agent）**：解析用户意图 → 构造 input → 派生子 agent → 等待 → 汇总结果
 **子 agent 角色（explorer）**：按 `explorer.md` persona 执行实际探索，写入文件
@@ -61,7 +55,7 @@ mkdir -p "$TARGET_PROJECT/explorer"
 | name | `explore-auth` |
 | timeout | `15m` |
 
-**多目标并行探索（最多 2 个 agent 同时）：**
+**多目标并行探索（受 `subagent` 技能并发上限约束）：**
 
 | Agent | system-prompt | input | name | timeout |
 |-------|---------------|-------|------|---------|
@@ -117,7 +111,7 @@ Output an "Architecture Constraints" section with a checklist.
 
 ### 大型仓库
 
-对大型仓库，按模块拆分为多批探索（每批最多 2 个 agent）。每批遵循 `subagent` 技能完整生命周期（Spawn → Watch → Cleanup），然后再 spawn 下一批。
+对大型仓库，按模块拆分为多批探索（每批不超过 `subagent` 技能的并发上限）。每批遵循 `subagent` 技能完整生命周期（Spawn → Watch → Cleanup），然后再 spawn 下一批。
 
 **Batch 示例参数：**
 

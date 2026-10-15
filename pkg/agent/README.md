@@ -107,6 +107,8 @@ for event := range agent.Events() {
 
 The stream supports abort via `Push(agentEndEvent)` and cancellation through context.
 
+When the run's context is canceled mid-stream (steer/abort), `Iterator` returns on `ctx.Done()` while tail events the loop pushed afterwards — the salvaged `aborted` assistant message plus its `turn_end` — are still queued. `processPrompt` therefore calls `stream.WaitDone(eventDrainTimeout)` and processes `stream.DrainQueued()` before exiting, so the aborted message reaches `AgentContext` (and session persistence) instead of being dropped. Drained `agent_end` events are skipped: `abortCurrentStream` already emits its synthetic copy directly (a re-emit would duplicate the subscriber signal) and its pre-salvage snapshot would otherwise wipe a same-drain turn_end writeback; compaction still syncs via `EventCompactionEnd`.
+
 ## Checkpoint Manager
 
 `AgentContextCheckpointManager` integrates with `AgentContext` to write journal entries for session recovery. It tracks turn count and message index to write periodic checkpoints.

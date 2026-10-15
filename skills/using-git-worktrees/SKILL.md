@@ -299,7 +299,7 @@ git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
 ```
 
-用 `subagent` 技能并行 spawn 2 个 agent（注意并发上限），参数：
+用 `subagent` 技能并行 spawn 2 个 agent（并发上限见该技能），参数：
 
 | Agent | system-prompt | input | name | timeout |
 |-------|---------------|-------|------|---------|
