@@ -3,33 +3,146 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
+// retryTestToken marks the context of a retry test so its stub only reacts to
+// its own invocation. Other tests in the package can leave agent loops running
+// that share the package-global streamAssistantResponseFn; without this guard
+// they would inflate the attempt counter.
+type retryTestToken struct{}
+
+// stubStream returns an EventStream suitable for driving
+// streamAssistantResponseWithRetry in tests.
+func stubStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+	return llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
+		func(AgentEvent) bool { return false },
+		func(AgentEvent) []agentctx.AgentMessage { return nil },
+	)
+}
+
+// benignAssistantMsg is returned to unrelated callers so a leftover loop is
+// not disturbed by the test stub.
+func benignAssistantMsg() *agentctx.AgentMessage {
+	msg := agentctx.NewAssistantMessage()
+	msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "ok"}}
+	msg.StopReason = "stop"
+	return &msg
+}
+
+// TestRetryOnReasoningContentRequired verifies a transient reasoning_content
+// 400 (a 4xx that would normally be fatal) is retried and recovers.
+func TestRetryOnReasoningContentRequired(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	token := retryTestToken{}
+	var mu sync.Mutex
+	attempts := 0
+	streamAssistantResponseFn = func(
+		ctx context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		if ctx.Value(token) == nil {
+			return benignAssistantMsg(), nil
+		}
+		mu.Lock()
+		attempts++
+		attempt := attempts
+		mu.Unlock()
+		if attempt == 1 {
+			return nil, &llm.ReasoningContentRequiredError{
+				StatusCode: 400,
+				Message:    "The reasoning_content in the thinking mode must be passed back to the API.",
+			}
+		}
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "recovered"}}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	config := &LoopConfig{MaxLLMRetries: defaultLLMMaxRetries, RetryBaseDelay: defaultRetryBaseDelay}
+	ctx := context.WithValue(context.Background(), token, true)
+	msg, err := streamAssistantResponseWithRetry(ctx, &agentctx.AgentContext{}, config, stubStream())
+	if err != nil {
+		t.Fatalf("expected recovery after retry, got error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts (1 retry), got %d", attempts)
+	}
+	if msg == nil || msg.ExtractText() != "recovered" {
+		t.Fatalf("unexpected message: %+v", msg)
+	}
+}
+
+// TestRetryOnReasoningContentRequiredExhausted verifies the retry budget is
+// bounded (does not loop forever) when the gateway keeps rejecting.
+func TestRetryOnReasoningContentRequiredExhausted(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	token := retryTestToken{}
+	var mu sync.Mutex
+	attempts := 0
+	streamAssistantResponseFn = func(
+		ctx context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		if ctx.Value(token) == nil {
+			return benignAssistantMsg(), nil
+		}
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		return nil, &llm.ReasoningContentRequiredError{StatusCode: 400, Message: "still missing reasoning_content"}
+	}
+
+	config := &LoopConfig{MaxLLMRetries: 0, RetryBaseDelay: defaultRetryBaseDelay}
+	ctx := context.WithValue(context.Background(), token, true)
+	_, err := streamAssistantResponseWithRetry(ctx, &agentctx.AgentContext{}, config, stubStream())
+	if err == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+	want := defaultReasoningContentMaxRetries + 1
+	if attempts != want {
+		t.Fatalf("expected %d attempts, got %d", want, attempts)
+	}
+}
+
 func TestEffectiveMaxRetries(t *testing.T) {
 	tests := []struct {
-		name        string
-		maxRetries  int
-		isRateLimit bool
-		want        int
+		name       string
+		maxRetries int
+		errorType  string
+		want       int
 	}{
-		{"default non-rate-limit", 0, false, 0},
-		{"negative falls back to default", -1, false, defaultLLMMaxRetries},
-		{"explicit non-rate-limit", 3, false, 3},
-		{"rate-limit uses default cap", 0, true, defaultRateLimitMaxRetries},
-		{"rate-limit config exceeds cap", 12, true, 12},
-		{"rate-limit config below cap", 2, true, defaultRateLimitMaxRetries},
+		{"default non-rate-limit", 0, llmErrorTypeClient, 0},
+		{"negative falls back to default", -1, llmErrorTypeClient, defaultLLMMaxRetries},
+		{"explicit non-rate-limit", 3, llmErrorTypeClient, 3},
+		{"rate-limit uses default cap", 0, llmErrorTypeRateLimit, defaultRateLimitMaxRetries},
+		{"rate-limit config exceeds cap", 12, llmErrorTypeRateLimit, 12},
+		{"rate-limit config below cap", 2, llmErrorTypeRateLimit, defaultRateLimitMaxRetries},
+		{"reasoning-content uses default cap", 0, llmErrorTypeReasoningContent, defaultReasoningContentMaxRetries},
+		{"reasoning-content config below cap", 1, llmErrorTypeReasoningContent, defaultReasoningContentMaxRetries},
+		{"reasoning-content config exceeds cap", 5, llmErrorTypeReasoningContent, 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &LoopConfig{MaxLLMRetries: tt.maxRetries}
-			got := effectiveMaxRetries(cfg, tt.isRateLimit)
+			got := effectiveMaxRetries(cfg, tt.errorType)
 			if got != tt.want {
-				t.Errorf("effectiveMaxRetries(%d, %v) = %d, want %d",
-					tt.maxRetries, tt.isRateLimit, got, tt.want)
+				t.Errorf("effectiveMaxRetries(%d, %q) = %d, want %d",
+					tt.maxRetries, tt.errorType, got, tt.want)
 			}
 		})
 	}
@@ -105,6 +218,19 @@ func TestClassifyLLMError(t *testing.T) {
 		t.Errorf("context limit meta = %+v", meta)
 	}
 
+	// Reasoning-content-required gateway rejection (a 400 that is retried).
+	meta = classifyLLMError(&llm.ReasoningContentRequiredError{StatusCode: 400, Message: "The reasoning_content in the thinking mode must be passed back to the API."})
+	if meta.ErrorType != llmErrorTypeReasoningContent || meta.StatusCode != 400 {
+		t.Errorf("reasoning-content meta = %+v", meta)
+	}
+
+	// A wrapped/plain-string reasoning_content error (no typed wrapper) must
+	// still classify as the dedicated type via the message fallback.
+	meta = classifyLLMError(errors.New("API error (400): The reasoning_content in the thinking mode must be passed back to the API."))
+	if meta.ErrorType != llmErrorTypeReasoningContent {
+		t.Errorf("wrapped reasoning-content meta = %+v", meta)
+	}
+
 	// Server error.
 	meta = classifyLLMError(&llm.APIError{StatusCode: 503, Message: "unavailable"})
 	if meta.ErrorType != llmErrorTypeServer || meta.StatusCode != 503 {
@@ -157,6 +283,11 @@ func TestShouldRetryLLMError(t *testing.T) {
 	}
 	if !shouldRetryLLMError(&llm.APIError{StatusCode: 500}) {
 		t.Error("5xx server error should retry")
+	}
+	// The reasoning_content 400 is a transient gateway condition and must retry
+	// even though it is a 4xx.
+	if !shouldRetryLLMError(&llm.ReasoningContentRequiredError{StatusCode: 400}) {
+		t.Error("reasoning_content-required 400 should retry")
 	}
 	if !shouldRetryLLMError(errors.New("some transient failure")) {
 		t.Error("generic error should retry")

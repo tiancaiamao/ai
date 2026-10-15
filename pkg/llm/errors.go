@@ -66,6 +66,59 @@ func (e *RateLimitError) Error() string {
 	return "API error: " + msg
 }
 
+// ReasoningContentRequiredError indicates the provider rejected the request
+// because an assistant turn in the conversation is missing the
+// reasoning_content its thinking mode requires to be echoed back. In practice
+// this is a transient, gateway-side condition: identical request shapes are
+// normally accepted, so callers should treat it as retryable rather than fatal.
+type ReasoningContentRequiredError struct {
+	StatusCode int
+	Message    string
+	Body       string
+}
+
+func (e *ReasoningContentRequiredError) Error() string {
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		msg = "reasoning_content must be passed back to the API"
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("API error (%d): %s", e.StatusCode, msg)
+	}
+	return "API error: " + msg
+}
+
+// IsReasoningContentRequired reports whether err is a provider rejection caused
+// by a missing reasoning_content field that the thinking mode requires.
+func IsReasoningContentRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	var rce *ReasoningContentRequiredError
+	if errors.As(err, &rce) {
+		return true
+	}
+	return looksLikeReasoningContentRequired(err.Error())
+}
+
+func looksLikeReasoningContentRequired(s string) bool {
+	lower := strings.ToLower(s)
+	if !strings.Contains(lower, "reasoning_content") {
+		return false
+	}
+	// Primary transient phrasing: the turn's reasoning_content was not echoed
+	// back and must be "passed back" on the next request.
+	if strings.Contains(lower, "passed back") {
+		return true
+	}
+	// Broader "thinking mode" phrasing, but never the unrelated, permanent
+	// "non-thinking mode" rejection (which is fatal, not transient).
+	if strings.Contains(lower, "non-thinking") || strings.Contains(lower, "non thinking") {
+		return false
+	}
+	return strings.Contains(lower, "thinking mode")
+}
+
 // ClassifyAPIError converts an API response payload into a typed error.
 func ClassifyAPIError(statusCode int, payload string) error {
 	return ClassifyAPIErrorWithRetryAfter(statusCode, payload, 0)
@@ -97,6 +150,14 @@ func ClassifyAPIErrorWithRetryAfter(statusCode int, payload string, retryAfter t
 			Message:    message,
 			Body:       payload,
 			RetryAfter: retryAfter,
+		}
+	}
+
+	if looksLikeReasoningContentRequired(message) || looksLikeReasoningContentRequired(payload) {
+		return &ReasoningContentRequiredError{
+			StatusCode: statusCode,
+			Message:    message,
+			Body:       payload,
 		}
 	}
 

@@ -14,8 +14,12 @@ import (
 const (
 	defaultLLMMaxRetries       = 1
 	defaultRateLimitMaxRetries = 8 // More retries for rate limit errors
-	defaultRetryBaseDelay      = 1 * time.Second
-	defaultRateLimitBaseDelay  = 3 * time.Second // Longer base delay for rate limit
+	// defaultReasoningContentMaxRetries covers the transient, gateway-side
+	// "reasoning_content must be passed back" 400. It is normally accepted on a
+	// fresh attempt, so a couple of quick retries clear it without long backoff.
+	defaultReasoningContentMaxRetries = 2
+	defaultRetryBaseDelay             = 1 * time.Second
+	defaultRateLimitBaseDelay         = 3 * time.Second // Longer base delay for rate limit
 )
 
 type llmAttemptKeyType struct{}
@@ -39,6 +43,11 @@ func shouldRetryLLMError(err error) bool {
 	}
 	if llm.IsContextLengthExceeded(err) {
 		return false
+	}
+	if llm.IsReasoningContentRequired(err) {
+		// Transient gateway condition: the same request is normally accepted on
+		// a fresh attempt, so retry it even though it surfaces as a 400.
+		return true
 	}
 	if llm.IsRateLimit(err) {
 		return true
@@ -89,6 +98,13 @@ func classifyLLMError(err error) llmErrorMeta {
 		return meta
 	}
 
+	var rcErr *llm.ReasoningContentRequiredError
+	if errors.As(err, &rcErr) {
+		meta.ErrorType = llmErrorTypeReasoningContent
+		meta.StatusCode = rcErr.StatusCode
+		return meta
+	}
+
 	var ctxErr *llm.ContextLengthExceededError
 	if errors.As(err, &ctxErr) {
 		meta.ErrorType = llmErrorTypeContextLimit
@@ -119,6 +135,9 @@ func classifyLLMError(err error) llmErrorMeta {
 			meta.RetryAfter = llm.RetryAfter(err)
 		}
 	}
+	if llm.IsReasoningContentRequired(err) {
+		meta.ErrorType = llmErrorTypeReasoningContent
+	}
 	if llm.IsContextLengthExceeded(err) {
 		meta.ErrorType = llmErrorTypeContextLimit
 	}
@@ -131,18 +150,24 @@ func classifyLLMError(err error) llmErrorMeta {
 
 // effectiveMaxRetries returns the maximum number of retry attempts for the
 // given configuration and error type. Rate-limit errors are allowed more
-// retries than other transient errors.
-func effectiveMaxRetries(config *LoopConfig, isRateLimit bool) int {
+// retries than other transient errors; the transient reasoning_content
+// gateway rejection gets a small dedicated budget.
+func effectiveMaxRetries(config *LoopConfig, errorType string) int {
 	maxRetries := config.MaxLLMRetries
 	if maxRetries < 0 {
 		maxRetries = defaultLLMMaxRetries
 	}
-	if isRateLimit {
-		rlMax := defaultRateLimitMaxRetries
+	switch errorType {
+	case llmErrorTypeRateLimit:
 		if config.MaxLLMRetries > defaultRateLimitMaxRetries {
-			rlMax = config.MaxLLMRetries
+			return config.MaxLLMRetries
 		}
-		return rlMax
+		return defaultRateLimitMaxRetries
+	case llmErrorTypeReasoningContent:
+		if config.MaxLLMRetries > defaultReasoningContentMaxRetries {
+			return config.MaxLLMRetries
+		}
+		return defaultReasoningContentMaxRetries
 	}
 	return maxRetries
 }
@@ -209,7 +234,7 @@ func streamAssistantResponseWithRetry(
 		// Before each call (except the first), decide whether to retry.
 		if attempt > 0 {
 			meta := classifyLLMError(lastErr)
-			maxRetries := effectiveMaxRetries(config, meta.ErrorType == llmErrorTypeRateLimit)
+			maxRetries := effectiveMaxRetries(config, meta.ErrorType)
 
 			if attempt > maxRetries {
 				// All retries exhausted

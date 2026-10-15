@@ -11,6 +11,10 @@ const (
 	llmErrorTypeClient       = "client"
 	llmErrorTypeCanceled     = "canceled"
 	llmErrorTypeUnknown      = "unknown"
+	// llmErrorTypeReasoningContent is a transient gateway condition where a
+	// thinking-mode turn's reasoning_content was not echoed back. It surfaces as
+	// a 400 but is normally accepted on a fresh attempt, so it is retryable.
+	llmErrorTypeReasoningContent = "reasoning_content"
 )
 
 func inferLLMErrorTypeFromMessage(message string) string {
