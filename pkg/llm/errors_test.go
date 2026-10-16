@@ -32,6 +32,47 @@ func TestClassifyAPIErrorGeneric(t *testing.T) {
 	}
 }
 
+func TestClassifyAPIErrorReasoningContent(t *testing.T) {
+	// The exact opencode/deepseek rejection shape.
+	payload := `{"type":"error","error":{"type":"BadRequest","message":"The reasoning_content in the thinking mode must be passed back to the API."}}`
+	err := ClassifyAPIError(400, payload)
+
+	var rce *ReasoningContentRequiredError
+	if !errors.As(err, &rce) {
+		t.Fatalf("expected ReasoningContentRequiredError, got %T (%v)", err, err)
+	}
+	if rce.StatusCode != 400 {
+		t.Fatalf("expected status 400, got %d", rce.StatusCode)
+	}
+	if !IsReasoningContentRequired(err) {
+		t.Fatal("IsReasoningContentRequired = false, want true")
+	}
+
+	// A generic 400 must NOT be misclassified.
+	generic := ClassifyAPIError(400, `{"error":{"message":"bad request: invalid tool schema"}}`)
+	var apiErr *APIError
+	if !errors.As(generic, &apiErr) {
+		t.Fatalf("generic 400 should stay APIError, got %T", generic)
+	}
+	if IsReasoningContentRequired(generic) {
+		t.Fatal("generic 400 wrongly flagged as reasoning_content required")
+	}
+
+	// Plain error strings (e.g. wrapped) are detected by message.
+	if !IsReasoningContentRequired(errors.New("API error (400): The reasoning_content in the thinking mode must be passed back to the API.")) {
+		t.Fatal("wrapped reasoning_content message not detected")
+	}
+	if IsReasoningContentRequired(nil) {
+		t.Fatal("nil should not be reasoning_content required")
+	}
+
+	// A permanent "non-thinking mode" rejection contains the substring
+	// "thinking mode" but must NOT be treated as the transient condition.
+	if IsReasoningContentRequired(errors.New("API error (400): reasoning_content is not supported in non-thinking mode")) {
+		t.Fatal("non-thinking-mode rejection wrongly flagged as retryable")
+	}
+}
+
 func TestIsContextLengthStopReason(t *testing.T) {
 	tests := []struct {
 		name       string
