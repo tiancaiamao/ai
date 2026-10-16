@@ -99,6 +99,28 @@ def clean_srt(content: str) -> str:
     return '\n'.join(text_lines)
 
 
+def _check_yt_dlp_version() -> None:
+    """Warn when yt-dlp is too old to bind PO tokens to timedtext requests.
+
+    Old yt-dlp (<= 2026.03) silently fails on PO-gated auto-captions: the
+    timedtext request returns empty bodies / 429-looking responses even when
+    a PO token provider is configured. Warn up front instead of chasing
+    phantom IP blocks.
+    """
+    try:
+        out = subprocess.run(["yt-dlp", "--version", "--no-update"],
+                             capture_output=True, text=True, timeout=15)
+        ver = out.stdout.strip()
+        m = re.match(r"(\d{4})\.(\d{2})\.(\d{2})", ver)
+        if m and tuple(map(int, m.groups())) < (2026, 8, 1):
+            print(f"# WARNING: yt-dlp {ver} is too old for PO-bound caption "
+                  f"requests; subtitles may silently fail. Upgrade:\n"
+                  f"#   python3 -m pip install -U --ignore-installed yt-dlp "
+                  f"(into the same env as your yt-dlp)", file=sys.stderr)
+    except Exception:
+        pass
+
+
 def find_pot_repo() -> str | None:
     """Locate a built bgutil-ytdlp-pot-provider checkout for YouTube auto-captions.
 
@@ -256,9 +278,13 @@ def get_transcript(url: str, language: str | None = None, proxy: str | None = No
         if proxy:
             print(f"# Auto-detected proxy: {proxy}", file=sys.stderr)
 
-    pot_repo = find_pot_repo() if platform == 'youtube' else None
+        pot_repo = find_pot_repo() if platform == 'youtube' else None
     if pot_repo:
         print(f"# PO token provider: {pot_repo}", file=sys.stderr)
+
+    if platform == 'youtube':
+        _check_yt_dlp_version()
+
 
     effective_cookies = cookies_from_browser
 

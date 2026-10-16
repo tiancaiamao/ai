@@ -110,7 +110,12 @@ python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL" --cookies-from-browser s
 
 ## Notes
 
-- Requires `yt-dlp` in PATH
+- Requires `yt-dlp` in PATH — **version >= 2026.08** for YouTube auto-captions.
+  Older versions don't bind the PO token to timedtext requests and fail
+  *silently* (empty bodies / fake 429s), which looks like an IP block but isn't.
+  Upgrade into the same env your `yt-dlp` lives in, e.g. for a Homebrew install:
+  `<libexec>/bin/python -m pip install -U --ignore-installed yt-dlp`.
+  Note: `brew upgrade yt-dlp` may reinstall an older formula and undo this.
 - YouTube: auto proxy + auto cookie retry + auto language fallback — just pass the URL
 - YouTube auto-captions gated by a PO token: run `scripts/setup_pot.sh` once (see above)
 - If all retries fail, error message lists available subtitle languages so you can retry with `--lang`

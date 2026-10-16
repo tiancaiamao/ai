@@ -1,6 +1,6 @@
 ---
 name: todo-writer
-description: >
+description:
   任务规划与进度追踪。当任务有 5+ 步骤、多文件改动、或长执行链时使用。
   核心机制：用 checkbox 列表追踪进度，每完成一步立即更新，利用"重写列表"将完整任务清单重新注入 context。
 ---
