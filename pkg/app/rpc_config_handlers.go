@@ -108,6 +108,7 @@ func (app *App) handleModelSet(args string) (any, error) {
 		MaxTokens:        spec.MaxTokens,
 		Reasoning:        spec.Reasoning,
 		ReasoningEfforts: spec.ReasoningEfforts,
+		ReasoningContext: spec.ReasoningContext,
 		RequireReasoning: spec.RequireReasoning,
 		SupportsVision:   spec.SupportsVision,
 	}
