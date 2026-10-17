@@ -1,6 +1,7 @@
 package models
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +21,10 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	done := make(chan string, 1)
 	go func() {
-		buf := make([]byte, 8192)
-		n, _ := r.Read(buf)
-		done <- string(buf[:n])
+		// Read until EOF: printModelTable issues one Println per line, so a
+		// single Read would return after the first lines and truncate the rest.
+		buf, _ := io.ReadAll(r)
+		done <- string(buf)
 	}()
 
 	fn()
