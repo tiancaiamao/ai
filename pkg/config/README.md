@@ -89,9 +89,10 @@ exchange.
 
 `RequireReasoning` comes from `models.json`'s per-model `"requireReasoning"`, and
 defaults to true for DeepSeek-family model ids (id contains `deepseek`) — matching
-opencode's compatibility default. It keys off the model id, never the provider
-name, so renaming a provider does not change behavior. Set it explicitly to opt
-a non-DeepSeek model in, or a DeepSeek-id model out.
+opencode's compatibility default. The default also applies when the spec is built
+from `config.json` alone (no matching `models.json` entry). It keys off the model
+id, never the provider name, so renaming a provider does not change behavior. Set
+it explicitly to opt a non-DeepSeek model in, or a DeepSeek-id model out.
 
 ## Compaction Configuration
 

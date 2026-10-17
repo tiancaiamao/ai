@@ -143,6 +143,13 @@ func requireReasoningFor(model modelConfig, id string) bool {
 	if model.RequireReasoning != nil {
 		return *model.RequireReasoning
 	}
+	return requireReasoningDefault(id)
+}
+
+// requireReasoningDefault is the id-based default, applied where no explicit
+// per-model setting exists (a modelConfig without "requireReasoning", or a spec
+// built from config.json alone).
+func requireReasoningDefault(id string) bool {
 	return strings.Contains(strings.ToLower(id), "deepseek")
 }
 

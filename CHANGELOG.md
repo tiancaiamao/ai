@@ -10,7 +10,9 @@ message for models flagged `RequireReasoning` — an empty string when the turn
 produced no thinking. New per-model `llm.Model.RequireReasoning`, resolved in
 `models.json` by a new `"requireReasoning"` key and defaulted to true by
 `config.requireReasoningFor` for DeepSeek-family model ids (id contains
-`deepseek`). `config.ApplyModelLimitsFromSpec` propagates the flag, and the
+`deepseek`) — via `config.requireReasoningDefault`, which also covers the
+config.json-only fallback spec (`ModelSpecFromConfig`), where no per-model
+setting exists. `config.ApplyModelLimitsFromSpec` propagates the flag, and the
 `model.set` path applies it alongside the other spec fields.
 `LLMMessage.MarshalJSON` serializes `reasoning_content` through a `*string` so an
 explicitly empty value survives `omitempty`, gated by the new

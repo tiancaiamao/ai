@@ -44,6 +44,9 @@ func ModelSpecFromConfig(cfg *Config) ModelSpec {
 		Proxy:     cfg.Model.Proxy,
 		Input:     []string{"text"},
 		MaxTokens: cfg.Model.MaxTokens,
+		// No models.json entry backs this spec, so there is no per-model
+		// "requireReasoning" to honor — fall back to the id-based default.
+		RequireReasoning: requireReasoningDefault(cfg.Model.ID),
 	}
 }
 

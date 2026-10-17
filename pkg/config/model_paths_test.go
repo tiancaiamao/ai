@@ -293,3 +293,38 @@ func TestApplyModelOverride_RealFile(t *testing.T) {
 		t.Errorf("BaseURL = %q", cfg.Model.BaseURL)
 	}
 }
+
+func TestResolveModel_RequireReasoningDefaultOnConfigFallback(t *testing.T) {
+	// No models.json in play: the spec comes from config.json alone, and the
+	// DeepSeek-family id default must still reach the resolved model so its
+	// requests carry reasoning_content.
+	t.Setenv("AI_MODELS_PATH", filepath.Join(t.TempDir(), "missing.json"))
+
+	cfg := &Config{Model: ModelConfig{
+		ID:       "deepseek-v4.1-flash",
+		Provider: "custom-gateway",
+		BaseURL:  "https://example.test/v1",
+		API:      "openai-completions",
+	}}
+	model, spec, err := ResolveModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveModel error: %v", err)
+	}
+	if !spec.RequireReasoning {
+		t.Error("fallback spec.RequireReasoning = false, want true for a deepseek id")
+	}
+	if !model.RequireReasoning {
+		t.Error("model.RequireReasoning = false, want it propagated from the fallback spec")
+	}
+
+	// A non-DeepSeek id on the same path stays off.
+	cfg.Model.ID = "custom-model"
+	model, spec, err = ResolveModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveModel error: %v", err)
+	}
+	if spec.RequireReasoning || model.RequireReasoning {
+		t.Errorf("RequireReasoning = %v/%v, want false for a non-deepseek id",
+			spec.RequireReasoning, model.RequireReasoning)
+	}
+}
