@@ -77,6 +77,39 @@ func TestLLMMessageMarshalJSONWithoutThinking(t *testing.T) {
 	}
 }
 
+func TestLLMMessageMarshalJSONForceReasoningContent(t *testing.T) {
+	// With ForceReasoningContent, empty Thinking still emits the field as an
+	// empty string: upstreams that require it on every assistant message must
+	// see the key, not an omission.
+	msg := LLMMessage{Role: "assistant", ForceReasoningContent: true}
+
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal to map failed: %v", err)
+	}
+	rc, ok := parsed["reasoning_content"]
+	if !ok {
+		t.Fatalf("expected reasoning_content field, got: %s", raw)
+	}
+	if string(rc) != `""` {
+		t.Fatalf("reasoning_content = %s, want empty string", rc)
+	}
+
+	// Without the flag the field stays omitted (unchanged behavior).
+	msg.ForceReasoningContent = false
+	raw, err = json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if strings.Contains(string(raw), "reasoning_content") {
+		t.Fatalf("expected reasoning_content omitted, got: %s", raw)
+	}
+}
+
 func TestLLMMessageMarshalJSONToolResult(t *testing.T) {
 	msg := LLMMessage{
 		Role:       "tool",

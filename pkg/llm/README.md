@@ -22,6 +22,7 @@ type Model struct {
     SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
     ReasoningEfforts []string  `json:"-"`                        // Supported reasoning_effort values (from models.json "reasoningEfforts")
     ReasoningContext string    `json:"-"`                        // reasoning.context value required by the gateway (from models.json "reasoningContext")
+    RequireReasoning bool      `json:"-"`                        // every assistant message must carry "reasoning_content", even empty (from models.json "requireReasoning")
 }
 ```
 
@@ -32,6 +33,15 @@ type Model struct {
 on every request (both Chat Completions and Responses paths). Gateways that
 wrap requests in Codex Responses Lite reject requests without it. It is never
 inferred from the provider name — renaming a provider must not change behavior.
+
+`RequireReasoning` makes every assistant message carry `reasoning_content` — an
+empty string when a turn produced no thinking. DeepSeek-family upstreams reject
+a conversation in which some assistant messages omit the field while others
+carry it, so omitting it on tool-call rounds is a latent 400. `MarshalJSON`
+emits the field when either `Thinking` is non-empty or the message's
+`ForceReasoningContent` flag is set; `StreamLLM` sets that flag on assistant
+messages when `Model.RequireReasoning` is true. The flag is resolved per-model in
+`models.json` (`"requireReasoning"`); DeepSeek-family model ids default to true.
 
 ### LLMContext
 

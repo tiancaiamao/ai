@@ -300,3 +300,19 @@ func TestFindModelSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestModelSpecFromConfigRequireReasoning(t *testing.T) {
+	// The config.json-only spec has no models.json entry behind it, so the
+	// DeepSeek-family id default is the only rule that can apply.
+	cases := map[string]bool{
+		"deepseek-v4.1-flash":      true,
+		"deepseek/deepseek-v4-pro": true,
+		"gpt-4o-mini":              false,
+	}
+	for id, want := range cases {
+		spec := ModelSpecFromConfig(&Config{Model: ModelConfig{ID: id}})
+		if spec.RequireReasoning != want {
+			t.Errorf("%s: RequireReasoning = %v, want %v", id, spec.RequireReasoning, want)
+		}
+	}
+}

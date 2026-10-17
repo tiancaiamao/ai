@@ -63,16 +63,20 @@ Model definitions are loaded from `~/.ai/models.json` via `ModelSpec`:
 
 ```go
 type ModelSpec struct {
-    ID            string
-    Name          string
-    Provider      string
-    BaseURL       string
-    API           string
-    Proxy         string
-    Reasoning     bool
-    Input         []string
-    ContextWindow int
-    MaxTokens     int
+    ID               string
+    Name             string
+    Provider         string
+    BaseURL          string
+    API              string
+    Proxy            string
+    Reasoning        bool
+    ReasoningEfforts []string // supported reasoning_effort values; empty = unrestricted
+    ReasoningContext string   // reasoning.context value the gateway requires; empty = not required
+    RequireReasoning bool     // upstream requires "reasoning_content" on every assistant message
+    Input            []string
+    ContextWindow    int
+    MaxTokens        int
+    SupportsVision   bool // true when Input includes image/vision
 }
 ```
 
@@ -82,6 +86,13 @@ its environment-based proxy fallback when no model proxy is configured; other
 model paths use a direct connection. The `ai login-codex` OAuth flow is
 separate and may use `ALL_PROXY`, `HTTPS_PROXY`, or `HTTP_PROXY` for its token
 exchange.
+
+`RequireReasoning` comes from `models.json`'s per-model `"requireReasoning"`, and
+defaults to true for DeepSeek-family model ids (id contains `deepseek`) — matching
+opencode's compatibility default. The default also applies when the spec is built
+from `config.json` alone (no matching `models.json` entry). It keys off the model
+id, never the provider name, so renaming a provider does not change behavior. Set
+it explicitly to opt a non-DeepSeek model in, or a DeepSeek-id model out.
 
 ## Compaction Configuration
 

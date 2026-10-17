@@ -87,6 +87,69 @@ func TestLoadModelSpecsReasoningContext(t *testing.T) {
 	}
 }
 
+func TestLoadModelSpecsRequireReasoning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "any-gateway": {
+      "models": [
+        { "id": "deepseek-v4.1-flash" },
+        { "id": "deepseek/deepseek-v4-pro" },
+        { "id": "gpt-4o-mini" },
+        { "id": "glm-5", "requireReasoning": true },
+        { "id": "deepseek-custom", "requireReasoning": false }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs error: %v", err)
+	}
+	byID := map[string]ModelSpec{}
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+	// DeepSeek-family ids default to requiring the field, regardless of the
+	// provider they are registered under.
+	for _, id := range []string{"deepseek-v4.1-flash", "deepseek/deepseek-v4-pro"} {
+		if !byID[id].RequireReasoning {
+			t.Errorf("%s.RequireReasoning = false, want true", id)
+		}
+	}
+	// Non-DeepSeek ids stay off unless declared.
+	if byID["gpt-4o-mini"].RequireReasoning {
+		t.Error("gpt-4o-mini.RequireReasoning = true, want false")
+	}
+	// An explicit true turns it on for any model.
+	if !byID["glm-5"].RequireReasoning {
+		t.Error("glm-5.RequireReasoning = false, want true (explicit)")
+	}
+	// An explicit false overrides the DeepSeek default.
+	if byID["deepseek-custom"].RequireReasoning {
+		t.Error("deepseek-custom.RequireReasoning = true, want false (explicit override)")
+	}
+}
+
+func TestApplyModelLimitsFromSpec_RequireReasoning(t *testing.T) {
+	got := ApplyModelLimitsFromSpec(
+		llm.Model{ID: "deepseek-v4.1-flash"},
+		ModelSpec{RequireReasoning: true},
+	)
+	if !got.RequireReasoning {
+		t.Error("RequireReasoning = false, want true")
+	}
+	got = ApplyModelLimitsFromSpec(llm.Model{ID: "plain"}, ModelSpec{RequireReasoning: false})
+	if got.RequireReasoning {
+		t.Error("RequireReasoning = true, want false")
+	}
+}
+
 func TestApplyModelLimitsFromSpec_ReasoningContext(t *testing.T) {
 	got := ApplyModelLimitsFromSpec(
 		llm.Model{ID: "gpt-5.6-luna", Provider: "whatever"},
