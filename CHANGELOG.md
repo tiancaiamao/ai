@@ -3,6 +3,37 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Assistant messages carry `reasoning_content` for models that require it (2026-10)
+
+**What changed**: Requests now include `"reasoning_content"` on *every* assistant
+message for models flagged `RequireReasoning` — an empty string when the turn
+produced no thinking. New per-model `llm.Model.RequireReasoning`, resolved in
+`models.json` by a new `"requireReasoning"` key and defaulted to true by
+`config.requireReasoningFor` for DeepSeek-family model ids (id contains
+`deepseek`). `config.ApplyModelLimitsFromSpec` propagates the flag, and the
+`model.set` path applies it alongside the other spec fields.
+`LLMMessage.MarshalJSON` serializes `reasoning_content` through a `*string` so an
+explicitly empty value survives `omitempty`, gated by the new
+`LLMMessage.ForceReasoningContent`; `StreamLLM` sets that flag on assistant
+messages for `RequireReasoning` models, on a copy so the caller's message slice
+is never mutated.
+
+**Why**: The client omitted `reasoning_content` whenever a round produced no
+thinking, so a conversation reached the upstream with the field present on
+thinking rounds and absent on tool-call rounds. Our original failure was a
+`400 ... [invalid_request_error] The reasoning_content in the thinking mode must
+be passed back to the API.` on `opencode/deepseek-v4.1-flash`; the upstream
+enforces this intermittently (we could not reproduce the 400 on demand, including
+with the mixed shape), but the omission is the one thing our requests did
+differently from opencode, which never omits the field. opencode models this as
+the same compatibility flag — `requireReasoning`, defaulted true for ids
+containing `deepseek`, asserted in its tests as `reasoning_content: ""` on an
+empty-reasoning assistant message. Keeping the default to the model id rather
+than the provider name is deliberate: it mirrors the existing
+`ReasoningContext` capability, and renaming a provider must not change behavior.
+The flag is gated on `Model.RequireReasoning` rather than the broader
+`Model.Reasoning`, since only the DeepSeek family is known to require the field.
+
 ## Steering keeps the aborted turn's partial thinking (2026-10)
 
 **What changed**: `processPrompt` no longer abandons the event queue when the

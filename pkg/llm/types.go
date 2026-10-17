@@ -27,6 +27,13 @@ type Model struct {
 	// request (from models.json "reasoningContext", e.g. "all_turns"). Some
 	// gateways (e.g. Codex Responses Lite) reject requests without it.
 	ReasoningContext string `json:"-"`
+	// RequireReasoning, when set, makes every assistant message carry a
+	// "reasoning_content" field — an empty string when the turn produced no
+	// thinking. DeepSeek-family upstreams reject a conversation in which some
+	// assistant messages omit the field while others carry it (opencode models
+	// this as the compatibility flag "requireReasoning"). Resolved per-model
+	// from models.json; see pkg/config/models.go.
+	RequireReasoning bool `json:"-"`
 }
 
 // LLMContext represents the context for an LLM request.
@@ -46,19 +53,28 @@ type LLMMessage struct {
 	Thinking     string        `json:"-"`    // Thinking/reasoning content (separate from main content)
 	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID   string        `json:"tool_call_id,omitempty"`
+	// ForceReasoningContent makes MarshalJSON emit "reasoning_content" even
+	// when Thinking is empty. The request builder sets it for models whose
+	// upstream requires the field on every assistant message (see
+	// Model.RequireReasoning).
+	ForceReasoningContent bool `json:"-"`
 }
 
 // MarshalJSON custom marshaling for LLMMessage to handle both Content and ContentParts.
 // For reasoning models (e.g. DeepSeek), the Thinking field is serialized as
 // "reasoning_content" at the same level as "content", so providers that require
 // it can receive it in the format they expect. Providers that don't understand
-// this field will simply ignore it.
+// this field will simply ignore it. When ForceReasoningContent is set, the
+// field is emitted even for empty Thinking (an empty string), matching upstreams
+// that require it on every assistant message.
 func (m LLMMessage) MarshalJSON() ([]byte, error) {
-	// Build a map for JSON serialization
+	// Build a map for JSON serialization.
+	// ReasoningContent is a pointer so an explicitly empty value survives
+	// "omitempty" (a nil pointer is omitted; a pointer to "" is emitted).
 	type Alias LLMMessage
 	tmp := struct {
 		Content          interface{} `json:"content,omitempty"`
-		ReasoningContent string      `json:"reasoning_content,omitempty"`
+		ReasoningContent *string     `json:"reasoning_content,omitempty"`
 		Alias
 	}{
 		Alias: (Alias)(m),
@@ -83,8 +99,13 @@ func (m LLMMessage) MarshalJSON() ([]byte, error) {
 	}
 
 	// Serialize thinking content as reasoning_content (required by DeepSeek
-	// and other reasoning models for tool-call rounds).
-	tmp.ReasoningContent = m.Thinking
+	// and other reasoning models for tool-call rounds). Providers that require
+	// the field on every assistant message get an empty string when the turn
+	// produced no thinking.
+	if m.Thinking != "" || m.ForceReasoningContent {
+		reasoning := m.Thinking
+		tmp.ReasoningContent = &reasoning
+	}
 
 	return json.Marshal(tmp)
 }

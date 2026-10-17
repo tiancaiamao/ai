@@ -20,6 +20,10 @@ type ModelSpec struct {
 	Reasoning        bool
 	ReasoningEfforts []string // supported reasoning_effort values; empty = unrestricted
 	ReasoningContext string   // reasoning.context value required by the gateway (e.g. "all_turns"); empty = not required
+	// RequireReasoning marks models whose upstream requires a "reasoning_content"
+	// field on every assistant message, even empty. Explicit "requireReasoning"
+	// in models.json wins; otherwise DeepSeek-family model ids default to true.
+	RequireReasoning bool
 	Input            []string
 	ContextWindow    int
 	MaxTokens        int
@@ -45,6 +49,7 @@ type modelConfig struct {
 	Reasoning        bool     `json:"reasoning,omitempty"`
 	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
 	ReasoningContext string   `json:"reasoningContext,omitempty"`
+	RequireReasoning *bool    `json:"requireReasoning,omitempty"`
 	Input            []string `json:"input,omitempty"`
 	ContextWindow    int      `json:"contextWindow,omitempty"`
 	MaxTokens        int      `json:"maxTokens,omitempty"`
@@ -107,6 +112,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				Reasoning:        model.Reasoning,
 				ReasoningEfforts: model.ReasoningEfforts,
 				ReasoningContext: model.ReasoningContext,
+				RequireReasoning: requireReasoningFor(model, id),
 				Input:            model.Input,
 				ContextWindow:    model.ContextWindow,
 				MaxTokens:        model.MaxTokens,
@@ -124,6 +130,20 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 	})
 
 	return specs, nil
+}
+
+// requireReasoningFor decides whether every assistant message must carry a
+// "reasoning_content" field. An explicit "requireReasoning" in models.json
+// wins; otherwise DeepSeek-family model ids default to true, mirroring
+// opencode's compatibility default (its openai-chat protocol enables
+// requireReasoning for any model whose id contains "deepseek"). The rule keys
+// off the model id, never the provider name, so renaming a provider does not
+// change behavior.
+func requireReasoningFor(model modelConfig, id string) bool {
+	if model.RequireReasoning != nil {
+		return *model.RequireReasoning
+	}
+	return strings.Contains(strings.ToLower(id), "deepseek")
 }
 
 func firstNonEmpty(values ...string) string {

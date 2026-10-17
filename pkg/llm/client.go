@@ -83,6 +83,22 @@ func StreamLLM(
 			messages = append([]LLMMessage{systemMsg}, llmCtx.Messages...)
 		}
 
+		// Some upstreams (DeepSeek-family) require "reasoning_content" on
+		// every assistant message, even when a turn produced no thinking.
+		// Emit an empty field for those rather than omitting it, matching
+		// opencode's compatibility.requireReasoning. Copy before tagging so
+		// we never mutate the caller's slice.
+		if model.RequireReasoning {
+			tagged := make([]LLMMessage, len(messages))
+			copy(tagged, messages)
+			for i := range tagged {
+				if tagged[i].Role == "assistant" {
+					tagged[i].ForceReasoningContent = true
+				}
+			}
+			messages = tagged
+		}
+
 		// Build request body
 		reqBody := map[string]any{
 			"model":    model.ID,

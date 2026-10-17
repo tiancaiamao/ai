@@ -108,6 +108,7 @@ func (app *App) handleModelSet(args string) (any, error) {
 		MaxTokens:        spec.MaxTokens,
 		Reasoning:        spec.Reasoning,
 		ReasoningEfforts: spec.ReasoningEfforts,
+		RequireReasoning: spec.RequireReasoning,
 		SupportsVision:   spec.SupportsVision,
 	}
 	app.apiKey = newAPIKey

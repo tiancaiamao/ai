@@ -512,6 +512,72 @@ func TestStreamLLMOmitsReasoningContextByDefault(t *testing.T) {
 	}
 }
 
+func TestStreamLLMForcesReasoningContentOnAssistantMessages(t *testing.T) {
+	// DeepSeek-family upstreams require "reasoning_content" on every assistant
+	// message, even when a turn produced no thinking (opencode's
+	// compatibility.requireReasoning). The requirement is a model fact, driven
+	// here by Model.RequireReasoning — not by the provider name.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		rawMsgs, _ := body["messages"].([]any)
+		if len(rawMsgs) != 3 {
+			t.Errorf("got %d messages, want 3: %#v", len(rawMsgs), rawMsgs)
+		} else {
+			if user, ok := rawMsgs[0].(map[string]any); ok {
+				if _, has := user["reasoning_content"]; has {
+					t.Errorf("user message must not carry reasoning_content: %#v", user)
+				}
+			}
+			assistant, ok := rawMsgs[1].(map[string]any)
+			if !ok {
+				t.Errorf("assistant message is not an object: %#v", rawMsgs[1])
+			} else if v, has := assistant["reasoning_content"]; !has {
+				t.Errorf("assistant message missing reasoning_content: %#v", assistant)
+			} else if v != "" {
+				t.Errorf("empty-turn reasoning_content = %v, want empty string", v)
+			}
+			if reasoned, ok := rawMsgs[2].(map[string]any); ok {
+				if reasoned["reasoning_content"] != "reasoned" {
+					t.Errorf("reasoning_content = %v, want %q", reasoned["reasoning_content"], "reasoned")
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	messages := []LLMMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: []ToolCall{{
+			ID: "call-1", Type: "function", Function: FunctionCall{Name: "read", Arguments: "{}"},
+		}}},
+		{Role: "assistant", Content: "done", Thinking: "reasoned"},
+	}
+
+	stream := StreamLLM(context.Background(), Model{
+		ID:               "deepseek-v4.1-flash",
+		Provider:         "opencode",
+		BaseURL:          server.URL,
+		RequireReasoning: true,
+	}, LLMContext{Messages: messages}, "test-key", 0)
+
+	for item := range stream.Iterator(context.Background()) {
+		if event, ok := item.Value.(LLMErrorEvent); ok {
+			t.Fatalf("unexpected error: %v", event.Error)
+		}
+	}
+
+	if messages[1].ForceReasoningContent {
+		t.Error("StreamLLM mutated the caller's message slice")
+	}
+}
+
 func TestStreamLLMHandlesReasoningField(t *testing.T) {
 	// Ollama's OpenAI-compatible endpoint sends `reasoning` (not
 	// reasoning_content nor thinking) in the streaming delta.
