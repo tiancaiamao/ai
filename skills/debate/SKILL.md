@@ -37,7 +37,7 @@ touch "$DEBATE_FILE"
 | Proposer | `@$SYSTEM_DIR/proposer-system.md` | `proposer` | `30m` |
 | Opposer | `@$SYSTEM_DIR/opposer-system.md` | `opposer` | `30m` |
 
-> 完整 spawn 代码（tmux + `--id-file`）见 `subagent` 技能 Spawn 阶段。
+> 完整 spawn 代码（`--id-file` + `timeout: 0`）见 `subagent` 技能 Spawn 阶段。
 
 ## Debate Loop
 

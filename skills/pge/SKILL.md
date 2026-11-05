@@ -91,7 +91,7 @@ Design (用户需求)
 
 ```
 1. 写任务文件 → progress.md → spawn Generator (coder role)
-2. Watch Generator → 等待 DONE/BLOCKED
+2. Watch Generator（**有界** timeout）→ 判定 DONE/BLOCKED（>5s 会 detach，结果作为后续消息到达）
 3. Generator 完成 → 写 progress.md（含产出文件列表）
    不要 kill，保持活着
 4. **Kitchen Sink 检查**（Orchestrator 执行，不 spawn agent）：   `git status --porcelain --untracked-files=all` 列出所有变更文件（含新增、暂存、未暂存），对比 task 的 Write 文件列表
@@ -114,6 +114,18 @@ Design (用户需求)
 ```
 
 **FAIL 反馈模板：** 见 [`references/prompt-templates.md`](references/prompt-templates.md) 的 "Generator Fix Prompt" 部分
+
+**⚠️ bash 自动后台下的 watch 语义（2026-11-05 实测）：**
+
+bash 工具对 >5s 的命令自动 detach 成 `op-N`，**`ai watch` 自己也不例外**。所以步骤 2 的 watch 不再是在当前 turn 里阻塞拿输出：
+
+- 子 agent 很快结束（<5s）→ watch 直接返回，输出就在当下 toolResult 里
+- 子 agent 还在跑（>5s）→ watch 被 detach，**输出（含 DONE/BLOCKED）作为后续消息到达**。不要在同一 turn 里假设已读到结果，更不要因为"没看到 DONE"就判定失败
+- 判定结果看**退出码**，不要等 `ai: turn complete` footer：`0`=该轮结束、`2`=watch 超时、`1`=流断/进程死（footer 只在 attach 时该轮还活着才出现）
+
+**hung 检测必须用有界 `--timeout`**（如 `--timeout 15m`，或不传＝默认 10m）——**不要用 `--timeout 0`**：hung 的 agent 永不结束 turn，`--timeout 0` 的 watch 永不返回，你收不到任何事件，也就永远等不到“连续两轮超时”。PGE 是少数**故意需要超时**的场景（与 `subagent` 技能"长任务用 `--timeout 0`"的分歧点，理由在此）。
+
+**时序推荐：** 多 agent 编排优先用 NOTIFY 回调（见 `subagent` 技能 Event-Driven Orchestration）——在 task 文件里写明完成时执行 `ai send --id <ORCHESTRATOR_RUN_ID> 'NOTIFY <role> DONE / .pge/...'`，Orchestrator 由事件驱动推进，不依赖某次 watch 的输出。
 
 **门禁规则（核心执行约束）：**
 - **PASS/FAIL 判定必须由独立 Evaluator 做，只有 Evaluator agent 可以写 `.pge/eval-*.md`**（Orchestrator 可以跑构建/测试收集信息，但不得创建 eval report）
@@ -218,7 +230,7 @@ Design (用户需求)
 | Task 太大/太小 | >500 行 / <80 行 | 拆分 / 合并相邻任务 |
 | PGE 结束但 agent 存活 | 流程结束未清理子 agent | 最后一步：检查 spawn 列表，逐个 cleanup |
 | 用 `send --wait` 收集首次回复 | spawn 时传了任务，用 send 而非 watch 收首次结果 | 首次结果用 `watch --follow` 观察；`send --wait` 仅用于 FAIL 后发修复反馈 |
-| watch 超时后直接 kill | watch 返回就 kill | 先 `git diff` 检查产出，有变化再 watch 一轮 |
+| watch 超时（退出码 2）后直接 kill | watch 一超时就 kill | 先 `git diff` 检查产出，有变化再 watch 一轮 |
 | kill 后不检查就手动重做 | kill 后直接写代码 | 先 `git diff` 检查子 agent 产出 |
 | 不写 progress.md | progress.md 为空或不存在 | 每个 agent 按写入时机追加，作为流程见证 |
 | progress.md 被覆盖而非追加 | `write` 而非 `>>` 导致历史丢失 | 始终使用 `bash -c 'echo "..." >> .pge/progress.md'` |
@@ -228,7 +240,7 @@ Design (用户需求)
 
 | Scenario | Action |
 |----------|--------|
-| Generator 无响应（hung） | 连续两轮 watch 无输出且 `git diff` 无变化 → kill（hung 即 kill，不等硬超时）→ 有产出+build 通过: spawn Evaluator; 否则: 报告确认方 |
+| Generator 无响应（hung） | 有界 watch 连续两轮以退出码 2 返回（超时）且 `git diff` 无变化 → kill（hung 即 kill，不等硬超时）→ 有产出+build 通过: spawn Evaluator; 否则: 报告确认方 |
 | Generator outputs BLOCKED | Kill → address reason → respawn once |
 | Agent crash | Check rpc.log → retry with modified instructions |
 | Same task fails 3× | **Stop. Report to user.** |
