@@ -362,7 +362,11 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			}
 		}
 
-		traceevent.Log(ctx, traceevent.CategoryEvent, event.Value.Type, traceFields...)
+		var eventAt time.Time
+		if event.Value.EventAt > 0 {
+			eventAt = time.Unix(0, event.Value.EventAt)
+		}
+		traceevent.LogAt(ctx, traceevent.CategoryEvent, event.Value.Type, eventAt, traceFields...)
 
 		if update, ok := event.Value.AssistantMessageEvent.(AssistantMessageEvent); ok {
 			traceevent.Log(ctx, traceevent.CategoryEvent, "message_update",
@@ -593,6 +597,10 @@ func (a *Agent) Steer(message string) error {
 	}
 	a.steerQueue = append(a.steerQueue, message)
 	slog.Info("[Agent] Steer queued", "queue", len(a.steerQueue), "depth", depth)
+	traceevent.Log(context.Background(), traceevent.CategoryEvent, "steer_enqueued",
+		traceevent.Field{Key: "queue_depth", Value: len(a.steerQueue)},
+		traceevent.Field{Key: "message", Value: message},
+	)
 	// The busy run may exit without draining this message (it could have
 	// passed its final popSteer before the append above). Arm a tick to
 	// pick it up if that happens.
@@ -666,6 +674,10 @@ func (a *Agent) EnqueueEvent(message string) error {
 		return fmt.Errorf("event queue full (depth %d)", defaultEventQueueDepth)
 	}
 	a.eventQueue = append(a.eventQueue, message)
+	traceevent.Log(context.Background(), traceevent.CategoryEvent, "event_enqueued",
+		traceevent.Field{Key: "queue_depth", Value: len(a.eventQueue)},
+		traceevent.Field{Key: "message", Value: message},
+	)
 	// Same enqueue-vs-run-exit window as steer: arm the shared tick so an
 	// orphaned event still gets picked up.
 	a.scheduleSteerTick()

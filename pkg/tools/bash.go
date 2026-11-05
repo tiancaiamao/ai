@@ -18,6 +18,7 @@ import (
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // exitGracePeriod is how long the bash tool keeps draining stdout/stderr
@@ -590,9 +591,23 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	case <-bgTimer.C:
 		bg.Store(true)
 		opID := fmt.Sprintf("op-%d", t.bgOpCounter.Add(1))
+		// Trace the operation's real lifetime. Without this, the trace shows
+		// the tool call ending while a process is still running, which reads
+		// as a hang; the start/end pair makes the wait measurable.
+		traceevent.Log(ctx, traceevent.CategoryTool, "background_op",
+			traceevent.Field{Key: "op", Value: opID},
+			traceevent.Field{Key: "phase", Value: "start"},
+			traceevent.Field{Key: "command", Value: command},
+			traceevent.Field{Key: "pid", Value: cmd.Process.Pid},
+		)
 		go func() {
 			blocks := <-outcomeCh
 			cancel()
+			traceevent.Log(ctx, traceevent.CategoryTool, "background_op",
+				traceevent.Field{Key: "op", Value: opID},
+				traceevent.Field{Key: "phase", Value: "end"},
+				traceevent.Field{Key: "elapsed_ms", Value: time.Since(startTime).Milliseconds()},
+			)
 			if t.onBackgroundComplete != nil {
 				t.onBackgroundComplete(opID, blocksText(blocks))
 			}

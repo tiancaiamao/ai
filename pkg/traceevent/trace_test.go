@@ -903,3 +903,34 @@ func TestSetSessionID_ClosesOpenStreams(t *testing.T) {
 		t.Fatal("expected trace file for session-new to exist after switch")
 	}
 }
+
+// TestLogAtUsesProvidedTimestamp verifies that LogAt stamps the event with the
+// moment it happened rather than the moment it was written.
+//
+// Agent events are drained from a channel, so their write time is later than
+// the time recorded in the event itself; stamping with write time made short
+// operations look like they finished before they started.
+func TestLogAtUsesProvidedTimestamp(t *testing.T) {
+	tb := NewTraceBuf()
+	ctx := WithTraceBuf(context.Background(), tb)
+	EnableEvent("prompt_start")
+
+	at := time.Now().Add(-2 * time.Second)
+	LogAt(ctx, CategoryEvent, "prompt_start", at, Field{Key: "message", Value: "late write"})
+
+	events := tb.Snapshot()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if !events[0].Timestamp.Equal(at) {
+		t.Errorf("timestamp = %v, want %v (event time, not write time)", events[0].Timestamp, at)
+	}
+
+	// A zero timestamp must still produce a usable event.
+	tb2 := NewTraceBuf()
+	ctx2 := WithTraceBuf(context.Background(), tb2)
+	LogAt(ctx2, CategoryEvent, "prompt_start", time.Time{})
+	if events := tb2.Snapshot(); len(events) != 1 || events[0].Timestamp.IsZero() {
+		t.Errorf("zero time must fall back to now, got %+v", events)
+	}
+}

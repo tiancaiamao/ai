@@ -188,7 +188,6 @@ func RunLoop(
 		}
 
 		stream.Push(NewAgentStartEvent())
-		stream.Push(NewTurnStartEvent())
 
 		for _, msg := range turnPrompts {
 			stream.Push(NewMessageStartEvent(msg))
@@ -229,6 +228,10 @@ func runInnerLoop(
 				stream.Push(NewMessageStartEvent(m))
 				stream.Push(NewMessageEndEvent(m))
 				slog.Info("[Loop] Steering message injected", "message", steerMsg)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "steer_injected",
+					traceevent.Field{Key: "turn", Value: state.turnCount},
+					traceevent.Field{Key: "message", Value: steerMsg},
+				)
 			}
 		}
 		if config.DrainEvent != nil {
@@ -243,6 +246,10 @@ func runInnerLoop(
 				stream.Push(NewMessageStartEvent(m))
 				stream.Push(NewMessageEndEvent(m))
 				slog.Info("[Loop] Event message injected", "message", evtMsg)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "event_injected",
+					traceevent.Field{Key: "turn", Value: state.turnCount},
+					traceevent.Field{Key: "message", Value: evtMsg},
+				)
 			}
 		}
 	}
@@ -252,6 +259,11 @@ func runInnerLoop(
 			return
 		}
 		state.advanceTurn()
+
+		// One turn_start per iteration. turn_end is emitted inside the loop,
+		// so a single turn_start before it left turns 2..N unmarked and made
+		// every run look like it lasted one turn in the trace.
+		stream.Push(NewTurnStartEvent())
 
 		injectQueued()
 
