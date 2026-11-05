@@ -578,11 +578,15 @@ func (a *Agent) Steer(message string) error {
 
 	a.steerMu.Lock()
 	defer a.steerMu.Unlock()
-	if a.steerDepth > 0 && len(a.steerQueue) >= a.steerDepth {
-		return fmt.Errorf("steer queue full (depth %d)", a.steerDepth)
+	depth := a.steerDepth
+	if depth == 0 {
+		depth = defaultSteerQueueDepth
+	}
+	if len(a.steerQueue) >= depth {
+		return fmt.Errorf("steer queue full (depth %d)", depth)
 	}
 	a.steerQueue = append(a.steerQueue, message)
-	slog.Info("[Agent] Steer queued", "queue", len(a.steerQueue), "depth", a.steerDepth)
+	slog.Info("[Agent] Steer queued", "queue", len(a.steerQueue), "depth", depth)
 	// The busy run may exit without draining this message (it could have
 	// passed its final popSteer before the append above). Arm a tick to
 	// pick it up if that happens.

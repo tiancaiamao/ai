@@ -137,6 +137,33 @@ func TestSteerQueueDepth(t *testing.T) {
 	}
 }
 
+// TestSteerDefaultQueueDepth verifies the documented default depth is enforced
+// when no explicit depth is configured (steerDepth == 0), so a busy or stuck
+// run cannot accumulate an unbounded number of steering messages.
+func TestSteerDefaultQueueDepth(t *testing.T) {
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+
+	// Occupy the run lock to simulate a busy agent without an LLM call.
+	ag.mu <- struct{}{}
+	defer func() { <-ag.mu }()
+
+	for i := 0; i < defaultSteerQueueDepth; i++ {
+		if err := ag.Steer("m"); err != nil {
+			t.Fatalf("steer %d/%d should queue at default depth, got %v", i+1, defaultSteerQueueDepth, err)
+		}
+	}
+	if err := ag.Steer("overflow"); err == nil || !strings.Contains(err.Error(), "steer queue full") {
+		t.Fatalf("expected queue full at default depth %d, got %v", defaultSteerQueueDepth, err)
+	}
+	if n := ag.GetPendingSteer(); n != defaultSteerQueueDepth {
+		t.Errorf("pending steer = %d, want %d", n, defaultSteerQueueDepth)
+	}
+
+	// Drain so the re-armed tick cannot start a run once the test releases mu.
+	ag.drainSteers()
+	ag.disarmSteerTick()
+}
+
 // TestSteerTickDrainsOrphan verifies scheduleSteerTick closes the
 // enqueue-vs-run-exit race: a steer queued while the agent was busy, whose
 // run exited without draining it, is picked up by the one-shot tick and
