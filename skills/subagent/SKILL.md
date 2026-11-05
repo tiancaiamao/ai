@@ -245,7 +245,9 @@ done < ~/.ai/runs/$RUN_ID/subagent
 pkill -f "id-file /tmp/agent-$RUN_ID-" 2>/dev/null
 
 # 验证：必须确认进程归零（ai ls 归零、tmux session 归零都不算）
-pgrep -af "id-file /tmp/agent-$RUN_ID-" || echo "no ai serve processes left for $RUN_ID"
+#    用 -lf（pid + 完整命令行）；⚠️ macOS 的 pgrep 无 -a 含义不是"显示命令行"，
+#    而是"把祖先进程也列入"（会把你自己的 sh 包装也算进去），所以别加 -a
+pgrep -lf "id-file /tmp/agent-$RUN_ID-" || echo "no ai serve processes left for $RUN_ID"
 
 # 用了方式 B（tmux）才需要：只 kill 名字匹配 "agent-$RUN_ID-*" 的 session
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^agent-$RUN_ID-" | while read -r s; do
@@ -489,6 +491,7 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | 编排多任务时 watch 死等每一个 | ⛔ 用 NOTIFY 回调模式：任务书写明完成时 `ai send --id <父RUN_ID>`，父 agent 事件驱动 |
 | 死掉的 agent 用新任务书从头交代 | 用 `/resume <旧 session uuid>` 原位复活（同工作目录 serve 空壳 + send '/resume'；session uuid 取自 run.json 的 `session` 字段，见 Crash Recovery），上下文零损失 |
 | 相信 `ai ls` 的 running 状态 | 进程死后 status 可能仍显示 running；用 `ps -p <pid>` + send 探针确认 |
+| 用 `pgrep -af <pattern>` 判断进程死活 | ⚠️ macOS 的 `-a` = **把祖先进程也列入**（含执行命令那层 `sh -c` 包装），会谎报"还活着"；用 `pgrep -lf` 看命令行，死活以 `ps -p` 为准 |
 
 ## Event-Driven Orchestration（NOTIFY 回调模式）
 
@@ -539,8 +542,10 @@ ai send --id "$NEW_ID" '恢复继续，注意 ...'
 ps aux | grep 'ai serve' | grep -v grep
 
 # 2. 进程按 id-file 特征扫（方式 A 的可靠信号；用 tmux 时也可查 pane_dead）
-#    ⚠️ pgrep -f 会自我匹配包装 shell，判断死活用 `ps -p <pid>` 或 bracket 模式 [a]i serve
-pgrep -af "id-file /tmp/agent-$RUN_ID-"
+#    ⚠️ 用 -lf 看命令行；别加 -a（macOS 的 -a = 连祖先进程一起列出，
+#    会把执行命令的那层 sh 包装也算进去，看起来像"进程还活着"）
+#    ⚠️ 死活判定仍以 ps -p <pid> 为准，pgrep 只用于发现
+pgrep -lf "id-file /tmp/agent-$RUN_ID-"
 
 # 3. send 探针：报 "run X is not running" 即死（这条例外允许 send——探活优先于打断风险；
 #    但不得截断输出，否则会掩盖真实错误，退出码也被 pipe 吞掉）
