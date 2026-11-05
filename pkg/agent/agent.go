@@ -272,6 +272,7 @@ func (a *Agent) runMessage(ctx context.Context, message string) {
 				return
 			}
 			slog.Info("[Agent] Processing queued steer", "message", steerMsg.Text)
+			traceDelivered(ctx, "steer", steerMsg)
 			a.processPrompt(ctx, steerMsg.Text)
 			continue
 		}
@@ -301,6 +302,7 @@ func (a *Agent) runMessage(ctx context.Context, message string) {
 				return
 			}
 			slog.Info("[Agent] Processing queued event", "message", evtMsg.Text)
+			traceDelivered(ctx, "event", evtMsg)
 			a.processPrompt(ctx, evtMsg.Text)
 			continue
 		}
@@ -605,7 +607,7 @@ func (a *Agent) Steer(message string) error {
 	}
 	a.steerQueue = append(a.steerQueue, QueuedMessage{Text: message, EnqueuedAt: time.Now()})
 	slog.Info("[Agent] Steer queued", "queue", len(a.steerQueue), "depth", depth)
-	traceevent.Log(context.Background(), traceevent.CategoryEvent, "steer_enqueued",
+	traceevent.Log(a.traceCtx(), traceevent.CategoryEvent, "steer_enqueued",
 		traceevent.Field{Key: "queue_depth", Value: len(a.steerQueue)},
 		traceevent.Field{Key: "message", Value: message},
 	)
@@ -695,7 +697,7 @@ func (a *Agent) EnqueueEvent(message string) error {
 		return fmt.Errorf("event queue full (depth %d)", defaultEventQueueDepth)
 	}
 	a.eventQueue = append(a.eventQueue, QueuedMessage{Text: message, EnqueuedAt: time.Now()})
-	traceevent.Log(context.Background(), traceevent.CategoryEvent, "event_enqueued",
+	traceevent.Log(a.traceCtx(), traceevent.CategoryEvent, "event_enqueued",
 		traceevent.Field{Key: "queue_depth", Value: len(a.eventQueue)},
 		traceevent.Field{Key: "message", Value: message},
 	)
@@ -703,6 +705,31 @@ func (a *Agent) EnqueueEvent(message string) error {
 	// orphaned event still gets picked up.
 	a.scheduleSteerTick()
 	return nil
+}
+
+// traceCtx stamps a marker with this agent's trace buffer. Enqueue paths run
+// on whichever goroutine calls them (RPC handler, background notifier) and
+// cannot use a run context, so without this they would land in whichever
+// buffer SetActiveTraceBuf last installed — i.e. in another agent's trace if
+// two are alive in one process.
+func (a *Agent) traceCtx() context.Context {
+	return traceevent.WithTraceBuf(context.Background(), a.traceBuf)
+}
+
+// traceDelivered marks a queued message that the run tail delivered by
+// starting the next prompt in the chain, as opposed to the loop injecting it
+// before an LLM call. Both paths must emit the inject marker: an enqueue
+// marker with no counterpart reads like a dropped message.
+func traceDelivered(ctx context.Context, kind string, qm QueuedMessage) {
+	waitedMs := int64(-1)
+	if !qm.EnqueuedAt.IsZero() {
+		waitedMs = time.Since(qm.EnqueuedAt).Milliseconds()
+	}
+	traceevent.Log(ctx, traceevent.CategoryEvent, kind+"_injected",
+		traceevent.Field{Key: "path", Value: "run_tail"},
+		traceevent.Field{Key: "waited_ms", Value: waitedMs},
+		traceevent.Field{Key: "message", Value: qm.Text},
+	)
 }
 
 // popEvent dequeues the oldest event (empty when none).

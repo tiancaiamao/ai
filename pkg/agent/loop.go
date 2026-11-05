@@ -232,6 +232,7 @@ func runInnerLoop(
 			}
 			slog.Info("[Loop] Queued message injected", "kind", kind, "waited_ms", waitedMs, "message", qm.Text)
 			traceevent.Log(ctx, traceevent.CategoryEvent, kind+"_injected",
+				traceevent.Field{Key: "path", Value: "boundary"},
 				traceevent.Field{Key: "turn", Value: state.turnCount},
 				traceevent.Field{Key: "waited_ms", Value: waitedMs},
 				traceevent.Field{Key: "message", Value: qm.Text},
@@ -255,7 +256,11 @@ func runInnerLoop(
 
 		// One turn_start per iteration. turn_end is emitted inside the loop,
 		// so a single turn_start before it left turns 2..N unmarked and made
-		// every run look like it lasted one turn in the trace.
+		// every run look like it lasted one turn in the trace. A turn that is
+		// abandoned before turn_end — context-limit recovery (the continue
+		// below) or an empty model response — leaves its start unpaired: both
+		// exits skip turn_end on purpose, because turn_end with a nil message
+		// is how callers are told the run failed.
 		stream.Push(NewTurnStartEvent())
 
 		injectQueued()

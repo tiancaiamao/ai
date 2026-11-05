@@ -24,8 +24,14 @@ markers use it (`EventAt`), the new trace events `steer_enqueued` /
 (phase `start`/`end`, with pid and elapsed) record queue latency and detached
 command lifetime. Queues hold `QueuedMessage` (text + `EnqueuedAt`) rather
 than bare strings, so the inject marker reports `waited_ms` directly instead
-of requiring the reader to subtract two markers., and `turn_start` is emitted per loop iteration instead of
-once per run.
+of requiring the reader to subtract two markers, and it names the `path` that
+delivered the message: `boundary` when the loop injects it before an LLM
+call, `run_tail` when it becomes the next prompt in the chain because the run
+ended first. `turn_start` is emitted per loop iteration instead of once per
+run, so turns 2..N are marked too. A turn abandoned before its `turn_end`
+(context-limit recovery, empty model response) still leaves a start unpaired:
+both exits deliberately skip `turn_end`, because a `turn_end` with a nil
+message is how callers are told the run failed.
 
 **Why**: Events were popped only by the run tail, so a background result
 waited for the run to end — the common path, because `bash` detaches any

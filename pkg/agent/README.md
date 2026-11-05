@@ -134,11 +134,20 @@ draining at the end of the run — leaves the wait unbounded (measured: 161s
 across 22 turns, and 13m07s / 15m44s in two other runs).
 
 Both sides of the queue are traced (`steer_enqueued`/`steer_injected`,
-`event_enqueued`/`event_injected`) and the inject marker carries `waited_ms`,
-so the wait between queueing and injection is read from the trace instead of
-inferred from spans. `DrainSteer`/`DrainEvent` return `[]QueuedMessage`
-(text plus `EnqueuedAt`), which is what makes that number available to the
-loop.
+`event_enqueued`/`event_injected`), and the inject marker carries `waited_ms`
+and the `path` that delivered the message: `boundary` (the loop injected it
+before an LLM call) or `run_tail` (the run ended first and the message became
+the next prompt in the chain). Every enqueue marker therefore has a
+counterpart, and the wait between queueing and delivery is read from the
+trace instead of inferred from spans. `DrainSteer`/`DrainEvent` return
+`[]QueuedMessage` (text plus `EnqueuedAt`), which is what makes that number
+available to the loop.
+
+`turn_start` is emitted per loop iteration, so turns 2..N are marked too. A
+turn abandoned before its `turn_end` — context-limit recovery, or an empty
+model response — leaves a start unpaired on purpose: both exits skip
+`turn_end`, because a `turn_end` with a nil message is how callers are told
+the run failed. Pairing is guaranteed on the normal path, not on error exits.
 `background_op` (phase `start`/`end`) marks the lifetime of a command detached
 by `bash` auto-backgrounding.
 

@@ -174,5 +174,93 @@ func TestQueueMarkersTraced(t *testing.T) {
 		if waited < 100 {
 			t.Errorf("waited_ms = %d, want >= 100 for an event queued during a 300ms tool call", waited)
 		}
+		// This one was delivered by the loop before an LLM call, not by the
+		// run tail.
+		if got := rec.field(inj[0], "path"); got != "boundary" {
+			t.Errorf("event_injected path = %q, want boundary", got)
+		}
+		if rec.field(inj[0], "turn") == "" {
+			t.Error("boundary inject marker carries no turn")
+		}
+	}
+}
+
+// TestRunTailDeliveryTraced covers the second delivery path: a message that
+// arrives while the run is producing its final response is never seen by the
+// loop's boundary drain, so the run tail delivers it as the next prompt in
+// the chain. That path must emit the inject marker too — otherwise the trace
+// shows an enqueue marker with no counterpart, which reads exactly like a
+// dropped message.
+func TestRunTailDeliveryTraced(t *testing.T) {
+	for _, name := range []string{"event_enqueued", "event_injected"} {
+		traceevent.EnableEvent(name)
+	}
+
+	release := make(chan struct{})
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = b
+		calls++
+		call := calls
+		w.Header().Set("Content-Type", "text/event-stream")
+		if call == 1 {
+			// Keep the run alive: a final text response here would end it
+			// before the second call could hold a message in flight.
+			fmt.Fprint(w, sseToolCallsResponse(
+				[]map[string]any{{"id": "call-slow", "name": "slow", "arguments": map[string]any{}}},
+				"", "tool_calls",
+			))
+			return
+		}
+		// The second call is the run's final response. Hold it open so the
+		// event lands after the loop's last boundary drain.
+		<-release
+		fmt.Fprint(w, sseTextResponse("done"))
+	}))
+	defer server.Close()
+
+	model := llm.Model{ID: "test-model", Provider: "test", BaseURL: server.URL, API: "openai-completions"}
+	ag := NewAgentFromConfigWithContext(model, "test-key", agentctx.NewAgentContext("You are a test assistant."), DefaultLoopConfig())
+	defer ag.Shutdown()
+
+	ag.AddTool(&steerSlowTool{started: make(chan struct{}), finished: make(chan struct{}), delay: 5 * time.Millisecond})
+
+	rec := &traceRecorder{}
+	traceevent.GetTraceBuf(context.Background()).AddSink(rec.add)
+
+	if err := ag.Prompt("start"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	// Wait until the final response is in flight, then queue an event.
+	deadline := time.Now().Add(5 * time.Second)
+	for calls < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls < 2 {
+		t.Fatal("second LLM call never started")
+	}
+	if err := ag.EnqueueEvent("BG-LATE"); err != nil {
+		t.Fatalf("EnqueueEvent failed: %v", err)
+	}
+	close(release)
+	ag.Wait()
+
+	enq := rec.find("event_enqueued")
+	if len(enq) != 1 {
+		t.Fatalf("event_enqueued recorded %d times, want 1", len(enq))
+	}
+	inj := rec.find("event_injected")
+	if len(inj) != 1 {
+		t.Fatalf("event_injected recorded %d times, want 1: a message delivered by the run tail is still delivered", len(inj))
+	}
+	if got := rec.field(inj[0], "path"); got != "run_tail" {
+		t.Errorf("event_injected path = %q, want run_tail (the loop's boundary drain cannot see it)", got)
+	}
+	if got := rec.field(inj[0], "message"); got != "BG-LATE" {
+		t.Errorf("event_injected message = %q, want BG-LATE", got)
+	}
+	if rec.field(inj[0], "waited_ms") == "" {
+		t.Error("event_injected carries no waited_ms")
 	}
 }
