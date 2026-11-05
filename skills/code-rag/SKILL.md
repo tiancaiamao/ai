@@ -376,7 +376,7 @@ N 条消息, ~100-200KB         随提问增长
 | 问题 | 解决 |
 |------|------|
 | `frozen/ 不存在` | 先执行 `snapshot.sh freeze` |
-| agent 启动但无响应 | `tmux attach -t <project>-expert` 检查 |
+| agent 启动但无响应 | `ai ls` 看状态 + `ai watch --id <id> --follow --pretty` 看流（默认无 tmux，别去找 session） |
 | 回答质量下降 | `snapshot.sh clean && snapshot.sh start` |
 | wiki 内容过时 | 更新 wiki 后 `snapshot.sh freeze` |
 | `ai ls` 看不到 agent | `snapshot.sh stop && snapshot.sh start` |
