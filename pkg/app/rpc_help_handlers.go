@@ -24,19 +24,9 @@ func (app *App) handleSteerSlash(args string) (any, error) {
 		slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
 	}
 
-	app.stateMu.Lock()
-	mode := app.steeringMode
-	pending := app.pendingSteer
-	app.stateMu.Unlock()
-
-	if mode == "one-at-a-time" && pending {
-		return nil, fmt.Errorf("steer already pending")
+	if err := app.ag.Steer(expandedMessage); err != nil {
+		return nil, err
 	}
-
-	app.stateMu.Lock()
-	app.pendingSteer = true
-	app.stateMu.Unlock()
-	app.ag.Steer(expandedMessage)
 	return map[string]any{"status": "steered"}, nil
 }
 

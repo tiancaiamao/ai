@@ -65,13 +65,17 @@ func TestSteer_NoStaleCache(t *testing.T) {
 	}
 }
 
-// TestSteer_CounterReset verifies that after steering resets
-// ToolCallsSinceLastTrigger to 0, the compactor does not trigger
-// compaction prematurely on the new loop's first turn.
+// TestCounterReset_NoPrematureCompaction verifies that once
+// ToolCallsSinceLastTrigger resets to 0 (production source: a completed
+// compaction run; steer no longer resets it — a steered message continues
+// the same conversation), the compactor does not trigger compaction
+// prematurely on the first turn afterwards.
 //
-// This was Bug 2: ToolCallsSinceLastTrigger carried over after steer,
-// causing premature compaction of accumulated pre-steer messages.
-func TestSteer_CounterReset(t *testing.T) {
+// Historical Bug 2: steer used to restart the loop as a fresh conversation
+// while the counter carried over, causing premature compaction of
+// accumulated pre-steer messages. Queue-based steer keeps one continuous
+// conversation, so carrying the counter across a steer is now correct.
+func TestCounterReset_NoPrematureCompaction(t *testing.T) {
 	cfg := &Config{
 		AutoCompact: true,
 		LLMDecide: &LLMDecideConfig{
@@ -108,12 +112,12 @@ func TestSteer_CounterReset(t *testing.T) {
 		t.Error("expected compact with counter=8")
 	}
 
-	// --- Simulate steer: agent.Steer() resets ToolCallsSinceLastTrigger to 0 ---
+	// --- Simulate a counter reset (e.g. right after a compaction run) ---
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
 
-	// After steer: counter=0, below soft threshold → no compaction.
-	// This is the key fix for Bug 2 — without the reset, counter=8 would
-	// trigger compaction immediately on the new loop's first turn.
+	// After reset: counter=0, below soft threshold → no compaction.
+	// Without the reset, counter=8 would trigger compaction immediately on
+	// the first turn afterwards.
 	if c.ShouldCompact(context.Background(), agentCtx) {
 		t.Error("after steer reset, should NOT compact: counter=0 is below soft threshold")
 	}

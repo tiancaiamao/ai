@@ -111,7 +111,6 @@ type App struct {
 	autoCompactionEnabled bool
 	steeringMode          string
 	followUpMode          string
-	pendingSteer          bool
 	showThinking          bool
 	showTools             bool
 	showPrefix            bool
@@ -147,7 +146,6 @@ func (app *App) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, ch
 			app.stateMu.Lock()
 			app.isStreaming = false
 			app.isCompacting = false
-			app.pendingSteer = false
 			app.stateMu.Unlock()
 
 			// Session persistence is handled incrementally:
@@ -331,10 +329,17 @@ func (app *App) forwardToSet(subcmd string) func(string) (any, error) {
 
 // collectSessionUsageFromAgent is a convenience wrapper around collectSessionUsage
 
-func (app *App) handlePrompt(message string, raw bool, streamingBehavior string) (any, error) {
+func (app *App) handlePrompt(message string, raw bool, streamingBehavior string, isEvent bool) (any, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return nil, fmt.Errorf("empty prompt message")
+	}
+
+	// Machine events bypass skill expansion, slash dispatch, and busy-mode
+	// routing: they go straight to the agent's low-priority event queue and
+	// drain only after human messages.
+	if isEvent {
+		return nil, app.ag.EnqueueEvent(message)
 	}
 
 	// Expand /skill:name commands BEFORE generic slash dispatch.
@@ -347,11 +352,7 @@ func (app *App) handlePrompt(message string, raw bool, streamingBehavior string)
 		app.stateMu.Unlock()
 
 		if streaming {
-			app.stateMu.Lock()
-			app.pendingSteer = true
-			app.stateMu.Unlock()
-			app.ag.Steer(expandedMessage)
-			return nil, nil
+			return nil, app.ag.Steer(expandedMessage)
 		}
 
 		return nil, app.ag.Prompt(expandedMessage)
@@ -372,9 +373,7 @@ func (app *App) handlePrompt(message string, raw bool, streamingBehavior string)
 
 	app.stateMu.Lock()
 	streaming := app.isStreaming
-	mode := app.steeringMode
 	followMode := app.followUpMode
-	pending := app.pendingSteer
 	busyMode := app.busyMode
 	app.stateMu.Unlock()
 
@@ -388,14 +387,7 @@ func (app *App) handlePrompt(message string, raw bool, streamingBehavior string)
 		}
 		switch behavior {
 		case "steer":
-			if mode == "one-at-a-time" && pending {
-				return nil, fmt.Errorf("steer already pending")
-			}
-			app.stateMu.Lock()
-			app.pendingSteer = true
-			app.stateMu.Unlock()
-			app.ag.Steer(message)
-			return nil, nil
+			return nil, app.ag.Steer(message)
 		case "followUp", "follow_up":
 			if followMode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
 				return nil, fmt.Errorf("follow-up queue already has a pending message")
@@ -450,8 +442,8 @@ func (app *App) ModelName() (string, string) { return app.model.Provider, app.mo
 func (app *App) Agent() *agent.Agent { return app.ag }
 
 // HandlePrompt submits a user prompt to the agent.
-func (app *App) HandlePrompt(message string, raw bool, streamingBehavior string) (any, error) {
-	return app.handlePrompt(message, raw, streamingBehavior)
+func (app *App) HandlePrompt(message string, raw bool, streamingBehavior string, isEvent bool) (any, error) {
+	return app.handlePrompt(message, raw, streamingBehavior, isEvent)
 }
 
 // FormatCommandResult renders a slash-command result for protocol clients.

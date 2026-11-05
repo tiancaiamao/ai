@@ -214,6 +214,16 @@ func (app *App) handleSetFollowUpMode(value string, validModes map[string]bool) 
 	return map[string]any{"setting": "follow-up-mode", "value": mode}, nil
 }
 
+// steerDepthFor maps a steering mode to the agent's steer queue depth.
+// one-at-a-time allows a single queued steer; all/immediate use the
+// agent's default depth (0).
+func steerDepthFor(mode string) int {
+	if mode == "one-at-a-time" {
+		return 1
+	}
+	return 0
+}
+
 func (app *App) handleSetSteeringMode(value string, validModes map[string]bool) (any, error) {
 	mode := strings.ToLower(strings.TrimSpace(value))
 	var jsonData struct {
@@ -228,6 +238,7 @@ func (app *App) handleSetSteeringMode(value string, validModes map[string]bool) 
 	app.stateMu.Lock()
 	app.steeringMode = mode
 	app.stateMu.Unlock()
+	app.ag.SetSteerQueueDepth(steerDepthFor(mode))
 	return map[string]any{"setting": "steering-mode", "value": mode}, nil
 }
 

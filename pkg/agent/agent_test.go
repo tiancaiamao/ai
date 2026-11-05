@@ -74,7 +74,7 @@ func TestAgentSteer(t *testing.T) {
 	// Steer should not block
 	agent.Steer("Steer message")
 
-	// Verify context was reset
+	// Context must remain usable after a steer.
 	ctx := agent.GetContext()
 	if ctx == nil {
 		t.Error("Context should not be nil after steer")

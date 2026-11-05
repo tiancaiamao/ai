@@ -2,11 +2,16 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/testutil"
 )
 
 // --- sessionCompactor ---
@@ -108,7 +113,7 @@ func TestExpandSkillCommands(t *testing.T) {
 
 func TestHandlePromptUsesBusyMode(t *testing.T) {
 	app := &App{isStreaming: true, busyMode: "reject"}
-	_, err := app.handlePrompt("hello", true, "")
+	_, err := app.handlePrompt("hello", true, "", false)
 	if err == nil || !strings.Contains(err.Error(), "rejected by busy-mode policy") {
 		t.Fatalf("busy mode reject was not applied: %v", err)
 	}
@@ -123,12 +128,37 @@ func TestHandleSteerSlashUsage(t *testing.T) {
 	}
 }
 
-func TestHandleSteerSlashPending(t *testing.T) {
-	app := &App{steeringMode: "one-at-a-time", pendingSteer: true}
-	_, err := app.handleSteerSlash("hello")
-	if err == nil || !strings.Contains(err.Error(), "pending") {
-		t.Errorf("expected 'steer already pending' error, got %v", err)
+func TestHandleSteerSlashQueueFull(t *testing.T) {
+	// First response is slow so the agent stays busy while we steer.
+	srv := testutil.LLMServerFactory(func(i int, r *http.Request) string {
+		if i == 0 {
+			time.Sleep(300 * time.Millisecond)
+			return testutil.TextResponse("first")
+		}
+		return testutil.TextResponse("steered")
+	})
+	defer srv.Close()
+
+	model := llm.Model{ID: "test", Provider: "test", API: "openai-completions", BaseURL: srv.URL}
+	app := &App{steeringMode: "one-at-a-time", ag: agent.NewAgent(model, "test-key", "You are helpful.")}
+	app.ag.SetSteerQueueDepth(1)
+
+	if err := app.ag.Prompt("initial"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
 	}
+	// Wait until the first LLM call is in flight.
+	time.Sleep(50 * time.Millisecond)
+
+	// One-at-a-time: the first steer queues, the second is rejected with the
+	// queue-full error instead of being silently dropped.
+	if _, err := app.handleSteerSlash("first steer"); err != nil {
+		t.Fatalf("first steer should queue while busy, got %v", err)
+	}
+	if _, err := app.handleSteerSlash("second steer"); err == nil || !strings.Contains(err.Error(), "steer queue full") {
+		t.Errorf("expected queue full error, got %v", err)
+	}
+
+	app.ag.Wait()
 }
 
 func TestHandleFollowUpSlashErrors(t *testing.T) {
