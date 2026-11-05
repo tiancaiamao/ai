@@ -43,7 +43,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/command"
@@ -166,7 +165,7 @@ type acpServer struct {
 
 // Run serves ACP over conn using an already initialized application runtime.
 // App construction and agent lifecycle belong to pkg/app.
-func Run(ctx context.Context, conn Conn, runtime Runtime, timeout time.Duration) error {
+func Run(ctx context.Context, conn Conn, runtime Runtime) error {
 	ag := runtime.Agent()
 	if ag == nil {
 		return fmt.Errorf("ACP runtime has no agent")
@@ -183,18 +182,6 @@ func Run(ctx context.Context, conn Conn, runtime Runtime, timeout time.Duration)
 	runtime.BuildSkillCommands()
 	shutdownEmitter, eventEmitterDone := runtime.InitEventEmitter(srv.emit)
 	defer func() { close(shutdownEmitter); <-eventEmitterDone }()
-	if timeout > 0 {
-		go func() {
-			select {
-			case <-time.After(timeout):
-				slog.Warn("[ACP] Timeout reached, aborting agent", "timeout", timeout)
-				srv.markCancelled()
-				ag.Abort()
-				srv.cancel()
-			case <-srv.ctx.Done():
-			}
-		}()
-	}
 	runtime.StartDebugServer()
 	provider, modelID := runtime.ModelName()
 	slog.Info("ACP server started", "provider", provider, "model", modelID, "cwd", runtime.CurrentWorkdir())
