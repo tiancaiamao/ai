@@ -68,19 +68,18 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Task file task-add-jwt-auth.
 
 ```bash
 RUN_ID=<your run_id>
+TMUX_SESSION="agent-$RUN_ID-gen-jwt"
 ID_FILE="/tmp/agent-$RUN_ID-gen-jwt.id"
-rm -f "$ID_FILE"
 
-# bash 工具调用，参数带 timeout: 0
-# ⚠️ 不要给 ai serve 设 --timeout：那会在 agent 正在干活时中途杀掉它，工作全丢
-ai serve --role coder \
-  --input-file /tmp/task-add-jwt-auth.md \
-  --name 'gen-jwt' \
-  --id-file "$ID_FILE"
-# → 5s 后返回 "detached as background operation op-N"（预期）
+tmux new-session -d -s "$TMUX_SESSION" \
+  "ai serve --role coder \
+   --input-file /tmp/task-add-jwt-auth.md \
+   --name 'gen-jwt' \
+   --id-file $ID_FILE"
 
+# Wait for startup
 sleep 3
-CHILD_ID=$(cat "$ID_FILE")
+CHILD_ID=$(cat $ID_FILE)
 echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
@@ -90,10 +89,8 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn gen-jwt (coder)" >> .p
 ## Step 3: Watch Generator
 
 ```bash
-# 有界 timeout（hung 检测靠它）；>5s 会被 bash 工具 detach，输出后续消息到达
-ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m 2>&1 | tail -20; echo "WATCH_EXIT=$?"
-# 退出码 0 + 输出中出现 "DONE: src/middleware/auth.go, src/routes/router.go" → 进入 Step 4
-# 退出码 2（超时）→ 先 git diff 看产出，不急于 kill
+ai watch --id "$CHILD_ID" --follow --pretty
+# 等待输出中出现 "DONE: src/middleware/auth.go, src/routes/router.go"
 # Generator DONE 后，它会写 progress.md（在 task 实现代码中执行）
 # 不要 kill Generator — 保持活着用于潜在的修复
 ```
@@ -149,16 +146,17 @@ You are an INDEPENDENT evaluator. You did NOT write this code.
 5. Write to .pge/eval-add-jwt-auth.md with PASS/FAIL verdict
 EOF
 
+EVAL_TMUX="agent-$RUN_ID-eval-jwt"
 EVAL_ID_FILE="/tmp/agent-$RUN_ID-eval-jwt.id"
-rm -f "$EVAL_ID_FILE"
 
-ai serve --role validator \
-  --input-file /tmp/eval-add-jwt-auth.md \
-  --name 'eval-jwt' \
-  --id-file "$EVAL_ID_FILE"
+tmux new-session -d -s "$EVAL_TMUX" \
+  "ai serve --role validator \
+   --input-file /tmp/eval-add-jwt-auth.md \
+   --name 'eval-jwt' \
+   --id-file $EVAL_ID_FILE"
 
 sleep 3
-EVAL_ID=$(cat "$EVAL_ID_FILE")
+EVAL_ID=$(cat $EVAL_ID_FILE)
 echo "$EVAL_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
@@ -168,9 +166,8 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn eval-jwt (validator)" 
 ## Step 6: Watch Evaluator → Read Eval Report
 
 ```bash
-ai watch --id "$EVAL_ID" --follow --pretty --timeout 15m 2>&1 | tail -20; echo "WATCH_EXIT=$?"
+ai watch --id "$EVAL_ID" --follow --pretty
 # 等待 Evaluator 完成（Evaluator 会在写完 eval report 后写 progress.md）
-# 退出码 0 后再读报告——不要用报告文件是否已出现来猜它有没有完成
 
 cat .pge/eval-add-jwt-auth.md
 ```
@@ -259,23 +256,24 @@ git rev-parse HEAD > .pge/phase-start-commit
 # find_skill(name="review", load=true)
 
 # Spawn Review agent
+REVIEW_TMUX="agent-$RUN_ID-review"
 REVIEW_ID_FILE="/tmp/agent-$RUN_ID-review.id"
-rm -f "$REVIEW_ID_FILE"
 
-ai serve --role reviewer \
-  --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff $(cat .pge/phase-start-commit)..HEAD (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
-  --name 'rev-phase1' \
-  --id-file "$REVIEW_ID_FILE"
+tmux new-session -d -s "$REVIEW_TMUX" \
+    "ai serve --role reviewer \
+   --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff \$(cat .pge/phase-start-commit)..HEAD (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
+   --name 'rev-phase1' \
+   --id-file $REVIEW_ID_FILE"
 
 sleep 3
-REVIEW_ID=$(cat "$REVIEW_ID_FILE")
+REVIEW_ID=$(cat $REVIEW_ID_FILE)
 echo "$REVIEW_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn rev-phase1 (reviewer)" >> .pge/progress.md
 
 # Watch Review agent
-ai watch --id "$REVIEW_ID" --follow --pretty --timeout 15m 2>&1 | tail -20; echo "WATCH_EXIT=$?"
+ai watch --id "$REVIEW_ID" --follow --pretty
 
 # 读 review report，无 P1 → Phase 合入 + update Phase Log + cleanup
 cat .pge/review-phase1.md

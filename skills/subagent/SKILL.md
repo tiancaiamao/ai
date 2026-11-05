@@ -75,84 +75,85 @@ spawn 时不传任务，然后用 `send --wait` 发送任务。`send --wait` 同
 
 ### 阶段 1: Spawn
 
-**默认路线：直接前台启动，靠 bash 工具的 5s 自动后台。不要 tmux，也不要 `&`。**
+**⚠️ `ai serve` 是阻塞命令，必须用 tmux 后台运行。** 不能用 `&`（bash tool 的 pipe 会卡死）。
 
-bash 工具对任何超过 5s 的命令自动 detach、返回 `op-N` handle，命令结束时把输出作为后续消息投递。因此 `ai serve` 直接启动即可。
-
-> ⚠️ **必须显式传 `timeout: 0`。** 不传 = 默认 120s；到点时 bash 工具 SIGKILL 的是 `sh -c` 包装进程，而 `ai serve` 启动即 `setpgid` 到独立进程组（`subcommand/run/run.go`），所以 serve **不会**被杀，而是变成 ppid=1 的孤儿继续 running，父 agent 收到的完成通知却写着"被 kill"——状态与现实相反（实测 2026-11-05：`timeout: 8` → 8s 后包装进程死、serve 存活）。
->
-> 同理 **`ai watch`、`sleep 5+` 自己也会被 5s 规则 detach**：等待不靠命令阻塞（结果走后续消息），检查类命令必须短（`cat` / `ps -p` / `ai ls`）。
-
-**💡 `--input` 建议：** 推荐在 spawn 时通过 `--input-file` 传入任务指令（**不要用 `--input` 传长文本**）。`--input` 内联长文本要经 `/bin/sh -c` 解析 + 多行转义，极易出错导致 serve 立即退出（session 找不到）。规则：
+**💡 `--input` 建议：** 推荐在 spawn 时通过 `--input-file` 传入任务指令（**不要用 `--input` 传长文本**）。`--input` 内联长文本在 tmux 中极易因 quoting 问题导致 serve 立即退出（session 找不到）。规则：
 
 - **短指令（<100 chars）**：`--input 'Fix the bug in auth.go'` 即可
 - **多行/长文本（>100 chars 或含换行/引号/特殊字符）**：⚠️ **必须**先写入 /tmp 文件，再用 `--input-file /tmp/task.md`
 - 不带 `--input` spawn 空壳是支持的用法（如预热、条件分发、多轮交互），但务必在流程中安排好后续 `ai send`，避免遗忘导致空跑浪费 token。
 
 **⚠️ 推荐用 `--role`，避免手写 `--system-prompt`：** 大多数场景应使用 `--role coder`（默认值），`ai` 会自动加载对应的 system prompt。仅在需要高度定制化的 role（如 validator with specific checklist）时才用 `--system-prompt`。注意：同时设置两者时，`--system-prompt` 会覆盖 `--role`。
-**🩹 防泄漏纪律（2026-09-26 实测修正）：** `ai serve` **无论是否加 `--max-turns` 都不会自动退出**——实测 `--max-turns 1` 的 agent turn 完成 45s 后进程仍存活（且仍能接受 `ai send`）。`--max-turns` 只约束对话轮数，不约束进程生命周期。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；若用方式 B，session 命名必须守 `agent-$RUN_ID-*` 约定，否则 tmux 清理的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。
+**🩹 防泄漏纪律（2026-09-26 实测修正）：** `ai serve` **无论是否加 `--max-turns` 都不会自动退出**——实测 `--max-turns 1` 的 agent turn 完成 45s 后进程仍存活（且仍能接受 `ai send`）。`--max-turns` 只约束对话轮数，不约束进程生命周期。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；session 命名必须守 `agent-$RUN_ID-*` 约定，否则 recipe 的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。
 
 ```bash
 # 从 runtime_state 获取自己的 run ID
 RUN_ID=<your run_id from runtime_state>
+
+# 生成唯一的 tmux session 名和 id-file 路径
+TMUX_SESSION="agent-$RUN_ID-my-task"
 ID_FILE="/tmp/agent-$RUN_ID-my-task.id"
+
+# 清理可能存在的旧 tmux session 和 id 文件
+tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
 rm -f "$ID_FILE"
 
-# bash 工具调用（参数里带 timeout: 0 —— 见上方警告）
-ai serve --role coder \
-  --input 'Fix the bug in auth.go' \
-  --name 'fix-auth' \
-  --id-file "$ID_FILE"
-# → 5s 后返回 "⏳ ... detached as background operation op-N"（预期行为，不是失败）
+# 启动子 agent
+tmux new-session -d -s "$TMUX_SESSION" \
+  "ai serve --role coder \
+   --input 'Fix the bug in auth.go' \
+   --name 'fix-auth' \
+   --id-file $ID_FILE"
 
-# 等待 id 文件生成（serve 启动后写入）。sleep 必须 <5s，否则自己也被 detach
-sleep 3
+# 等待 id 文件生成（serve 启动后写入）
+sleep 2
 CHILD_ID=$(cat "$ID_FILE")
 
 # ⚠️ 重要：记录子 agent ID 到自己的 subagent 文件（用于隔离和 cleanup）
 echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 ```
 
-**方式 B（可选）：tmux。** 仅在下列场景用：① 子 agent 输出要留档——bash 后台 op 结束时，该命令的**整段 stdout 会作为 `Background operation op-N completed` 消息灌进主 agent 上下文**，tmux pane 不会；② 父 agent 进程崩溃/重启后仍可 attach 观察；③ 需要人中途看屏幕。把上面的 `ai serve ...` 换成：
-
-```bash
-TMUX_SESSION="agent-$RUN_ID-my-task"
-tmux kill-session -t "$TMUX_SESSION" 2>/dev/null   # 清理同名旧 session
-tmux new-session -d -s "$TMUX_SESSION" \
-  "ai serve --role coder --input-file /tmp/task.md --name 'fix-auth' --id-file $ID_FILE"
-sleep 3; CHILD_ID=$(cat "$ID_FILE")
-echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
-```
-
 **如果任务描述很长**（比如超过 shell ARG_MAX），用 `--input-file`：
 ```bash
+TMUX_SESSION="agent-$RUN_ID-long-task"
 ID_FILE="/tmp/agent-$RUN_ID-long-task.id"
+tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
 rm -f "$ID_FILE"
 echo "$LONG_TASK_PROMPT" > /tmp/task-prompt.txt
-ai serve --role coder --input-file /tmp/task-prompt.txt \
-  --name 'long-task' --id-file "$ID_FILE"        # 同样带 timeout: 0
-sleep 3; CHILD_ID=$(cat "$ID_FILE")
+tmux new-session -d -s "$TMUX_SESSION" \
+  "ai serve --role coder \
+   --input-file /tmp/task-prompt.txt \
+   --name 'long-task' \
+   --id-file $ID_FILE"
+sleep 2
+CHILD_ID=$(cat "$ID_FILE")
 echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 ```
 
 **仅在使用 `--system-prompt` 传入 @file 时支持引用 skill 目录下的文件：**
 
 ```bash
+TMUX_SESSION="agent-$RUN_ID-validator"
 ID_FILE="/tmp/agent-$RUN_ID-validator.id"
+tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
 rm -f "$ID_FILE"
-ai serve --system-prompt '@$HOME/.ai/skills/debate/references/proposer-system.md' \
-  --input 'Argue FOR: ...' --name 'proposer' --id-file "$ID_FILE"
-sleep 3; CHILD_ID=$(cat "$ID_FILE")
+tmux new-session -d -s "$TMUX_SESSION" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/debate/references/proposer-system.md' \
+   --input 'Argue FOR: ...' \
+   --name 'proposer' \
+   --id-file $ID_FILE"
+sleep 2
+CHILD_ID=$(cat "$ID_FILE")
 echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 ```
 
-**为什么用 `--id-file`：** 它是唯一可靠的 id 来源——`op-N` handle 不含 id，`tmux capture-pane` 依赖 pane 输出格式（不稳定）。
+**为什么用 `--id-file` 而不是 `tmux capture-pane`：** `--id-file` 更可靠，不受 tmux pane 内容格式影响。`tmux capture-pane` 依赖第一行输出格式，有时不稳定。
 
 **为什么要 `echo >> subagent`：** 这是子 agent 隔离的关键。写入 `~/.ai/runs/$RUN_ID/subagent` 文件后：
 - Cleanup 时你知道该 kill 哪些子 agent
 - 你**绝对不会误杀其他 agent**（因为只 kill 文件里记录的 ID）
 
-**⚠️ tmux session 命名规则（仅方式 B）：** 必须包含 `$RUN_ID` 前缀（如 `agent-$RUN_ID-xxx`），避免与其他 agent 的 tmux session 冲突。
+**⚠️ tmux session 命名规则：** 必须包含 `$RUN_ID` 前缀（如 `agent-$RUN_ID-xxx`），避免与其他 agent 的 tmux session 冲突。
 
 ### 阶段 2: 等待子 agent 完成
 
@@ -160,36 +161,36 @@ echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 `watch --follow --pretty` 是等待子 agent 的标准方式。它纯观察，不注入 prompt，不打断子 agent。
 
-**用退出码判断结果，不要靠 footer 文本：**
-
-| 退出码 | 含义 | 下一步 |
-|--------|------|--------|
-| `0` | 该轮已结束（live `_turn_end`，或 attach 时已结束走 replay） | cleanup |
-| `2` | watch 自身超时，agent 可能仍在跑 | `git diff` 看产出，再 watch 一次 |
-| `1` | 连不上 / 流断开 / 进程已退 | `ps -p <pid>` 确认死因 |
+**不需要预估任务时长。** 加 `--timeout 0` 即**无上限，等到 turn 结束**——这是最推荐的用法：
 
 ```bash
-# ✅ 推荐：--timeout 0 = 真正无上限，等到 turn 结束
-ai watch --id "$CHILD_ID" --follow --pretty --timeout 0 2>&1 | tail -20; echo "WATCH_EXIT=$?"
+# ✅ 推荐：真正无上限，等到 _turn_end 自动退出
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 0
+
+# ✅ 需要硬上限时（如 CI 卡死兜底）
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m
+
+# watch 返回后（turn 完成或 timeout），检查子 agent 状态：
+# - watch 输出以 "ai: turn complete" 结尾 → 完成 → cleanup
+# - watch 输出以 "watch timeout" 结尾 → 超时 → git diff 检查产出
+# - watch output ends with "agent process <id> exited without completing turn" → process exited abnormally
+# - watch output ends with "agent stream closed but process <id> still alive" → connection lost; process may still be running
+
 ```
 
-**⚠️ `--timeout` 默认是 10m，不是无限**（`defaultFollowWatchTimeout`，见 `subcommand/run/watch_model.go`）。长任务必须显式 `--timeout 0`，否则 10 分钟时以退出码 2 返回。
+**`--timeout` 两种模式：**
 
-**⚠️ 别再等 `ai: turn complete` 这一行。** 它只在"你 attach 时该轮还活着、由 live `_turn_end` 触发"时打到 stderr；若 attach 时该轮已结束（常见：spawn → `sleep 3` → 短任务已答完），watch 走 session-replay 直接退出，**没有这一行**，stderr 只剩 `__seq:N`。两种情况退出码都是 `0`（2026-11-05 实测）。
-
-**`--timeout` 取值：**
-
-| 取值 | 行为 | 适用场景 |
+| 模式 | 行为 | 适用场景 |
 |------|------|---------|
 | `--timeout 0` | 无上限，`_turn_end` 即退出 | **绝大多数场景** |
-| 不传 | 默认 10m 上限（超时退出码 2） | 短任务可以，长任务会被截断 |
-| `--timeout 15m` | 显式硬上限 | CI 卡死兜底、调试 |
+| 不传 `--timeout` | 默认 **10m** 硬上限（`defaultFollowWatchTimeout`），超时退出码 2 | 短任务可以，长任务会被截断 |
+| `--timeout 15m` | 显式硬上限，到时间强制退出 | CI 卡死兜底、调试 |
 
-> `ai serve` 是长驻进程，不存在"等到进程退出"的用法；watch 只等当前这一轮。
+> 注：不传 `--timeout` **不是**无限等待，默认只有 10m。长任务必须显式 `--timeout 0`。`ai serve` 是长驻进程，不存在"等到进程退出"的用法。
 
 **关键认知：**
-- 一次 watch 就能等到 turn 完成，不需要循环重试
-- watch 退出码 2（超时）≠ 子 agent 失败。子 agent 在后台继续运行。
+- `--timeout 0` 不需要循环重试——一次 watch 就能等到 turn 完成
+- watch 超时（退出码 2）≠ 子 agent 失败。子 agent 在 tmux 中继续运行。
 - 子 agent 等 LLM 响应时（如 rate limit retry）可能几分钟没输出但不是卡死。结合 `git diff` 判断。
 
 #### send --wait 的正确用途
@@ -214,11 +215,12 @@ ai send --id "$CHILD_ID" --wait --timeout 10m "Also handle nil input case"
 预期输出很长（review、探索、设计文档）时，在任务 prompt 中要求子 agent 把结果写入文件，避免 `send --wait --summary` 的截断问题：
 
 ```bash
-# spawn 时在任务书里指示写文件（任务书用 --input-file 传）
-echo '...Write your complete output to /tmp/result.md...Output DONE when complete.' > /tmp/task.md
-ai serve --role coder --input-file /tmp/task.md --name 'long-output' --id-file "$ID_FILE"
+# spawn 时在 --input 中指示写文件
+ai serve --role coder \
+  --input '...Write your complete output to /tmp/result.md...Output DONE when complete.' \
+  ...
 
-# watch 观察（--timeout 0 = 等到 turn 结束）
+# watch 观察（--timeout 0，等待 turn 完成自动退出）
 ai watch --id "$CHILD_ID" --follow --pretty --timeout 0
 
 # 完成后读文件（完整内容，无截断）
@@ -240,19 +242,22 @@ while read -r CHILD_ID; do
   ai kill --id "$CHILD_ID" 2>/dev/null
 done < ~/.ai/runs/$RUN_ID/subagent
 
-# ⚠️ ai kill 按 run 记录找进程；run 已标 failed / 漏登记时进程可能还在，
-# 用命令行特征兜底。绝不用 ai kill --all 或 pkill -f "ai serve"，那会杀掉其他 agent 的进程。
-pkill -f "id-file /tmp/agent-$RUN_ID-" 2>/dev/null
-
-# 验证：必须确认进程归零（ai ls 归零、tmux session 归零都不算）
-#    用 -lf（pid + 完整命令行）；⚠️ macOS 的 pgrep 无 -a 含义不是"显示命令行"，
-#    而是"把祖先进程也列入"（会把你自己的 sh 包装也算进去），所以别加 -a
-pgrep -lf "id-file /tmp/agent-$RUN_ID-" || echo "no ai serve processes left for $RUN_ID"
-
-# 用了方式 B（tmux）才需要：只 kill 名字匹配 "agent-$RUN_ID-*" 的 session
+# 清理 tmux sessions（只清理自己的）
+# ⚠️ 只 kill session 名匹配 "agent-$RUN_ID-*" 的 tmux session
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^agent-$RUN_ID-" | while read -r s; do
   tmux kill-session -t "$s" 2>/dev/null
 done
+
+# ⚠️ tmux kill-session 不保证杀死 ai serve 进程（2026-09-26 实测：杀 8 个 session
+# 后 6 个 serve 成孤儿继续存活，最老 3 天）。所以下面是两步，不是一步，
+# 且 pkill / pgrep 都限定在 $RUN_ID 前缀上——绝不用 ai kill --all 或 pkill -f "ai serve"，
+# 那会杀掉其他 agent 的进程。
+pkill -f "id-file /tmp/agent-$RUN_ID-" 2>/dev/null
+
+# 验证：tmux session 数归零不算清理完成，必须确认进程也归零
+#    用 -lf（pid + 完整命令行）；⚠️ macOS 的 pgrep 无 -a 含义不是"显示命令行"，
+#    而是"把祖先进程也列入"（会把你自己的 sh 包装也算进去），所以别加 -a
+pgrep -lf "id-file /tmp/agent-$RUN_ID-" || echo "no ai serve processes left for $RUN_ID"
 
 # 清理 id 文件
 rm -f /tmp/agent-$RUN_ID-*.id
@@ -263,8 +268,7 @@ rm -f ~/.ai/runs/$RUN_ID/subagent
 
 **为什么会泄漏（真实根因，2026-09-26 实测）：**
 1. `ai serve` 是长驻服务，**任何 flag 都不会让它自动退出**（`--max-turns` 也不行，实测 45s 仍存活）——退出只能由调用方显式 kill，没有例外。
-2. （仅方式 B）session 命名偏离 `agent-$RUN_ID-*` 约定（如自定义 `pge5-gen`、`b7t3-eval` 等前缀）会让 tmux 清理 `grep "^agent-$RUN_ID-"` 匹配不到任何东西，整批泄漏。
-3. spawn 时**没传 `timeout: 0`**：120s 后包装进程被杀，serve 因 `setpgid` 存活成孤儿，而完成通知看起来像"已被 kill"，于是没人再去清（2026-11-05 实测）。
+2. session 命名偏离 `agent-$RUN_ID-*` 约定（如自定义 `pge5-gen`、`b7t3-eval` 等前缀）会让上面的 cleanup recipe `grep "^agent-$RUN_ID-"` 匹配不到任何东西，整批泄漏。命名规则不是建议，是 cleanup recipe 能工作的前提。
 ### 生命周期铁律
 
 | 规则 | 违反后果 |
@@ -273,8 +277,7 @@ rm -f ~/.ai/runs/$RUN_ID/subagent
 | **任务确认完成后立即 kill** | 延迟 kill = 忘记 kill。watch 超时不等于完成——先检查再决定 |
 | **异常路径也要 kill** | 主 agent 崩溃会留下孤儿进程 |
 | **spawn 后必须写入 subagent 文件** | 无法追踪子 agent，可能忘记 cleanup |
-| **spawn `ai serve` 必须带 `timeout: 0`** | 120s 后包装进程被杀，serve 变孤儿且状态谎报 |
-| **（用 tmux 时）tmux session 名必须含 `$RUN_ID`** | 与其他 agent 的 session 冲突 |
+| **tmux session 名必须含 `$RUN_ID`** | 与其他 agent 的 session 冲突 |
 
 ## ⚠️ Kill Safety（防误杀）
 
@@ -306,7 +309,7 @@ tmux kill-server
 tmux kill-session -t <session-not-yours>
 ```
 
-### tmux kill-session 安全模式（仅方式 B）
+### tmux kill-session 安全模式
 
 只能 kill **session 名匹配 `agent-$RUN_ID-*` 的**：
 
@@ -335,7 +338,7 @@ serve 是常驻进程，跨多个 prompt 存活。一个从**进程启动**起�
 
 ### `ai watch --timeout`
 
-**加 `--timeout 0`（无上限，`_turn_end` 即退）。不传时默认只有 10m**（`defaultFollowWatchTimeout`），长任务会被截断成退出码 2：
+**加 `--timeout 0`**（无上限，`_turn_end` 即退）。不传时默认只有 10m（`defaultFollowWatchTimeout`），长任务会被截断成退出码 2：
 
 ```bash
 # ✅ 推荐：无上限，等到 turn 结束
@@ -348,17 +351,17 @@ ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m 2>&1 | tail -5
 ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m
 ```
 
-**⚠️ 禁止短轮询。** 每次 watch 的 toolResult 都进 context，是 compaction 次数暴涨和 token 浪费的主因。
+**⚠️ 禁止短轮询（<40s）。** 短轮询会让上下文被大量"无进展"输出填满——每次 watch 的 toolResult 都进 context，是 compaction 次数暴涨和 token 浪费的主因。
 
-也不要靠 `sleep` 轮询：**`sleep` 超过 5s 自己就被 bash 工具 detach**，拿不到即时结果；等待交给 watch，检查用 `cat` / `ps -p` / `ai ls` 这类瞬时命令。
+不要用 `sleep 25` 短循环钻 bash 的 `sleep≥30s` 禁令空子——那是次优策略；用 `--timeout 0` 的 watch 等待即可。
 
 ### 卡死判断
 
-watch（`--timeout 0`）会一直等到 turn 结束，所以卡死判断主要用于 watch 超时（退出码 2）返回后：
+`--timeout 0` 下 watch 会等到 turn 结束，所以卡死判断主要用于 watch 超时（退出码 2）返回后：
 
 `git diff` 无变化 **且** `ai ls` 显示进程已消失 → 确认卡死/崩溃，kill 并报告。注意 rate limit retry 期间也会无输出，但不是卡死——watch 中会显示 `llm_retry` 事件。
 
-### 超时恢复（仅 `--timeout` 模式适用）
+### 超时恢复
 
 watch 超时后：
 1. ❌ 不要立即 kill
@@ -369,7 +372,7 @@ watch 超时后：
 
 ### agent 崩溃检测
 
-如果 watch 输出显示 `agent process <id> exited without completing turn (crash or kill)`，说明 **agent 进程已退出但未正常完成 turn**（退出码 1）：
+如果 watch 输出显示 `agent process <id> exited without completing turn (crash or kill)`，说明 **agent 进程已退出但未正常完成 turn**：
 1. 检查是否为自己管理的 agent；结合 `ai ls` 状态确认进程已退出
 2. 检查 `git diff` 看有无部分产出
 3. 有产出 → 在此基础上继续；无产出 → 报告给用户
@@ -394,7 +397,7 @@ cat ~/.ai/runs/$RUN_ID/subagent
 
 1. 检查 `~/.ai/runs/$RUN_ID/subagent` 文件中的 ID
 2. 逐一 `ai kill --id <id>` 清理
-3. 如用了 tmux，清理对应 sessions（按 `agent-$RUN_ID-*` 前缀）
+3. 清理对应的 tmux sessions（按 `agent-$RUN_ID-*` 前缀）
 4. **报告给用户** 让用户知道清理了哪些
 
 ## ai serve Flags
@@ -421,8 +424,6 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | `--id <string>` | 目标 agent 的 run ID |
 
 **`send --wait` vs `send` + `watch`：** `send --wait` 内部先订阅事件流再发送消息，消除了 send→watch 之间的 race condition。一步到位。
-
-> ⚠️ `--wait` 同样受 bash 工具 5s 自动后台影响：子 agent 超过 5s 才回复时，该 bash 调用会 detach 成 `op-N`，回复内容作为后续消息到达，而不是在当下 toolResult 里。
 
 ## Edge Cases
 
@@ -461,14 +462,11 @@ cat ~/.ai/runs/$RUN_ID/subagent
 
 | ❌ Wrong | ✅ Right |
 |----------|----------|
-| `ai serve ... &` (用 bash `&` 后台) | ⛔ **仍禁止 `&`**：子进程继承 pipe，输出会丢；直接前台跑即可（5s 自动后台） |
-| spawn `ai serve` 不带 `timeout: 0` | ⛔ 默认 120s 只杀包装 shell，serve 因 `setpgid` 存活成孤儿，完成通知谎报 killed |
-| 以为 `ai watch --follow` 会阻塞住 turn | 它自己也会被 5s 规则 detach，结果作为后续消息回来 |
-| 用 `sleep 5`+ 轮询子 agent 状态 | 自己也被 detach，拿不到即时结果；检查用 `ps -p` / `cat` / `ai ls` |
+| `ai serve ... &` (用 bash `&` 后台) | ⛔ **禁止用 `&`**，bash tool 的 pipe 会卡死；必须用 tmux |
 | `ai serve ... \| head -1` (pipe breaks serve) | `--id-file` captures ID without pipe |
 | watch 后不 kill | watch 返回后 kill subagent 文件中的所有 ID |
 | spawn 空壳不带 `--input` | 推荐带 `--input`；如不带，务必安排后续 `ai send`，避免遗忘空跑 |
-| 用 `ai ls` status 判断完成 | `idle` 只表示"上一轮已结束"（由 events.jsonl 的 agent_end 推出），进程死后也可能残留状态；用 watch 退出码 + `ps` 判断 |
+| 用 `ai ls` status 判断完成 | `ai serve` status 永远 `running`，用 `watch --follow` 或 `send --wait` 判断 |
 | `ai send` + `ai watch` 两步操作 | `ai send --wait` 一步完成发送+等待回复 |
 | `ai send --wait` 不带消息参数 | ⛔ **必须带消息**，否则报错 `no message provided`。写 `"请给出结果"` 即可 |
 | `ai send --id X --message '...'` | ⛔ **不存在 `--message` flag**；消息是位置参数：`ai send --id X "msg"`（报错会显示 `flag provided but not defined: -message`） |
@@ -476,21 +474,20 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | kill 子 agent 后自己做它的活 | 用 `ai watch --follow` 观察进度，让子 agent 自己完成 |
 | `tmux kill-server` 清理环境 | ⛔ **绝对禁止**，会杀掉所有 tmux session |
 | `ai ls` 看到就 kill | ⛔ **绝对禁止**，只 kill subagent 文件中记录的 ID |
-| （用 tmux 时）tmux session 名不含 `$RUN_ID` | 必须用 `agent-$RUN_ID-xxx` 格式，避免冲突 |
+| tmux session 名不含 `$RUN_ID` | 必须用 `agent-$RUN_ID-xxx` 格式，避免冲突 |
 | 忘记写入 subagent 文件 | spawn 后必须 `echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent` |
 | 用 `ai kill` 杀不属于自己的 agent | ⛔ 只 kill 自己 subagent 文件里的 ID |
 | 长输出任务用 `send --wait --summary` 收集 | ⛔ `--summary` 截断长输出；长任务用写文件 + watch |
 | 用 `ai send` 查询正在干活的子 agent 进度 | ⛔ `send` 会注入新 prompt **打断**子 agent；用 `watch --follow --pretty` 观察 |
-| `ai watch` 不加 `--pretty` | ⛔ 非 TTY 环境（脚本/管道）不加 `--pretty` 会无输出 |
-| 用 `ai watch`（不带 `--follow`）当历史回放 | ⛔ 实测 0 行后阻塞；读已完成 turn 用 session transcript / `ai history` |
+| `ai watch` 不加 `--pretty` | ⛔ 非 TUI 环境（tmux/脚本）不加 `--pretty` 会无输出 |
 | watch 超时后立即 kill | ⛔ 超时 ≠ 失败；先 `git diff` 检查产出，有变化就再 watch 一轮 |
 | `ai watch --timeout 5m` 反复重试 | ⚠️ 用 `--timeout 0` 一次等到 turn 结束；不传 `--timeout` 的默认值是 10m |
-| `--input` 内联多行长文本 | ⚠️ `/bin/sh -c` 解析 + 多行转义会让 serve 立即退出。长文本（>100 chars）必须用 `--input-file /tmp/task.md` |
+| `--input` 内联多行长文本 | ⚠️ tmux quoting 会导致 serve 立即退出。长文本（>100 chars）必须用 `--input-file /tmp/task.md` |
 | kill 前不确认子 agent 是否在推进 | 连续两轮 watch 无输出且 `git diff` 无变化才考虑 kill |
 | kill 后发现有产出却从零重做 | ⛔ 先 `git diff` 检查子 agent 产出，在此基础上继续 |
 | 编排多任务时 watch 死等每一个 | ⛔ 用 NOTIFY 回调模式：任务书写明完成时 `ai send --id <父RUN_ID>`，父 agent 事件驱动 |
 | 死掉的 agent 用新任务书从头交代 | 用 `/resume <旧 session uuid>` 原位复活（同工作目录 serve 空壳 + send '/resume'；session uuid 取自 run.json 的 `session` 字段，见 Crash Recovery），上下文零损失 |
-| 相信 `ai ls` 的 running 状态 | 进程死后 status 可能仍显示 running；用 `ps -p <pid>` + send 探针确认 |
+| 相信 `ai ls` 的 running 状态 | 进程死后 status 可能仍显示 running；用 ps + tmux pane_dead + send 探针三件套确认 |
 | 用 `pgrep -af <pattern>` 判断进程死活 | ⚠️ macOS 的 `-a` = **把祖先进程也列入**（含执行命令那层 `sh -c` 包装），会谎报"还活着"；用 `pgrep -lf` 看命令行，死活以 `ps -p` 为准 |
 
 ## Event-Driven Orchestration（NOTIFY 回调模式）
@@ -516,9 +513,9 @@ cat ~/.ai/runs/$RUN_ID/subagent
 子 agent 进程死了（OOM/限流/宿主重启）但 session 数据还在时，**不必重新交代任务书**：
 
 ```bash
-# 1. 先确保工作目录与原 agent 一致（可用 change_workspace，或 `cd <dir> && ai serve ...`）
-#    再起一个新 serve 空壳（bash 调用带 timeout: 0）
-ai serve --name issue-XXr --id-file /tmp/agent-$RUN_ID-issue-XXr.id
+# 1. 在与原 agent 相同的工作目录起一个新 serve 空壳
+tmux new-session -d -s "agent-$RUN_ID-issue-XXr" \
+  "cd <原agent工作目录> && ai serve --name issue-XXr --id-file /tmp/agent-$RUN_ID-issue-XXr.id"
 sleep 3; NEW_ID=$(cat /tmp/agent-$RUN_ID-issue-XXr.id)
 echo "$NEW_ID" >> ~/.ai/runs/$RUN_ID/subagent   # 新 id 也要登记
 
@@ -545,6 +542,7 @@ ps aux | grep 'ai serve' | grep -v grep
 #    ⚠️ 用 -lf 看命令行；别加 -a（macOS 的 -a = 连祖先进程一起列出，
 #    会把执行命令的那层 sh 包装也算进去，看起来像"进程还活着"）
 #    ⚠️ 死活判定仍以 ps -p <pid> 为准，pgrep 只用于发现
+tmux list-panes -a -F '#{session_name} dead=#{pane_dead}'
 pgrep -lf "id-file /tmp/agent-$RUN_ID-"
 
 # 3. send 探针：报 "run X is not running" 即死（这条例外允许 send——探活优先于打断风险；

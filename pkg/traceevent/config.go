@@ -244,7 +244,6 @@ var eventNameToBit = map[string]int{
 	"steer_injected": 44,
 	"event_enqueued": 45,
 	"event_injected": 46,
-	"background_op":  47,
 }
 
 var defaultEnabledEvents = []string{
@@ -288,7 +287,6 @@ var defaultEnabledEvents = []string{
 	"steer_injected",
 	"event_enqueued",
 	"event_injected",
-	"background_op",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -321,7 +319,6 @@ var eventSelectorGroups = map[string][]string{
 		"tool_summary",
 		"tool_summary_batch",
 		"tool_output_truncated",
-		"background_op",
 	},
 	"event": {
 		"prompt",

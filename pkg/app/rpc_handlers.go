@@ -8,7 +8,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/agentconfig"
 	"github.com/tiancaiamao/ai/pkg/config"
-	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 // setupAgent wires the agent loop: agent context, session writer, tool
@@ -95,20 +94,6 @@ func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
 	ag.SetThinkingLevel(app.cfg.ThinkingLevel)
 	app.ag = ag
-
-	// Wire bash auto-backgrounding: a command detached after the threshold
-	// wakes the agent with its output when it completes, instead of blocking
-	// the turn.
-	if tool, ok := app.registry.Get("bash"); ok {
-		if bt, ok := tool.(*tools.BashTool); ok {
-			bt.SetBackgroundNotifier(func(opID, result string) {
-				if err := ag.EnqueueEvent("Background operation " + opID + " completed.\n\n" + result); err != nil {
-					slog.Error("Failed to enqueue background operation result",
-						"op", opID, "error", err)
-				}
-			})
-		}
-	}
 
 	slog.Info("Auto-compact enabled", "maxTokens", app.compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools)
