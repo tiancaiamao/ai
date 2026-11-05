@@ -88,6 +88,16 @@ type LoopConfig struct {
 	// ConsumeManualCompaction reports and consumes a pending manual compaction request.
 	// It is called by the agent loop at a safe step boundary.
 	ConsumeManualCompaction func() bool
+
+	// DrainSteer atomically claims and removes all queued steering
+	// messages. The run loop calls it at the top of each iteration (before
+	// BeforeModel hooks), so steering is applied exactly at a model-call
+	// boundary. Nil means no steering support.
+	DrainSteer func() []string
+	// HasPendingSteer reports whether steering messages are queued. When it
+	// returns true after the final response, the loop stays alive to drain
+	// them instead of ending the run. Nil means no steering support.
+	HasPendingSteer func() bool
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
@@ -164,7 +174,7 @@ func RunLoop(
 		// writebacks (AddMessage) append to agentCtx.RecentMessages from its
 		// own goroutine, so appending in place here would make this loop
 		// write and read the same slots concurrently (data race flagged by
-		// TestSteerMidThinking_NextRequestCarriesPartialThinking under -race).
+		// TestSteerMidThinking_NextRequestCarriesContext under -race).
 		currentCtx := &agentctx.AgentContext{
 			SystemPrompt:   agentCtx.SystemPrompt,
 			RecentMessages: append(append([]agentctx.AgentMessage{}, agentCtx.RecentMessages...), turnPrompts...),
@@ -205,6 +215,22 @@ func runInnerLoop(
 			return
 		}
 		state.advanceTurn()
+
+		// Drain steering messages queued while the previous model call ran.
+		// Steer never cancels the run: messages are claimed here, at the
+		// model-call boundary, and injected as user messages so the next
+		// LLM call carries them (ack phase one: the loop's history now
+		// owns them; the MessageEnd event writes the outer context back).
+		if config.DrainSteer != nil {
+			for _, steerMsg := range config.DrainSteer() {
+				m := agentctx.NewUserMessage(steerMsg)
+				agentCtx.RecentMessages = append(agentCtx.RecentMessages, m)
+				state.newMessages = append(state.newMessages, m)
+				stream.Push(NewMessageStartEvent(m))
+				stream.Push(NewMessageEndEvent(m))
+				slog.Info("[Loop] Steering message injected", "message", steerMsg)
+			}
+		}
 
 		// Pre-LLM compaction: check thresholds and compact if needed.
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false, true)
@@ -309,6 +335,14 @@ func runInnerLoop(
 					"retry_attempt", state.emptyRetries,
 					"max_retries", defaultEmptyResponseMaxRetries,
 				)
+				continue
+			}
+
+			// A steering message queued while the final response was
+			// streaming keeps the loop alive: the next iteration drains it
+			// and the run continues at the model-call boundary.
+			if config.HasPendingSteer != nil && config.HasPendingSteer() {
+				slog.Info("[Loop] pending steer — continuing past final response")
 				continue
 			}
 

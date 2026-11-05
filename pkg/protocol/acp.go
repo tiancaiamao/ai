@@ -446,6 +446,7 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	var params struct {
 		SessionID string            `json:"sessionId"`
 		Prompt    []acpContentBlock `json:"prompt"`
+		Event     bool              `json:"event"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		s.sendError(req.ID, acpErrInvalidParams, fmt.Sprintf("invalid session/prompt params: %v", err))
@@ -465,8 +466,9 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	// names a REGISTERED command is dispatched as a command, and it answers
 	// synchronously (no agent turn involved). Skill prompts (/skill:<name>)
 	// are excluded here — they run through the normal prompt path below where
-	// handlePrompt expands them into a full skill block.
-	if name, args, ok := matchACPCommand(s.app.Commands(), message); ok {
+	// handlePrompt expands them into a full skill block. Event prompts skip
+	// interception entirely: a machine payload is content, never a command.
+	if name, args, ok := matchACPCommand(s.app.Commands(), message); ok && !params.Event {
 		if name == "compact" {
 			// Compaction can take a while. Emit the command before running the
 			// synchronous handler so clients see an immediate acknowledgement;
@@ -499,7 +501,7 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	// with '/' without being a command (a Go comment does too), so only an
 	// explicit /skill:<name> prefix opts into skill-command parsing.
 	raw := !skill.IsSkillCommand(message)
-	if _, err := s.app.HandlePrompt(message, raw, ""); err != nil {
+	if _, err := s.app.HandlePrompt(message, raw, "", params.Event); err != nil {
 		s.pendingMu.Lock()
 		s.pendingPrompt = nil
 		s.pendingMu.Unlock()

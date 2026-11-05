@@ -25,10 +25,20 @@ const (
 
 	// eventDrainTimeout bounds how long processPrompt waits for the loop to
 	// finish pushing its tail events after the run's ctx was canceled
-	// (steer/abort) before draining them for context writeback. Salvage
+	// (abort) before draining them for context writeback. Salvage
 	// pushes happen within milliseconds of cancellation; the bound keeps
-	// Steer responsive when a producer is wedged in a ctx-unaware tool.
+	// Abort responsive when a producer is wedged in a ctx-unaware tool.
 	eventDrainTimeout = 500 * time.Millisecond
+
+	// defaultSteerQueueDepth bounds queued steering messages when no
+	// explicit depth is configured (steering modes "all"/"immediate").
+	defaultSteerQueueDepth = 64
+
+	// steerTickInterval delays the one-shot recheck that closes the
+	// enqueue-vs-run-exit race (see scheduleSteerTick): short enough that
+	// an orphaned steer is picked up promptly, long enough that the
+	// re-arm polling while a run is busy stays cheap.
+	steerTickInterval = 100 * time.Millisecond
 )
 
 func shouldLogAgentEvent(eventType string) bool {
@@ -81,6 +91,25 @@ type Agent struct {
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 	followUpQueue chan string // Queue for follow-up messages
+	// steerMu guards steerQueue and steerDepth.
+	steerMu sync.Mutex
+	// steerQueue holds steering messages waiting for the next model-call
+	// boundary. Steer never cancels the in-flight prompt; the run loop
+	// drains this queue at the top of each iteration.
+	steerQueue []string
+	// steerDepth caps steerQueue (0 = defaultSteerQueueDepth).
+	steerDepth int
+	// steerTickMu guards steerTick (the one-shot drain-retry timer). It is
+	// separate from steerMu so Steer can schedule a tick while holding
+	// steerMu.
+	steerTickMu sync.Mutex
+	steerTick   *time.Timer
+	// eventMu guards eventQueue.
+	eventMu sync.Mutex
+	// eventQueue holds machine-generated events (ai send --event). Lower
+	// priority than steer/followUp: runMessage drains it only after every
+	// human message is exhausted, so machine traffic cannot starve a person.
+	eventQueue    []string
 	runLoopFn     func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	traceBuf      *traceevent.TraceBuf
 	traceStop     chan struct{}
@@ -157,6 +186,11 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 		return a.manualCompact.Swap(false)
 	}
 
+	// Steering queue hooks: the run loop drains queued steer messages at
+	// each model-call boundary and stays alive while any remain.
+	a.LoopConfig.DrainSteer = a.drainSteers
+	a.LoopConfig.HasPendingSteer = func() bool { return a.GetPendingSteer() > 0 }
+
 	go a.runTraceFlusher()
 	return a
 }
@@ -178,45 +212,93 @@ func (a *Agent) Prompt(message string) error {
 	timer := time.NewTimer(agentBusyTimeout)
 	defer timer.Stop()
 
+	select {
+	case a.mu <- struct{}{}:
+		a.startRunLocked(message)
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("agent busy timeout after %v", agentBusyTimeout)
+	}
+}
+
+// tryStartRun starts a run immediately if the agent is idle, without
+// waiting. Returns ErrAgentBusy when a run is in progress.
+func (a *Agent) tryStartRun(message string) error {
+	select {
+	case a.mu <- struct{}{}:
+		a.startRunLocked(message)
+		return nil
+	default:
+		return ErrAgentBusy
+	}
+}
+
+// startRunLocked spawns the goroutine that owns the run. The caller must
+// hold a.mu; runMessage releases it when the run — and any steering or
+// follow-up messages queued behind it — finish.
+func (a *Agent) startRunLocked(message string) {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	ctx := traceevent.WithTraceBuf(baseCtx, a.traceBuf)
 	a.cancel = cancel
 
-	select {
-	case a.mu <- struct{}{}:
-		a.wg.Add(1)
-		go func() {
-			defer func() { <-a.mu }()
-			defer a.wg.Done()
-			slog.Info("[Agent] Starting prompt", "message", message)
+	a.wg.Add(1)
+	go func() {
+		defer func() { <-a.mu }()
+		defer a.wg.Done()
+		a.runMessage(ctx, message)
+	}()
+}
 
-			a.processPrompt(ctx, message)
+// runMessage runs one prompt to completion, then processes messages that
+// were queued while it ran: steering messages first (they target the run
+// that just ended), then follow-ups. Because a.mu stays held for the whole
+// chain, Steer and FollowUp enqueue instead of starting a competing run.
+func (a *Agent) runMessage(ctx context.Context, message string) {
+	slog.Info("[Agent] Starting prompt", "message", message)
+	a.processPrompt(ctx, message)
 
-			// Check for follow-up messages
-			for {
-				select {
-				case followUpMsg := <-a.followUpQueue:
-					if ctx.Err() != nil {
-						// This run was cancelled (e.g. Steer) while a follow-up
-						// was queued. Put it back so the next run processes it
-						// with a fresh context instead of running with a dead one.
-						select {
-						case a.followUpQueue <- followUpMsg:
-						default: // queue full — drop rather than block forever
-						}
-						return
-					}
-					slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
-					a.processPrompt(ctx, followUpMsg)
-				default:
-					// No more follow-up messages
-					return
-				}
+	for {
+		if steerMsg := a.popSteer(); steerMsg != "" {
+			if ctx.Err() != nil {
+				// Aborted before this steer was consumed: keep it queued for
+				// the next run instead of silently dropping it.
+				a.pushSteerFront(steerMsg)
+				return
 			}
-		}()
-		return nil
-	case <-timer.C:
-		return fmt.Errorf("agent busy timeout after %v", agentBusyTimeout)
+			slog.Info("[Agent] Processing queued steer", "message", steerMsg)
+			a.processPrompt(ctx, steerMsg)
+			continue
+		}
+		select {
+		case followUpMsg := <-a.followUpQueue:
+			if ctx.Err() != nil {
+				// Aborted while a follow-up was queued. Put it back so the
+				// next run processes it with a fresh context instead of
+				// running with a dead one.
+				select {
+				case a.followUpQueue <- followUpMsg:
+				default: // queue full — drop rather than block forever
+				}
+				return
+			}
+			slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
+			a.processPrompt(ctx, followUpMsg)
+			continue
+		default:
+		}
+		// Humans first: only when no steer and no follow-up is pending do we
+		// spend a turn on a machine event, so event traffic cannot preempt or
+		// starve a person.
+		if evtMsg := a.popEvent(); evtMsg != "" {
+			if ctx.Err() != nil {
+				a.pushEventFront(evtMsg)
+				return
+			}
+			slog.Info("[Agent] Processing queued event", "message", evtMsg)
+			a.processPrompt(ctx, evtMsg)
+			continue
+		}
+		return
 	}
 }
 
@@ -345,7 +427,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			// Sync compaction result to the outer context immediately.
 			// Without this, a.context.RecentMessages keeps growing via
 			// AddMessage above while the loop's currentCtx gets compacted.
-			// If EventAgentEnd is never consumed (e.g. Steer cancels ctx),
+			// If EventAgentEnd is never consumed (e.g. Abort cancels ctx),
 			// the next prompt starts with the stale un-compacted messages,
 			// triggering a spurious compaction.
 			if len(event.Value.Messages) > 0 {
@@ -478,49 +560,192 @@ func (a *Agent) Shutdown() {
 }
 
 // Steer interrupts the current execution and sends a new message.
-func (a *Agent) Steer(message string) {
+// Steer injects a message into the conversation at the next model-call
+// boundary. It never cancels the in-flight prompt: while the agent is
+// busy the message is queued (bounded by steerDepth, 0=default) and
+// claimed by the run loop before its next LLM call; when the agent is
+// idle, Steer starts a new prompt directly.
+func (a *Agent) Steer(message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		slog.Warn("[Agent] Steer called with empty message")
+		return nil
+	}
+
+	if err := a.tryStartRun(message); !errors.Is(err, ErrAgentBusy) {
+		return err // nil (a run started) or an unexpected error
+	}
+
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	depth := a.steerDepth
+	if depth == 0 {
+		depth = defaultSteerQueueDepth
+	}
+	if len(a.steerQueue) >= depth {
+		return fmt.Errorf("steer queue full (depth %d)", depth)
+	}
+	a.steerQueue = append(a.steerQueue, message)
+	slog.Info("[Agent] Steer queued", "queue", len(a.steerQueue), "depth", depth)
+	// The busy run may exit without draining this message (it could have
+	// passed its final popSteer before the append above). Arm a tick to
+	// pick it up if that happens.
+	a.scheduleSteerTick()
+	return nil
+}
+
+// drainSteers claims all queued steering messages for the run loop. The
+// claim is the first phase of the steer ack: once drained, the messages
+// belong to the loop's history (injected as user messages accompanied by
+// MessageStart/End events, which write the outer context back), so they
+// survive even if the run ends before that writeback lands.
+func (a *Agent) drainSteers() []string {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	if len(a.steerQueue) == 0 {
+		return nil
+	}
+	msgs := a.steerQueue
+	a.steerQueue = nil
+	return msgs
+}
+
+// popSteer removes the oldest queued steering message ("" when empty).
+func (a *Agent) popSteer() string {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	if len(a.steerQueue) == 0 {
+		return ""
+	}
+	msg := a.steerQueue[0]
+	a.steerQueue = a.steerQueue[1:]
+	return msg
+}
+
+// pushSteerFront puts a claimed steering message back at the front of the
+// queue (order-preserving put-back when a run is aborted mid-chain).
+func (a *Agent) pushSteerFront(msg string) {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	a.steerQueue = append([]string{msg}, a.steerQueue...)
+}
+
+// GetPendingSteer returns the number of steering messages waiting for the
+// next model-call boundary.
+func (a *Agent) GetPendingSteer() int {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	return len(a.steerQueue)
+}
+
+// EnqueueEvent queues a machine-generated event (ai send --event). Like
+// Steer it starts a run when idle and queues when busy, but a queued event
+// drains only after every human message (see runMessage), so machine
+// traffic cannot starve a person.
+func (a *Agent) EnqueueEvent(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	if err := a.tryStartRun(message); !errors.Is(err, ErrAgentBusy) {
+		return err
+	}
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	a.eventQueue = append(a.eventQueue, message)
+	// Same enqueue-vs-run-exit window as steer: arm the shared tick so an
+	// orphaned event still gets picked up.
+	a.scheduleSteerTick()
+	return nil
+}
+
+// popEvent dequeues the oldest event, or "" when the queue is empty.
+func (a *Agent) popEvent() string {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	if len(a.eventQueue) == 0 {
+		return ""
+	}
+	msg := a.eventQueue[0]
+	a.eventQueue = a.eventQueue[1:]
+	return msg
+}
+
+// pushEventFront returns an unconsumed event to the head of the queue (abort
+// path), mirroring pushSteerFront.
+func (a *Agent) pushEventFront(msg string) {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	a.eventQueue = append([]string{msg}, a.eventQueue...)
+}
+
+// GetPendingEvent reports how many machine events are queued.
+func (a *Agent) GetPendingEvent() int {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	return len(a.eventQueue)
+}
+
+// SetSteerQueueDepth caps the number of queued steering messages
+// (0 = defaultSteerQueueDepth). Steering mode "one-at-a-time" maps to 1.
+func (a *Agent) SetSteerQueueDepth(depth int) {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	a.steerDepth = depth
+}
+
+// scheduleSteerTick arms a one-shot timer that rechecks the steer queue. It
+// closes the enqueue-vs-run-exit race: a steer enqueued right after the
+// busy run's final popSteer would otherwise sit in the queue with no run to
+// drain it. No resident goroutine — time.AfterFunc fires once. Any pending
+// timer is stopped and replaced so exactly one tick is armed.
+func (a *Agent) scheduleSteerTick() {
+	a.steerTickMu.Lock()
+	defer a.steerTickMu.Unlock()
+	if a.steerTick != nil {
+		a.steerTick.Stop()
+	}
+	a.steerTick = time.AfterFunc(steerTickInterval, a.steerTickFn)
+}
+
+// disarmSteerTick cancels a pending drain-retry tick. Abort calls this so an
+// abort is not undone by the tick auto-starting a run for a put-back steer;
+// the message stays queued for the next Prompt instead.
+func (a *Agent) disarmSteerTick() {
+	a.steerTickMu.Lock()
+	defer a.steerTickMu.Unlock()
+	if a.steerTick != nil {
+		a.steerTick.Stop()
+		a.steerTick = nil
+	}
+}
+
+// steerTickFn drains the steer queue if it is still non-empty and the agent
+// has gone idle. When a run is still active it re-arms instead: that run may
+// yet drain the queue at its next boundary, or may already be past its final
+// check — firing again after it exits covers the latter.
+func (a *Agent) steerTickFn() {
+	if a.GetPendingSteer() == 0 && a.GetPendingEvent() == 0 {
+		return // drained by the normal run
+	}
+	select {
+	case a.mu <- struct{}{}:
+	default: // busy
+		a.scheduleSteerTick()
 		return
 	}
-
-	// Cancel current execution
-	if a.cancel != nil {
-		a.cancel()
+	// Prefer a human steer; a machine event is claimed only when no steer is
+	// waiting. Whichever is claimed becomes the run's first prompt, and
+	// runMessage drains the rest with the same human-first priority.
+	msg := a.popSteer()
+	if msg == "" {
+		msg = a.popEvent()
 	}
-
-	// Wait for the old loop to fully exit before touching AgentState.
-	// The old loop holds a.mu via Prompt's goroutine; acquiring it
-	// here guarantees the old loop has released all references to the
-	// shared *AgentState.
-	a.mu <- struct{}{}
-
-	// Reset tool-call counter — steer is a fresh start, the new loop
-	// should not inherit the old loop's compaction timing.
-	a.context.AgentState.ToolCallsSinceLastTrigger = 0
-
-	// Release mu — Prompt will re-acquire it.
-	<-a.mu
-
-	// Create new context
-	ctx, cancel := context.WithCancel(context.Background())
-	if a.traceBuf != nil {
-		ctx = traceevent.WithTraceBuf(ctx, a.traceBuf)
+	if msg == "" {
+		<-a.mu // queue emptied between the check and acquiring mu
+		return
 	}
-	// 	a.ctx = ctx
-	a.cancel = cancel
-
-	// Send prompt with steering message
-	if err := a.Prompt(message); err != nil {
-		if errors.Is(err, ErrAgentBusy) {
-			if followErr := a.FollowUp(message); followErr != nil {
-				slog.Error("[Agent] Steer follow-up failed", "error", followErr)
-			}
-			return
-		}
-		slog.Error("[Agent] Steer prompt failed", "error", err)
-	}
+	a.startRunLocked(msg)
 }
 
 // Abort stops the current execution.
@@ -534,6 +759,10 @@ func (a *Agent) Abort() {
 	if aborted {
 		a.clearFollowUps()
 	}
+	// Do not let a pending drain-retry tick restart a run for a put-back
+	// steer: abort means stop, and the message stays queued for the next
+	// Prompt.
+	a.disarmSteerTick()
 	// 	ctx, cancel := context.WithCancel(context.Background())
 	// 	if a.traceBuf != nil {
 	// 		ctx = traceevent.WithTraceBuf(ctx, a.traceBuf)

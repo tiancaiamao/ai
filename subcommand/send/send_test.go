@@ -47,7 +47,7 @@ func TestSendAndWaitTimeoutExits2(t *testing.T) {
 		<-keepOpen
 	}()
 
-	code := sendAndWait(client, "sess", "hello", true, 500*time.Millisecond, "testrun")
+	code := sendAndWait(client, "sess", "hello", true, 500*time.Millisecond, false, "testrun")
 	if code != 2 {
 		t.Fatalf("sendAndWait exit code = %d, want 2 (timeout)", code)
 	}
@@ -79,7 +79,7 @@ func TestSendAndWaitTurnEndExits0(t *testing.T) {
 		_ = conn.WriteMessage([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{}}`, env.ID)))
 	}()
 
-	code := sendAndWait(client, "sess", "hello", true, 5*time.Second, "testrun")
+	code := sendAndWait(client, "sess", "hello", true, 5*time.Second, false, "testrun")
 	if code != 0 {
 		t.Fatalf("sendAndWait exit code = %d, want 0 (turn completed)", code)
 	}
@@ -104,7 +104,7 @@ func TestSendAndWaitStreamClosedExits1(t *testing.T) {
 		_ = server.Close()
 	}()
 
-	code := sendAndWait(client, "sess", "hello", true, 5*time.Second, "testrun")
+	code := sendAndWait(client, "sess", "hello", true, 5*time.Second, false, "testrun")
 	if code != 1 {
 		t.Fatalf("sendAndWait exit code = %d, want 1 (stream closed without turn end)", code)
 	}

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,11 +34,24 @@ const exitGracePeriod = 250 * time.Millisecond
 // A var (not const) so tests can lower it.
 var maxBashTimeout = 4 * time.Hour
 
+// backgroundThreshold is how long Execute blocks on a foreground command
+// before detaching it into a background operation (dsh's 5-second rule). The
+// turn is not held hostage by a slow command: Execute returns a handle and
+// the command's output arrives later as a wake-up event when it finishes.
+const backgroundThreshold = 5 * time.Second
+
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
 	workspace   *Workspace
 	timeout     time.Duration
 	execTimeout time.Duration
+
+	// onBackgroundComplete, when set, is invoked with the operation ID and
+	// result text once a backgrounded command finishes. The app wires it to
+	// wake the agent; nil means background completions are dropped.
+	onBackgroundComplete func(opID, result string)
+	// bgOpCounter mints unique IDs for background operations.
+	bgOpCounter atomic.Int64
 }
 
 // NewBashTool creates a new Bash tool with dynamic workspace support.
@@ -65,6 +79,11 @@ func (t *BashTool) Description() string {
 For multi-line text or complex quoting, write to /tmp file first, then use --body-file or cat the file.
 
 Best for quick commands (<2 minutes). For long-running tasks (builds, large tests, servers), use the /tmux skill instead.
+
+Auto-backgrounding:
+  • A command still running after 5s is detached as a background operation and returns a handle (e.g. "op-1") immediately.
+  • Its output is delivered automatically as a follow-up message when it completes — you can end your turn or do other work meanwhile.
+  • Do NOT wait or poll for it; the tool timeout still bounds it.
 
 Timeout behavior:
   • Default: 120 seconds
@@ -240,13 +259,23 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	} else {
 		cmdCtx, cancel = context.WithCancel(cmdCtx)
 	}
-	defer cancel()
+	// bg is set once the command is detached into a background operation.
+	// After that the command must outlive turn cancellation (Abort), so both
+	// the deferred cancel and the parent-cancel link below skip it.
+	var bg atomic.Bool
+	defer func() {
+		if !bg.Load() {
+			cancel()
+		}
+	}()
 
-	// Also cancel on parent context done
+	// Also cancel on parent context done (foreground phase only).
 	if ctx.Done() != nil {
 		go func() {
 			<-ctx.Done()
-			cancel()
+			if !bg.Load() {
+				cancel()
+			}
 		}()
 	}
 
@@ -383,167 +412,234 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		close(streamDone)
 	}()
 
-	// Wait for command to finish. Since we use our own os.Pipe(),
-	// cmd.Wait() will NOT close our pipes — we control the lifecycle.
-	err = cmd.Wait()
-
-	// Drain stdout/stderr without hanging on descendant-held pipes.
-	//
-	// After the main shell exits, a background descendant (e.g. a subshell
-	// waiting on a daemon started with `cmd &`) can keep the pipe write ends
-	// open, so EOF never arrives. Blocking on outputWG.Wait() would hang the
-	// tool forever (the deadline check below is only reached after the
-	// drain). Instead, finalize once the pipes fall idle: the grace timer is
-	// re-armed on every chunk, so actively-writing descendants keep us
-	// reading, while a quiet holder of the pipe releases us after the grace
-	// period elapses. The daemon itself is left running — it is not part of
-	// the command.
-	idleTimer := time.NewTimer(exitGracePeriod)
-	defer idleTimer.Stop()
-	drainDone := make(chan struct{})
+	// Run the wait/drain/assemble phase in a goroutine so Execute can detach
+	// the command into the background once backgroundThreshold elapses,
+	// rather than holding the agent's turn hostage. The channel is buffered
+	// so the goroutine never blocks on a late reader (background case).
+	outcomeCh := make(chan []agentctx.ContentBlock, 1)
 	go func() {
-		defer close(drainDone)
-		for {
-			select {
-			case <-streamDone:
-				// Both pipes reached EOF — full output captured.
-				return
-			case <-activity:
-				// Output still arriving — defer finalizing so we don't
-				// truncate the tail.
-				if !idleTimer.Stop() {
-					select {
-					case <-idleTimer.C:
-					default:
+		// Wait for command to finish. Since we use our own os.Pipe(),
+		// cmd.Wait() will NOT close our pipes — we control the lifecycle.
+		err := cmd.Wait()
+
+		// Drain stdout/stderr without hanging on descendant-held pipes.
+		//
+		// After the main shell exits, a background descendant (e.g. a subshell
+		// waiting on a daemon started with `cmd &`) can keep the pipe write ends
+		// open, so EOF never arrives. Blocking on outputWG.Wait() would hang the
+		// tool forever (the deadline check below is only reached after the
+		// drain). Instead, finalize once the pipes fall idle: the grace timer is
+		// re-armed on every chunk, so actively-writing descendants keep us
+		// reading, while a quiet holder of the pipe releases us after the grace
+		// period elapses. The daemon itself is left running — it is not part of
+		// the command.
+		idleTimer := time.NewTimer(exitGracePeriod)
+		defer idleTimer.Stop()
+		drainDone := make(chan struct{})
+		go func() {
+			defer close(drainDone)
+			for {
+				select {
+				case <-streamDone:
+					// Both pipes reached EOF — full output captured.
+					return
+				case <-activity:
+					// Output still arriving — defer finalizing so we don't
+					// truncate the tail.
+					if !idleTimer.Stop() {
+						select {
+						case <-idleTimer.C:
+						default:
+						}
 					}
+					idleTimer.Reset(exitGracePeriod)
+				case <-idleTimer.C:
+					// Pipes idle — release the blocked stream goroutines.
+					stdoutRead.Close()
+					stderrRead.Close()
+					<-streamDone
+					return
+				case <-cmdCtx.Done():
+					// Deadline/cancel fired while draining (e.g. a background
+					// process keeps producing output past the timeout). Release
+					// the pipes so the timeout/cancel handling below proceeds.
+					stdoutRead.Close()
+					stderrRead.Close()
+					<-streamDone
+					return
 				}
-				idleTimer.Reset(exitGracePeriod)
-			case <-idleTimer.C:
-				// Pipes idle — release the blocked stream goroutines.
-				stdoutRead.Close()
-				stderrRead.Close()
-				<-streamDone
-				return
-			case <-cmdCtx.Done():
-				// Deadline/cancel fired while draining (e.g. a background
-				// process keeps producing output past the timeout). Release
-				// the pipes so the timeout/cancel handling below proceeds.
-				stdoutRead.Close()
-				stderrRead.Close()
-				<-streamDone
-				return
 			}
+		}()
+		<-drainDone
+
+		// Close read ends now that goroutines have finished.
+		stdoutRead.Close()
+		stderrRead.Close()
+
+		elapsed := time.Since(startTime)
+
+		// Check result
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			// Kill entire process group to ensure all child processes are terminated
+			if cmd.Process != nil {
+				pgid, err := syscall.Getpgid(cmd.Process.Pid)
+				if err == nil {
+					// Kill the process group (negative PID)
+					syscall.Kill(-pgid, syscall.SIGKILL)
+					slog.Debug("[Bash] Killed process group", "pgid", pgid)
+				} else {
+					// Fallback: kill just the process
+					syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
+					slog.Debug("[Bash] Killed single process (no process group)", "pid", cmd.Process.Pid)
+				}
+			}
+
+			slog.Warn("[Bash] Command timed out and was killed",
+				"command", command,
+				"timeout", execTimeout.Seconds(),
+				"elapsed", elapsed.Seconds(),
+				"outputSize", output.Len())
+
+			resultText := timeoutWarning + fmt.Sprintf(
+				"Command timed out after %v and was terminated.\n"+
+					"Partial output (%d bytes):\n%s\n\n"+
+					"For long-running tasks, use the /tmux skill for proper background management.",
+				execTimeout, output.Len(), output.String())
+
+			// When the command pipes into head/tail, the buffered partial output
+			// dies with the process group and partial output above is empty.
+			if strings.Contains(command, "|") {
+				resultText += "\n\ntip: piping to head/tail loses partial output on kill; redirect to a file instead (cmd > /tmp/out.log 2>&1)"
+			}
+
+			outcomeCh <- []agentctx.ContentBlock{
+				agentctx.TextContent{
+					Type: "text",
+					Text: resultText,
+				},
+			}
+			return
+		}
+
+		if cmdCtx.Err() == context.Canceled {
+			slog.Info("[Bash] Command canceled",
+				"command", command,
+				"elapsed", elapsed.Seconds(),
+				"outputSize", output.Len())
+
+			resultText := fmt.Sprintf("Command canceled.\n\nOutput:\n%s", output.String())
+			outcomeCh <- []agentctx.ContentBlock{
+				agentctx.TextContent{
+					Type: "text",
+					Text: resultText,
+				},
+			}
+			return
+		}
+
+		slog.Info("[Bash] Command completed",
+			"command", command,
+			"exitCode", cmd.ProcessState.ExitCode(),
+			"elapsed", elapsed.Seconds(),
+			"outputSize", output.Len())
+
+		// Handle sudo password issues: add helpful hints when sudo fails
+		// in non-interactive contexts.
+		outputText := output.String()
+		if hint := SudoHint(outputText); hint != "" {
+			outputText += hint
+		}
+
+		// Build result
+		var result strings.Builder
+		if timeoutWarning != "" {
+			result.WriteString(timeoutWarning)
+		}
+		result.WriteString(outputText)
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				if result.Len() > 0 {
+					result.WriteString("\n")
+				}
+				result.WriteString(fmt.Sprintf("Command exited with error (exit code %d)", exitErr.ExitCode()))
+			} else {
+				if result.Len() > 0 {
+					result.WriteString("\n")
+				}
+				result.WriteString(fmt.Sprintf("Command error: %v", err))
+			}
+		}
+
+		outcomeCh <- []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: result.String(),
+			},
 		}
 	}()
-	<-drainDone
 
-	// Close read ends now that goroutines have finished.
-	stdoutRead.Close()
-	stderrRead.Close()
-
-	elapsed := time.Since(startTime)
-
-	// Check result
-	if cmdCtx.Err() == context.DeadlineExceeded {
-		// Kill entire process group to ensure all child processes are terminated
-		if cmd.Process != nil {
-			pgid, err := syscall.Getpgid(cmd.Process.Pid)
-			if err == nil {
-				// Kill the process group (negative PID)
-				syscall.Kill(-pgid, syscall.SIGKILL)
-				slog.Debug("[Bash] Killed process group", "pgid", pgid)
-			} else {
-				// Fallback: kill just the process
-				syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
-				slog.Debug("[Bash] Killed single process (no process group)", "pid", cmd.Process.Pid)
+	// Foreground wait: if the command finishes within the threshold, return
+	// its output directly (the common case). Otherwise detach it into a
+	// background operation and return a handle immediately; the result is
+	// injected as a wake-up when the command finishes.
+	bgTimer := time.NewTimer(backgroundThreshold)
+	defer bgTimer.Stop()
+	select {
+	case blocks := <-outcomeCh:
+		return blocks, nil
+	case <-bgTimer.C:
+		bg.Store(true)
+		opID := fmt.Sprintf("op-%d", t.bgOpCounter.Add(1))
+		go func() {
+			blocks := <-outcomeCh
+			cancel()
+			if t.onBackgroundComplete != nil {
+				t.onBackgroundComplete(opID, blocksText(blocks))
 			}
-		}
-
-		slog.Warn("[Bash] Command timed out and was killed",
-			"command", command,
-			"timeout", execTimeout.Seconds(),
-			"elapsed", elapsed.Seconds(),
-			"outputSize", output.Len())
-
-		resultText := timeoutWarning + fmt.Sprintf(
-			"Command timed out after %v and was terminated.\n"+
-				"Partial output (%d bytes):\n%s\n\n"+
-				"For long-running tasks, use the /tmux skill for proper background management.",
-			execTimeout, output.Len(), output.String())
-
-		// When the command pipes into head/tail, the buffered partial output
-		// dies with the process group and partial output above is empty.
-		if strings.Contains(command, "|") {
-			resultText += "\n\ntip: piping to head/tail loses partial output on kill; redirect to a file instead (cmd > /tmp/out.log 2>&1)"
-		}
-
+		}()
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",
-				Text: resultText,
+				Text: backgroundHandleText(opID, command),
 			},
 		}, nil
 	}
-
-	if cmdCtx.Err() == context.Canceled {
-		slog.Info("[Bash] Command canceled",
-			"command", command,
-			"elapsed", elapsed.Seconds(),
-			"outputSize", output.Len())
-
-		resultText := fmt.Sprintf("Command canceled.\n\nOutput:\n%s", output.String())
-		return []agentctx.ContentBlock{
-			agentctx.TextContent{
-				Type: "text",
-				Text: resultText,
-			},
-		}, nil
-	}
-
-	slog.Info("[Bash] Command completed",
-		"command", command,
-		"exitCode", cmd.ProcessState.ExitCode(),
-		"elapsed", elapsed.Seconds(),
-		"outputSize", output.Len())
-
-	// Handle sudo password issues: add helpful hints when sudo fails
-	// in non-interactive contexts.
-	outputText := output.String()
-	if hint := SudoHint(outputText); hint != "" {
-		outputText += hint
-	}
-
-	// Build result
-	var result strings.Builder
-	if timeoutWarning != "" {
-		result.WriteString(timeoutWarning)
-	}
-	result.WriteString(outputText)
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if result.Len() > 0 {
-				result.WriteString("\n")
-			}
-			result.WriteString(fmt.Sprintf("Command exited with error (exit code %d)", exitErr.ExitCode()))
-		} else {
-			if result.Len() > 0 {
-				result.WriteString("\n")
-			}
-			result.WriteString(fmt.Sprintf("Command error: %v", err))
-		}
-	}
-
-	return []agentctx.ContentBlock{
-		agentctx.TextContent{
-			Type: "text",
-			Text: result.String(),
-		},
-	}, nil
 }
 
 // SetTimeout sets the timeout for command execution.
 func (t *BashTool) SetTimeout(timeout time.Duration) {
 	t.execTimeout = timeout
+}
+
+// SetBackgroundNotifier sets the callback invoked when a backgrounded command
+// completes. The app wires it to enqueue a wake-up event so the agent resumes
+// with the command's output.
+func (t *BashTool) SetBackgroundNotifier(fn func(opID, result string)) {
+	t.onBackgroundComplete = fn
+}
+
+// blocksText flattens tool content blocks into plain text for a
+// background-completion notification.
+func blocksText(blocks []agentctx.ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if tc, ok := b.(agentctx.TextContent); ok {
+			sb.WriteString(tc.Text)
+		}
+	}
+	return sb.String()
+}
+
+// backgroundHandleText is the tool result returned when a command is detached
+// into a background operation.
+func backgroundHandleText(opID, command string) string {
+	return fmt.Sprintf(
+		"⏳ Command still running after %s — detached as background operation %s.\n"+
+			"Command: %s\n\n"+
+			"It will finish on its own (bounded by the tool timeout) and its output "+
+			"will arrive as a follow-up message when done. You can end your turn or "+
+			"work on something else meanwhile — do NOT wait or poll for it.",
+		backgroundThreshold, opID, command)
 }
 
 func isBareCDCommand(command string) bool {
