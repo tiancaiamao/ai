@@ -39,21 +39,22 @@ func (app *App) handleFollowUpSlash(args string) (any, error) {
 	slog.Info("Received follow-up command")
 	app.stateMu.Lock()
 	streaming := app.isStreaming
+	followMode := app.followUpMode
 	app.stateMu.Unlock()
 
+	expandedMessage := app.expandSkillCommands(message)
+
+	// Nothing is running to follow up on: run the message as a normal prompt
+	// instead of rejecting it. Queuing it would strand it in the follow-up
+	// channel, which is only drained by a running turn.
 	if !streaming {
-		return nil, fmt.Errorf("agent is not busy")
+		return nil, app.ag.Prompt(expandedMessage)
 	}
 
-	if app.followUpMode != "one-at-a-time" && app.followUpMode != "queue" {
-		return nil, fmt.Errorf("follow-up mode is '%s', not enabled", app.followUpMode)
-	}
-
-	if app.followUpMode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
+	// Busy: mirror the busy-mode routing in handlePrompt.
+	if followMode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
 		return nil, fmt.Errorf("follow-up queue already has a pending message")
 	}
-
-	expandedMessage := app.expandSkillCommands(message)
 	return nil, app.ag.FollowUp(expandedMessage)
 }
 
