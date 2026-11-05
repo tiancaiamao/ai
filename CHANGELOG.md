@@ -3,6 +3,55 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Queued messages are delivered at model-call boundaries, and their wait is traceable (2026-11)
+
+**What changed**: Machine events now get the same delivery hook steering
+already had. The loop claims queued input at each model-call boundary through
+`LoopConfig.DrainSteer` (human) and the new `LoopConfig.DrainEvent` (machine),
+in that order, injected as user messages together with
+`MessageStart`/`MessageEnd`. Events are drained again right after a pre-LLM
+compaction. `eventQueue` is capped at `defaultEventQueueDepth` (64), mirroring
+the steer queue; a full queue returns an error to the caller instead of
+dropping an undelivered result, and the app's background notifier logs it.
+`backgroundHandleText` now states the real contract — the output arrives at
+the next model-call boundary — instead of "when done". `/follow-up` against an
+idle agent runs as a normal prompt rather than queueing, since a queue is only
+drained by a run that no longer exists. Observability, so none of this has to
+be inferred from spans again: `traceevent.LogAt` stamps an event with the time
+it happened rather than the time it was written, the agent's `cat:event`
+markers use it (`EventAt`), the new trace events `steer_enqueued` /
+`steer_injected` / `event_enqueued` / `event_injected` / `background_op`
+(phase `start`/`end`, with pid and elapsed) record queue latency and detached
+command lifetime. Queues hold `QueuedMessage` (text + `EnqueuedAt`) rather
+than bare strings, so the inject marker reports `waited_ms` directly instead
+of requiring the reader to subtract two markers, and it names the `path` that
+delivered the message: `boundary` when the loop injects it before an LLM
+call, `run_tail` when it becomes the next prompt in the chain because the run
+ended first. `turn_start` is emitted per loop iteration instead of once per
+run, so turns 2..N are marked too. A turn abandoned before its `turn_end`
+(context-limit recovery, empty model response) still leaves a start unpaired:
+both exits deliberately skip `turn_end`, because a `turn_end` with a nil
+message is how callers are told the run failed.
+
+**Why**: Events were popped only by the run tail, so a background result
+waited for the run to end — the common path, because `bash` detaches any
+command running longer than 5s. Measured waits: 161s across 22 turns in one
+run, 13m07s and 15m44s in two others. Steering latency was already bounded by
+one turn, so the asymmetry was an oversight rather than a policy. The cost the
+new policy does incur is stated plainly: a run that is mid-analysis can be
+handed a background result before its author planned to read it, and the
+model may then act on it early. Run-end delivery has the opposite failure
+(unbounded latency), and a pull-based design — the model asks for results —
+would avoid both but changes the tool contract; boundary injection is the
+smallest change that bounds latency without cancelling in-flight calls, since
+injection never happens inside a tool call. The compaction re-drain exists
+because a compaction can block for 17s generating its summary, and a message
+arriving during it previously waited for that plus a full LLM call. The
+`turn_start` fix is the trace counterpart of the same problem: with
+`turn_start` outside the loop and `turn_end` inside it, a 22-turn run traced
+one turn start, so turns 2..N were invisible and every run looked one turn
+long.
+
 ## Assistant messages carry `reasoning_content` for models that require it (2026-10)
 
 **What changed**: Requests now include `"reasoning_content"` on *every* assistant

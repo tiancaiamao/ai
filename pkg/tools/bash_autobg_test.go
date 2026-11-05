@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // TestBashToolAutoBackground verifies that a command still running after the
@@ -23,6 +26,23 @@ func TestBashToolAutoBackground(t *testing.T) {
 	tool.SetBackgroundNotifier(func(opID, result string) {
 		notified <- opID + "\x00" + result
 	})
+
+	// Capture trace markers: without them the trace shows the tool call
+	// ending while the command is still running, which reads as a hang.
+	traceevent.EnableEvent("background_op")
+	tb := traceevent.NewTraceBuf()
+	var traceMu sync.Mutex
+	var markers []traceevent.TraceEvent
+	tb.AddSink(func(e traceevent.TraceEvent) {
+		if e.Name != "background_op" {
+			return
+		}
+		traceMu.Lock()
+		markers = append(markers, e)
+		traceMu.Unlock()
+	})
+	traceevent.SetActiveTraceBuf(tb)
+	defer traceevent.ClearActiveTraceBuf(tb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -67,6 +87,29 @@ func TestBashToolAutoBackground(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("background completion notification not received")
+	}
+
+	// The operation must be traced from detach to completion, so its lifetime
+	// is visible instead of inferred from a finished tool call.
+	traceMu.Lock()
+	got := append([]traceevent.TraceEvent{}, markers...)
+	traceMu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("background_op markers = %d, want 2 (start, end)", len(got))
+	}
+	var phases []string
+	for _, m := range got {
+		for _, f := range m.Fields {
+			if f.Key == "phase" {
+				phases = append(phases, fmt.Sprint(f.Value))
+			}
+		}
+	}
+	if len(phases) != 2 || phases[0] != "start" || phases[1] != "end" {
+		t.Fatalf("background_op phases = %v, want [start end]", phases)
+	}
+	if !got[1].Timestamp.After(got[0].Timestamp) {
+		t.Errorf("end marker %v does not follow start marker %v", got[1].Timestamp, got[0].Timestamp)
 	}
 }
 
