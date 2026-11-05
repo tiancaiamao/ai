@@ -273,3 +273,13 @@ bash 工具对 >5s 的命令自动 detach 成 `op-N`，**`ai watch` 自己也不
 ## End-to-End Example
 
 完整的单 task 生命周期示例见 [`references/end-to-end-example.md`](references/end-to-end-example.md)。
+
+## Long-Haul（天/周级、跨多次 compaction）
+
+当单个 session 要持续数天、跨多次 compaction、产出几十个 PR 时，读
+[`references/long-haul-orchestration.md`](references/long-haul-orchestration.md)。
+
+它记录的是实战中的失败模式，而非理想流程：task file 怎么写才能不让 worker 挂死、watchdog 为什么必需、
+写操作必须用回执验证（有 4 条评论因 `>/dev/null` 静默丢失）、auth 404 的三点定位法（2FA 强制会让
+`repos/*` 全 404 而 `user`/`search` 正常）、reviewer 需要"针对性问题清单"而非"帮我 review"、
+反向验证不可省、以及**不要用自己制造的高负载污染正在跑的全量基线**。
