@@ -35,7 +35,7 @@ tools: [bash]
 
 1. **解析用户输入** - 识别 review 模式（PR/commit/uncommitted）
 2. **确定项目目录和变更范围** - 解析出项目路径和需要 review 的变更描述
-3. **启动 review agent** - 用 `ai serve --id-file` 启动独立 agent（bash 调用带 `timeout: 0`，前台即可，无需 tmux），传入 reviewer system prompt 和任务
+3. **启动 review agent** - 用 `ai serve --id-file`（tmux）启动独立 agent，传入 reviewer system prompt 和任务
 4. **发送任务** - 用 `ai send` 发送 review 指令
 5. **等待完成** - 用 `ai watch --follow --pretty --timeout 5m` 观察；命令返回后必须区分正常完成、超时和连接异常
 6. **超时恢复** - `watch` 超时不等于 reviewer 失败：检查结果文件和 `git diff --stat`，若有输出/变化就继续 watch 下一轮；至少连续两轮无进展才考虑 kill

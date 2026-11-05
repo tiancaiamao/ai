@@ -47,17 +47,14 @@ in that order, injected as user messages together with
 `MessageStart`/`MessageEnd`. Events are drained again right after a pre-LLM
 compaction. `eventQueue` is capped at `defaultEventQueueDepth` (64), mirroring
 the steer queue; a full queue returns an error to the caller instead of
-dropping an undelivered result, and the app's background notifier logs it.
-`backgroundHandleText` now states the real contract — the output arrives at
-the next model-call boundary — instead of "when done". `/follow-up` against an
+dropping an undelivered result. `/follow-up` against an
 idle agent runs as a normal prompt rather than queueing, since a queue is only
 drained by a run that no longer exists. Observability, so none of this has to
 be inferred from spans again: `traceevent.LogAt` stamps an event with the time
 it happened rather than the time it was written, the agent's `cat:event`
 markers use it (`EventAt`), the new trace events `steer_enqueued` /
-`steer_injected` / `event_enqueued` / `event_injected` / `background_op`
-(phase `start`/`end`, with pid and elapsed) record queue latency and detached
-command lifetime. Queues hold `QueuedMessage` (text + `EnqueuedAt`) rather
+`steer_injected` / `event_enqueued` / `event_injected` record queue latency.
+Queues hold `QueuedMessage` (text + `EnqueuedAt`) rather
 than bare strings, so the inject marker reports `waited_ms` directly instead
 of requiring the reader to subtract two markers, and it names the `path` that
 delivered the message: `boundary` when the loop injects it before an LLM
@@ -68,14 +65,12 @@ run, so turns 2..N are marked too. A turn abandoned before its `turn_end`
 both exits deliberately skip `turn_end`, because a `turn_end` with a nil
 message is how callers are told the run failed.
 
-**Why**: Events were popped only by the run tail, so a background result
-waited for the run to end — the common path, because `bash` detaches any
-command running longer than 5s. Measured waits: 161s across 22 turns in one
-run, 13m07s and 15m44s in two others. Steering latency was already bounded by
-one turn, so the asymmetry was an oversight rather than a policy. The cost the
-new policy does incur is stated plainly: a run that is mid-analysis can be
-handed a background result before its author planned to read it, and the
-model may then act on it early. Run-end delivery has the opposite failure
+**Why**: Events were popped only by the run tail, so a machine event queued
+by `ai send --event` waited for the run to end. Steering latency was already
+bounded by one turn, so the asymmetry was an oversight rather than a policy.
+The cost the new policy does incur is stated plainly: a run that is
+mid-analysis can be handed an event before its author planned to read it, and
+the model may then act on it early. Run-end delivery has the opposite failure
 (unbounded latency), and a pull-based design — the model asks for results —
 would avoid both but changes the tool contract; boundary injection is the
 smallest change that bounds latency without cancelling in-flight calls, since

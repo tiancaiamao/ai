@@ -29,9 +29,3 @@ func (r *Registry) All() []agentctx.Tool {
 	}
 	return tools
 }
-
-// Get returns the tool registered under name, if any.
-func (r *Registry) Get(name string) (agentctx.Tool, bool) {
-	tool, ok := r.tools[name]
-	return tool, ok
-}

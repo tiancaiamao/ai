@@ -52,9 +52,9 @@ func (r *llmRecorder) waitFor(t *testing.T, n int, timeout time.Duration) {
 	}
 }
 
-// TestEventWakesIdleAgent verifies the bash auto-backgrounding contract: an
-// event enqueued while the agent is idle starts a run immediately and reaches
-// the model. This is how a detached command's output returns to the
+// TestEventWakesIdleAgent verifies that an event enqueued while the agent is
+// idle starts a run immediately and reaches the model. This is how a
+// machine-generated event (e.g. `ai send --event`) returns to the
 // conversation, so it must not sit in the queue waiting for someone to prompt.
 func TestEventWakesIdleAgent(t *testing.T) {
 	rec := &llmRecorder{}
@@ -71,7 +71,7 @@ func TestEventWakesIdleAgent(t *testing.T) {
 	ag := NewAgentFromConfigWithContext(model, "test-key", agentCtx, DefaultLoopConfig())
 	defer ag.Shutdown()
 
-	if err := ag.EnqueueEvent("Background operation op-1 completed.\n\nDONE-OUTPUT"); err != nil {
+	if err := ag.EnqueueEvent("Machine event op-1.\n\nDONE-OUTPUT"); err != nil {
 		t.Fatalf("EnqueueEvent failed: %v", err)
 	}
 	rec.waitFor(t, 1, 5*time.Second)

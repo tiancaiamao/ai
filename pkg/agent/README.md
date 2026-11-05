@@ -148,8 +148,6 @@ turn abandoned before its `turn_end` — context-limit recovery, or an empty
 model response — leaves a start unpaired on purpose: both exits skip
 `turn_end`, because a `turn_end` with a nil message is how callers are told
 the run failed. Pairing is guaranteed on the normal path, not on error exits.
-`background_op` (phase `start`/`end`) marks the lifetime of a command detached
-by `bash` auto-backgrounding.
 
 ## Checkpoint Manager
 

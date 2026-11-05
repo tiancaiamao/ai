@@ -58,7 +58,7 @@ func TestEventInjectedWhileBusy(t *testing.T) {
 		t.Fatal("slow tool never started")
 	}
 
-	if err := ag.EnqueueEvent("Background operation op-1 completed.\n\nBG-EVENT-X"); err != nil {
+	if err := ag.EnqueueEvent("Machine event op-1.\n\nBG-EVENT-X"); err != nil {
 		t.Fatalf("EnqueueEvent failed: %v", err)
 	}
 	ag.Wait()
