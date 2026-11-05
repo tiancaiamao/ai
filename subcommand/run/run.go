@@ -51,7 +51,7 @@ func ServeSubcommand(binPath string) {
 	sessionFlag := fs.String("session", "", "Session file path")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
-	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout counted from process start, not reset per prompt (0 = unlimited); to bound waiting on a run, use 'ai watch --timeout' instead")
 	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
