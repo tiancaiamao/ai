@@ -161,14 +161,14 @@ echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 `watch --follow --pretty` 是等待子 agent 的标准方式。它纯观察，不注入 prompt，不打断子 agent。
 
-**不需要预估任务时长。** 默认行为（不加 `--timeout`）是**等待 turn 完成后自动退出**——这是最推荐的用法：
+**不需要预估任务时长。** 加 `--timeout 0` 即**无上限，等到 turn 结束**——这是最推荐的用法：
 
 ```bash
-# ✅ 推荐：默认模式（等待 _turn_end 自动退出，无需手动管理超时）
-ai watch --id "$CHILD_ID" --follow --pretty
+# ✅ 推荐：真正无上限，等到 _turn_end 自动退出
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 0
 
-# 如果确实需要硬上限（如 CI 场景），可以用 --timeout：
-# ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m
+# ✅ 需要硬上限时（如 CI 卡死兜底）
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m
 
 # watch 返回后（turn 完成或 timeout），检查子 agent 状态：
 # - watch 输出以 "ai: turn complete" 结尾 → 完成 → cleanup
@@ -182,14 +182,15 @@ ai watch --id "$CHILD_ID" --follow --pretty
 
 | 模式 | 行为 | 适用场景 |
 |------|------|---------|
-| 不加 `--timeout`（默认） | 等待 `_turn_end` 后自动退出 | **绝大多数场景** |
-| `--timeout 15m` | 硬上限，到时间强制退出 | CI 卡死兜底、调试 |
+| `--timeout 0` | 无上限，`_turn_end` 即退出 | **绝大多数场景** |
+| 不传 `--timeout` | 默认 **10m** 硬上限（`defaultFollowWatchTimeout`），超时退出码 2 | 短任务可以，长任务会被截断 |
+| `--timeout 15m` | 显式硬上限，到时间强制退出 | CI 卡死兜底、调试 |
 
-> 注：`--timeout 0` 与默认行为相同（无时间上限，turn 结束即退出）。`ai serve` 是长驻进程，不存在"等到进程退出"的用法。
+> 注：不传 `--timeout` **不是**无限等待，默认只有 10m。长任务必须显式 `--timeout 0`。`ai serve` 是长驻进程，不存在"等到进程退出"的用法。
 
 **关键认知：**
-- 默认模式不需要循环重试——一次 watch 就能等到 turn 完成
-- watch 超时（仅 `--timeout` 模式下）≠ 子 agent 失败。子 agent 在 tmux 中继续运行。
+- `--timeout 0` 不需要循环重试——一次 watch 就能等到 turn 完成
+- watch 超时（退出码 2）≠ 子 agent 失败。子 agent 在 tmux 中继续运行。
 - 子 agent 等 LLM 响应时（如 rate limit retry）可能几分钟没输出但不是卡死。结合 `git diff` 判断。
 
 #### send --wait 的正确用途
@@ -219,8 +220,8 @@ ai serve --role coder \
   --input '...Write your complete output to /tmp/result.md...Output DONE when complete.' \
   ...
 
-# watch 观察（默认模式，等待 turn 完成自动退出）
-ai watch --id "$CHILD_ID" --follow --pretty
+# watch 观察（--timeout 0，等待 turn 完成自动退出）
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 0
 
 # 完成后读文件（完整内容，无截断）
 cat /tmp/result.md
@@ -337,11 +338,11 @@ serve 是常驻进程，跨多个 prompt 存活。一个从**进程启动**起�
 
 ### `ai watch --timeout`
 
-**默认不加 `--timeout`**（等待 `_turn_end` 自动退出）。只在需要硬上限兜底时才设值：
+**加 `--timeout 0`**（无上限，`_turn_end` 即退）。不传时默认只有 10m（`defaultFollowWatchTimeout`），长任务会被截断成退出码 2：
 
 ```bash
-# ✅ 推荐：默认模式
-ai watch --id "$CHILD_ID" --follow --pretty 2>&1 | tail -5
+# ✅ 推荐：无上限，等到 turn 结束
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 0 2>&1 | tail -5
 
 # ✅ 需要硬上限时（如 CI 卡死兜底）
 ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m 2>&1 | tail -5
@@ -352,26 +353,26 @@ ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m
 
 **⚠️ 禁止短轮询（<40s）。** 短轮询会让上下文被大量"无进展"输出填满——每次 watch 的 toolResult 都进 context，是 compaction 次数暴涨和 token 浪费的主因。
 
-不要用 `sleep 25` 短循环钻 bash 的 `sleep≥30s` 禁令空子——那是次优策略；用默认 watch 模式等待即可。
+不要用 `sleep 25` 短循环钻 bash 的 `sleep≥30s` 禁令空子——那是次优策略；用 `--timeout 0` 的 watch 等待即可。
 
 ### 卡死判断
 
-默认模式下 watch 会等到 turn 结束，所以卡死判断主要用于 `--timeout` 模式或 watch 返回后的情况：
+`--timeout 0` 下 watch 会等到 turn 结束，所以卡死判断主要用于 watch 超时（退出码 2）返回后：
 
 `git diff` 无变化 **且** `ai ls` 显示进程已消失 → 确认卡死/崩溃，kill 并报告。注意 rate limit retry 期间也会无输出，但不是卡死——watch 中会显示 `llm_retry` 事件。
 
-### 超时恢复（仅 `--timeout` 模式适用）
+### 超时恢复
 
 watch 超时后：
 1. ❌ 不要立即 kill
 2. ✅ `git diff --stat` 检查子 agent 是否已产出文件
-3. ✅ 有产出 → 子 agent 在推进 → 再 watch 一轮（默认模式）
+3. ✅ 有产出 → 子 agent 在推进 → 再 watch 一轮（`--timeout 0`）
 4. ✅ 无产出且无输出 → 可能卡死 → kill
 5. ✅ kill 后如果发现有产出 → 在此基础上继续，**不要从零重做**
 
 ### agent 崩溃检测
 
-默认模式下，如果 watch 输出显示 `agent process <id> exited without completing turn (crash or kill)`，说明 **agent 进程已退出但未正常完成 turn**：
+如果 watch 输出显示 `agent process <id> exited without completing turn (crash or kill)`，说明 **agent 进程已退出但未正常完成 turn**：
 1. 检查是否为自己管理的 agent；结合 `ai ls` 状态确认进程已退出
 2. 检查 `git diff` 看有无部分产出
 3. 有产出 → 在此基础上继续；无产出 → 报告给用户
@@ -480,7 +481,7 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | 用 `ai send` 查询正在干活的子 agent 进度 | ⛔ `send` 会注入新 prompt **打断**子 agent；用 `watch --follow --pretty` 观察 |
 | `ai watch` 不加 `--pretty` | ⛔ 非 TUI 环境（tmux/脚本）不加 `--pretty` 会无输出 |
 | watch 超时后立即 kill | ⛔ 超时 ≠ 失败；先 `git diff` 检查产出，有变化就再 watch 一轮 |
-| `ai watch --timeout 5m` 反复重试 | ⚠️ 用**默认模式**（不加 `--timeout`）等待 turn 完成，一次 watch 即可。`--timeout` 仅用于 CI 卡死兜底 |
+| `ai watch --timeout 5m` 反复重试 | ⚠️ 用 `--timeout 0` 一次等到 turn 结束；不传 `--timeout` 的默认值是 10m |
 | `--input` 内联多行长文本 | ⚠️ tmux quoting 会导致 serve 立即退出。长文本（>100 chars）必须用 `--input-file /tmp/task.md` |
 | kill 前不确认子 agent 是否在推进 | 连续两轮 watch 无输出且 `git diff` 无变化才考虑 kill |
 | kill 后发现有产出却从零重做 | ⛔ 先 `git diff` 检查子 agent 产出，在此基础上继续 |
@@ -537,11 +538,12 @@ ai send --id "$NEW_ID" '恢复继续，注意 ...'
 # 1. ps 里找 serve 进程（按 --name 或 --input-file 特征过滤）
 ps aux | grep 'ai serve' | grep -v grep
 
-# 2. tmux pane 死活（进程退出后 session 会消失，pane_dead 也可查）
-tmux list-panes -a -F '#{session_name} dead=#{pane_dead}'
-#    进程按 id-file 特征扫时用 pgrep -lf；别加 -a（macOS 的 -a = 连祖先进程一起列出，
+# 2. 进程按 id-file 特征扫（方式 A 的可靠信号；用 tmux 时也可查 pane_dead）
+#    ⚠️ 用 -lf 看命令行；别加 -a（macOS 的 -a = 连祖先进程一起列出，
 #    会把执行命令的那层 sh 包装也算进去，看起来像"进程还活着"）
-#    死活判定仍以 ps -p <pid> 为准，pgrep 只用于发现
+#    ⚠️ 死活判定仍以 ps -p <pid> 为准，pgrep 只用于发现
+tmux list-panes -a -F '#{session_name} dead=#{pane_dead}'
+pgrep -lf "id-file /tmp/agent-$RUN_ID-"
 
 # 3. send 探针：报 "run X is not running" 即死（这条例外允许 send——探活优先于打断风险；
 #    但不得截断输出，否则会掩盖真实错误，退出码也被 pipe 吞掉）
