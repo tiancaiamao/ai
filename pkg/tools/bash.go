@@ -637,8 +637,9 @@ func backgroundHandleText(opID, command string) string {
 		"⏳ Command still running after %s — detached as background operation %s.\n"+
 			"Command: %s\n\n"+
 			"It will finish on its own (bounded by the tool timeout) and its output "+
-			"will arrive as a follow-up message when done. You can end your turn or "+
-			"work on something else meanwhile — do NOT wait or poll for it.",
+			"will be delivered as a new message at the next model-call boundary, "+
+			"i.e. after your current response (and any tool calls it makes). "+
+			"Work on something else meanwhile — do NOT wait or poll for it.",
 		backgroundThreshold, opID, command)
 }
 

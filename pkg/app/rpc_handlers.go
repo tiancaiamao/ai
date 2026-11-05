@@ -102,7 +102,10 @@ func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 	if tool, ok := app.registry.Get("bash"); ok {
 		if bt, ok := tool.(*tools.BashTool); ok {
 			bt.SetBackgroundNotifier(func(opID, result string) {
-				ag.EnqueueEvent("Background operation " + opID + " completed.\n\n" + result)
+				if err := ag.EnqueueEvent("Background operation " + opID + " completed.\n\n" + result); err != nil {
+					slog.Error("Failed to enqueue background operation result",
+						"op", opID, "error", err)
+				}
 			})
 		}
 	}

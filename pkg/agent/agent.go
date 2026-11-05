@@ -34,6 +34,11 @@ const (
 	// explicit depth is configured (steering modes "all"/"immediate").
 	defaultSteerQueueDepth = 64
 
+	// defaultEventQueueDepth bounds queued machine events (background
+	// operation results). Delivered events would otherwise accumulate for the
+	// whole run and burst at the end.
+	defaultEventQueueDepth = 64
+
 	// steerTickInterval delays the one-shot recheck that closes the
 	// enqueue-vs-run-exit race (see scheduleSteerTick): short enough that
 	// an orphaned steer is picked up promptly, long enough that the
@@ -189,6 +194,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	// Steering queue hooks: the run loop drains queued steer messages at
 	// each model-call boundary and stays alive while any remain.
 	a.LoopConfig.DrainSteer = a.drainSteers
+	a.LoopConfig.DrainEvent = a.popEvent
 	a.LoopConfig.HasPendingSteer = func() bool { return a.GetPendingSteer() > 0 }
 
 	go a.runTraceFlusher()
@@ -639,9 +645,10 @@ func (a *Agent) GetPendingSteer() int {
 }
 
 // EnqueueEvent queues a machine-generated event (ai send --event). Like
-// Steer it starts a run when idle and queues when busy, but a queued event
-// drains only after every human message (see runMessage), so machine
-// traffic cannot starve a person.
+// Steer it starts a run when idle and queues when busy. A queued event is
+// injected at the next model-call boundary, right after any steering message
+// (see DrainEvent), so a person still outranks a machine without letting
+// events starve for the rest of the run.
 func (a *Agent) EnqueueEvent(message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -652,6 +659,12 @@ func (a *Agent) EnqueueEvent(message string) error {
 	}
 	a.eventMu.Lock()
 	defer a.eventMu.Unlock()
+	if len(a.eventQueue) >= defaultEventQueueDepth {
+		// Dropping a background result loses information, so reject instead
+		// of silently overwriting: 64 undelivered events means the pipeline
+		// is broken, not that one more event is fine to drop.
+		return fmt.Errorf("event queue full (depth %d)", defaultEventQueueDepth)
+	}
 	a.eventQueue = append(a.eventQueue, message)
 	// Same enqueue-vs-run-exit window as steer: arm the shared tick so an
 	// orphaned event still gets picked up.

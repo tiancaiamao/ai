@@ -94,6 +94,11 @@ type LoopConfig struct {
 	// BeforeModel hooks), so steering is applied exactly at a model-call
 	// boundary. Nil means no steering support.
 	DrainSteer func() []string
+	// DrainEvent atomically claims and removes the oldest queued machine
+	// event, or "" when the queue is empty. The run loop calls it right after
+	// DrainSteer at each model-call boundary, so a background result waits at
+	// most one turn instead of the rest of the run. Nil means no event support.
+	DrainEvent func() string
 	// HasPendingSteer reports whether steering messages are queued. When it
 	// returns true after the final response, the loop stays alive to drain
 	// them instead of ending the run. Nil means no steering support.
@@ -210,17 +215,12 @@ func runInnerLoop(
 	state := newLoopState(config, agentCtx, stream, newMessages)
 	defer state.cleanup()
 
-	for {
-		if state.shouldStop(ctx) {
-			return
-		}
-		state.advanceTurn()
-
-		// Drain steering messages queued while the previous model call ran.
-		// Steer never cancels the run: messages are claimed here, at the
-		// model-call boundary, and injected as user messages so the next
-		// LLM call carries them (ack phase one: the loop's history now
-		// owns them; the MessageEnd event writes the outer context back).
+	// injectQueued appends messages that arrived while the run was busy:
+	// steering messages first (a person outranks a machine), then machine
+	// events. Injection happens only at a model-call boundary, never inside a
+	// tool call, so an in-flight call is neither cancelled nor split from its
+	// result.
+	injectQueued := func() {
 		if config.DrainSteer != nil {
 			for _, steerMsg := range config.DrainSteer() {
 				m := agentctx.NewUserMessage(steerMsg)
@@ -231,10 +231,38 @@ func runInnerLoop(
 				slog.Info("[Loop] Steering message injected", "message", steerMsg)
 			}
 		}
+		if config.DrainEvent != nil {
+			for {
+				evtMsg := config.DrainEvent()
+				if evtMsg == "" {
+					break
+				}
+				m := agentctx.NewUserMessage(evtMsg)
+				agentCtx.RecentMessages = append(agentCtx.RecentMessages, m)
+				state.newMessages = append(state.newMessages, m)
+				stream.Push(NewMessageStartEvent(m))
+				stream.Push(NewMessageEndEvent(m))
+				slog.Info("[Loop] Event message injected", "message", evtMsg)
+			}
+		}
+	}
+
+	for {
+		if state.shouldStop(ctx) {
+			return
+		}
+		state.advanceTurn()
+
+		injectQueued()
 
 		// Pre-LLM compaction: check thresholds and compact if needed.
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false, true)
 		_ = compacted
+
+		// Compaction can block for many seconds (summary generation). Pick up
+		// anything that arrived while it ran instead of making it wait for the
+		// next boundary.
+		injectQueued()
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
 		config.Hooks.RunBeforeModel(HookContext{
