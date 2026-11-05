@@ -321,9 +321,17 @@ done
 
 **核心原则：用默认 watch 模式等待 turn 完成，不预估任务时长。**
 
-### `ai serve --timeout`
+### `ai serve` 没有 `--timeout`（已移除）
 
-设大值（如 `30m`）或不设置。不要用 serve 超时来控制流程——子 agent 被超时杀死会导致工作丢失。
+serve 是常驻进程，跨多个 prompt 存活。一个从**进程启动**起算的墙钟 deadline 会砍掉「当时正在跑的那一轮」，而且不按 prompt 重置——第二个任务只能分到第一个任务用剩的时间，到点静默消失（`[serve] received signal: terminated`）。
+
+所以超时职责归位到两侧：
+
+| 想做什么 | 用什么 |
+|---|---|
+| 限制自己等多久 | `ai watch --timeout`（观察者侧，agent 不受影响，退出码 2） |
+| 结束子 agent | `ai kill --id <id>` |
+| 一次性任务要总预算 | `ai run --timeout`（由 `ai run` 在父进程侧兜底） |
 
 ### `ai watch --timeout`
 

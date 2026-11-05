@@ -63,7 +63,7 @@ func runACPSmoke(t *testing.T, tmpDir string, lines []string) []map[string]any {
 		respCh <- results
 	}()
 
-	_ = app.RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, 5*time.Second, "", "", "acp-smoke")
+	_ = app.RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, "", "", "acp-smoke")
 	outWriter.Close()
 
 	return <-respCh
@@ -81,7 +81,7 @@ func TestACPContextCancellation(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- app.RunACPWithContext(ctx, conn, t.TempDir(), "", "", 0, 5*time.Second, "", "", "acp-cancel")
+		done <- app.RunACPWithContext(ctx, conn, t.TempDir(), "", "", 0, "", "", "acp-cancel")
 	}()
 
 	cancel()
@@ -482,7 +482,7 @@ func runACPSmokeSession(t *testing.T, tmpDir string, additionalLines func(sessio
 		writer.Close()
 	}()
 
-	_ = app.RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, 5*time.Second, "", "", "acp-smoke")
+	_ = app.RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, "", "", "acp-smoke")
 	outWriter.Close()
 
 	return <-respCh

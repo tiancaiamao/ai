@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,7 +31,6 @@ type ServeConfig struct {
 	Session      string
 	SystemPrompt string
 	MaxTurns     int
-	Timeout      time.Duration
 	HTTP         string
 	Name         string
 	Role         string
@@ -51,7 +51,6 @@ func ServeSubcommand(binPath string) {
 	sessionFlag := fs.String("session", "", "Session file path")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
-	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
@@ -70,7 +69,6 @@ func ServeSubcommand(binPath string) {
 		Session:      *sessionFlag,
 		SystemPrompt: *systemPromptFlag,
 		MaxTurns:     *maxTurnsFlag,
-		Timeout:      *timeoutFlag,
 		HTTP:         *httpFlag,
 		Name:         *nameFlag,
 		Role:         *roleFlag,
@@ -313,9 +311,9 @@ func startServeApp(cfg ServeConfig) *serveApp {
 	go func() {
 		var err error
 		if cfg.AgentConfig != "" {
-			err = app.RunACPWithAgentConfigContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Timeout, cfg.AgentConfig, cfg.Model, id)
+			err = app.RunACPWithAgentConfigContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.AgentConfig, cfg.Model, id)
 		} else {
-			err = app.RunACPWithContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Timeout, cfg.Role, cfg.Model, id)
+			err = app.RunACPWithContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Role, cfg.Model, id)
 		}
 		if err != nil {
 			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
@@ -428,7 +426,7 @@ func RunSubcommand(binPath string) {
 	sessionFlag := fs.String("session", "", "Session file path")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
-	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout; ai run stops the agent when it expires (0 = unlimited)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
@@ -440,11 +438,21 @@ func RunSubcommand(binPath string) {
 		Session:      *sessionFlag,
 		SystemPrompt: *systemPromptFlag,
 		MaxTurns:     *maxTurnsFlag,
-		Timeout:      *timeoutFlag,
 		HTTP:         *httpFlag,
 		Name:         *nameFlag,
 		Role:         *roleFlag,
 		Model:        *modelFlag,
+	}
+
+	// --timeout is enforced here, not inside `ai serve`: the serve process is
+	// spawned detached in its own process group, so nothing else supervises it
+	// and the deadline has to live with the spawner.
+	var timedOut atomic.Bool
+	var timeoutC <-chan time.Time
+	if *timeoutFlag > 0 {
+		timer := time.NewTimer(*timeoutFlag)
+		defer timer.Stop()
+		timeoutC = timer.C
 	}
 
 	// Serve writes its run ID here once the ACP server is live.
@@ -488,6 +496,14 @@ func RunSubcommand(binPath string) {
 	model := newRunModel(sp.meta, client, sid)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	go model.consumeACP(client.Updates(), p)
+	if timeoutC != nil {
+		go func() {
+			<-timeoutC
+			timedOut.Store(true)
+			p.Quit()
+			sp.stop()
+		}()
+	}
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	}
@@ -495,6 +511,11 @@ func RunSubcommand(binPath string) {
 	// TUI exited — stop the serve process and wait for it to exit.
 	sp.stop()
 	sp.wait()
+
+	if timedOut.Load() {
+		fmt.Fprintf(os.Stderr, "error: timeout %s reached; agent stopped\n", *timeoutFlag)
+		os.Exit(1)
+	}
 
 	// Report the final status (written by the serve process on exit).
 	if m, err := tui.LoadRunMeta(tui.RunMetaPath("", sp.meta.ID)); err == nil && m.Status == tui.StatusFailed {
@@ -533,33 +554,7 @@ var serveErrorLogHint = "~/.ai/runs/<id>/error.log"
 // startServeProcess spawns a detached `ai serve` subprocess in its own
 // process group.
 func startServeProcess(binPath string, cfg ServeConfig, idFile string) (*serveProcess, error) {
-	args := []string{"serve", "--id-file", idFile}
-	if cfg.Session != "" {
-		args = append(args, "--session", cfg.Session)
-	}
-	if cfg.SystemPrompt != "" {
-		args = append(args, "--system-prompt", cfg.SystemPrompt)
-	}
-	if cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", strconv.Itoa(cfg.MaxTurns))
-	}
-	if cfg.Timeout > 0 {
-		args = append(args, "--timeout", cfg.Timeout.String())
-	}
-	if cfg.HTTP != "" {
-		args = append(args, "--http", cfg.HTTP)
-	}
-	if cfg.Name != "" {
-		args = append(args, "--name", cfg.Name)
-	}
-	if cfg.Role != "" {
-		args = append(args, "--role", cfg.Role)
-	}
-	if cfg.Model != "" {
-		args = append(args, "--model", cfg.Model)
-	}
-
-	cmd := exec.Command(binPath, args...)
+	cmd := exec.Command(binPath, serveArgs(cfg, idFile)...)
 	cmd.Stdout = nil // detached: keep the terminal clean
 	cmd.Stderr = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -573,6 +568,35 @@ func startServeProcess(binPath string, cfg ServeConfig, idFile string) (*servePr
 		close(sp.exited)
 	}()
 	return sp, nil
+}
+
+// serveArgs builds the command line for the detached serve child. It carries no
+// deadline: serve outlives individual prompts, so the timeout is enforced by
+// the spawner (see RunSubcommand).
+func serveArgs(cfg ServeConfig, idFile string) []string {
+	args := []string{"serve", "--id-file", idFile}
+	if cfg.Session != "" {
+		args = append(args, "--session", cfg.Session)
+	}
+	if cfg.SystemPrompt != "" {
+		args = append(args, "--system-prompt", cfg.SystemPrompt)
+	}
+	if cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(cfg.MaxTurns))
+	}
+	if cfg.HTTP != "" {
+		args = append(args, "--http", cfg.HTTP)
+	}
+	if cfg.Name != "" {
+		args = append(args, "--name", cfg.Name)
+	}
+	if cfg.Role != "" {
+		args = append(args, "--role", cfg.Role)
+	}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	return args
 }
 
 // serveProcess tracks the detached serve subprocess.

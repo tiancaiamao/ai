@@ -3,6 +3,41 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## `ai serve` drops `--timeout`; the deadline moves to the spawner (2026-11)
+
+**What changed**: `ai serve` and `ai acp` no longer accept `--timeout`. The
+`timeout` parameter is gone from `app.RunACP*Context` and `protocol.Run`, along
+with the timer that used to `ag.Abort()` + cancel the server from inside the
+serving process. `ai run --timeout` keeps its flag but now enforces it itself:
+the parent arms one timer after spawning the child, and on expiry quits the TUI
+and stops the serve subprocess it started, then exits 1 with
+`error: timeout <d> reached; agent stopped`.
+
+**Why**: the flag read as a sibling of `ai watch --timeout` but pointed the
+other way. Watch's timeout is observer-side — stop waiting, exit 2, leave the
+agent alone. Serve's was agent-side — abort the running turn and exit — and it
+was anchored at *process start*, not per prompt. On a long-lived serve fed by
+repeated `ai send`, the Nth prompt inherited whatever was left of the first
+prompt's budget and died mid-turn with nothing but
+`[serve] received signal: terminated` in the log. Nothing about that is
+attributable to the timeout by the time the orchestrator sees it.
+
+The flag existed to serve `ai run`, which spawns serve detached in its own
+process group: after `Setpgid` the parent holds no channel to police the child,
+so the timer had to live in the child. That reasoning is real, but it never
+applied to a *persistent* agent, and the two usages shared one flag and one
+help string ("Total execution timeout"). The enforcement belongs to whoever
+spawned the process, so it moved there; the child no longer knows about
+deadlines at all.
+
+A side effect worth naming: a timed-out `ai run` now exits non-zero. Before, the
+child's timer produced a normal `done` status, so a CI pipeline that set
+`--timeout` to catch a hang got exit 0 from the very hang it was guarding
+against.
+
+Consequences for callers: `ai serve` runs are bounded by `ai watch --timeout`
+(observer side) plus `ai kill` (lifecycle), never by a self-destruct timer. The
+subagent and pge skills were updated to say so.
 ## Queued messages are delivered at model-call boundaries, and their wait is traceable (2026-11)
 
 **What changed**: Machine events now get the same delivery hook steering
