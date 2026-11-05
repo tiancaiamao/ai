@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -163,6 +164,15 @@ func TestQueueMarkersTraced(t *testing.T) {
 		}
 		if !inj[0].Timestamp.After(enq[0].Timestamp) && !inj[0].Timestamp.Equal(enq[0].Timestamp) {
 			t.Errorf("event_injected at %v precedes enqueue at %v", inj[0].Timestamp, enq[0].Timestamp)
+		}
+		// The inject marker reports the wait directly: the event was queued
+		// while the 300ms tool was running, so it waited most of that.
+		waited, err := strconv.ParseInt(rec.field(inj[0], "waited_ms"), 10, 64)
+		if err != nil {
+			t.Fatalf("event_injected waited_ms = %q, want an integer", rec.field(inj[0], "waited_ms"))
+		}
+		if waited < 100 {
+			t.Errorf("waited_ms = %d, want >= 100 for an event queued during a 300ms tool call", waited)
 		}
 	}
 }

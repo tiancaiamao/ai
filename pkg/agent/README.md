@@ -68,8 +68,8 @@ type LoopConfig struct {
     ContextWindow           int               // Model context window (0=default 128000)
     EnableCheckpoint        bool              // Auto checkpoint creation (default true)
     Hooks                   *HookRegistry     // Lifecycle hooks
-    DrainSteer              func() []string   // Claims queued steering at each model-call boundary
-    DrainEvent              func() string     // Claims one queued machine event at each boundary
+    DrainSteer              func() []QueuedMessage // Claims queued steering at each model-call boundary
+    DrainEvent              func() []QueuedMessage // Claims queued machine events at each boundary
     AgentContextPrefix      string            // Skills + AGENTS.md prefix for cache
     // ... many more timeout/retry/tool-output fields
 }
@@ -134,8 +134,11 @@ draining at the end of the run — leaves the wait unbounded (measured: 161s
 across 22 turns, and 13m07s / 15m44s in two other runs).
 
 Both sides of the queue are traced (`steer_enqueued`/`steer_injected`,
-`event_enqueued`/`event_injected`), so the wait between queueing and
-injection is read from the trace instead of inferred from spans.
+`event_enqueued`/`event_injected`) and the inject marker carries `waited_ms`,
+so the wait between queueing and injection is read from the trace instead of
+inferred from spans. `DrainSteer`/`DrainEvent` return `[]QueuedMessage`
+(text plus `EnqueuedAt`), which is what makes that number available to the
+loop.
 `background_op` (phase `start`/`end`) marks the lifetime of a command detached
 by `bash` auto-backgrounding.
 

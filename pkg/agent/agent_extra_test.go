@@ -129,7 +129,7 @@ func TestSteerQueueDepth(t *testing.T) {
 		t.Errorf("pending steer = %d, want 1", n)
 	}
 
-	if got := ag.drainSteers(); len(got) != 1 || got[0] != "first" {
+	if got := ag.drainSteers(); len(got) != 1 || got[0].Text != "first" {
 		t.Errorf("drainSteers = %v, want [first]", got)
 	}
 	if n := ag.GetPendingSteer(); n != 0 {

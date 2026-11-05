@@ -101,7 +101,7 @@ type Agent struct {
 	// steerQueue holds steering messages waiting for the next model-call
 	// boundary. Steer never cancels the in-flight prompt; the run loop
 	// drains this queue at the top of each iteration.
-	steerQueue []string
+	steerQueue []QueuedMessage
 	// steerDepth caps steerQueue (0 = defaultSteerQueueDepth).
 	steerDepth int
 	// steerTickMu guards steerTick (the one-shot drain-retry timer). It is
@@ -114,7 +114,7 @@ type Agent struct {
 	// eventQueue holds machine-generated events (ai send --event). Lower
 	// priority than steer/followUp: runMessage drains it only after every
 	// human message is exhausted, so machine traffic cannot starve a person.
-	eventQueue    []string
+	eventQueue    []QueuedMessage
 	runLoopFn     func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	traceBuf      *traceevent.TraceBuf
 	traceStop     chan struct{}
@@ -194,7 +194,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	// Steering queue hooks: the run loop drains queued steer messages at
 	// each model-call boundary and stays alive while any remain.
 	a.LoopConfig.DrainSteer = a.drainSteers
-	a.LoopConfig.DrainEvent = a.popEvent
+	a.LoopConfig.DrainEvent = a.drainEvents
 	a.LoopConfig.HasPendingSteer = func() bool { return a.GetPendingSteer() > 0 }
 
 	go a.runTraceFlusher()
@@ -264,15 +264,15 @@ func (a *Agent) runMessage(ctx context.Context, message string) {
 	a.processPrompt(ctx, message)
 
 	for {
-		if steerMsg := a.popSteer(); steerMsg != "" {
+		if steerMsg := a.popSteer(); steerMsg.Text != "" {
 			if ctx.Err() != nil {
 				// Aborted before this steer was consumed: keep it queued for
 				// the next run instead of silently dropping it.
 				a.pushSteerFront(steerMsg)
 				return
 			}
-			slog.Info("[Agent] Processing queued steer", "message", steerMsg)
-			a.processPrompt(ctx, steerMsg)
+			slog.Info("[Agent] Processing queued steer", "message", steerMsg.Text)
+			a.processPrompt(ctx, steerMsg.Text)
 			continue
 		}
 		select {
@@ -295,13 +295,13 @@ func (a *Agent) runMessage(ctx context.Context, message string) {
 		// Humans first: only when no steer and no follow-up is pending do we
 		// spend a turn on a machine event, so event traffic cannot preempt or
 		// starve a person.
-		if evtMsg := a.popEvent(); evtMsg != "" {
+		if evtMsg := a.popEvent(); evtMsg.Text != "" {
 			if ctx.Err() != nil {
 				a.pushEventFront(evtMsg)
 				return
 			}
-			slog.Info("[Agent] Processing queued event", "message", evtMsg)
-			a.processPrompt(ctx, evtMsg)
+			slog.Info("[Agent] Processing queued event", "message", evtMsg.Text)
+			a.processPrompt(ctx, evtMsg.Text)
 			continue
 		}
 		return
@@ -569,6 +569,14 @@ func (a *Agent) Shutdown() {
 	a.shutdownTracing()
 }
 
+// QueuedMessage is a message waiting for a model-call boundary. EnqueuedAt
+// is when it was queued, so the loop can report how long it waited before
+// injection instead of leaving that to be inferred from separate markers.
+type QueuedMessage struct {
+	Text       string
+	EnqueuedAt time.Time
+}
+
 // Steer interrupts the current execution and sends a new message.
 // Steer injects a message into the conversation at the next model-call
 // boundary. It never cancels the in-flight prompt: while the agent is
@@ -595,7 +603,7 @@ func (a *Agent) Steer(message string) error {
 	if len(a.steerQueue) >= depth {
 		return fmt.Errorf("steer queue full (depth %d)", depth)
 	}
-	a.steerQueue = append(a.steerQueue, message)
+	a.steerQueue = append(a.steerQueue, QueuedMessage{Text: message, EnqueuedAt: time.Now()})
 	slog.Info("[Agent] Steer queued", "queue", len(a.steerQueue), "depth", depth)
 	traceevent.Log(context.Background(), traceevent.CategoryEvent, "steer_enqueued",
 		traceevent.Field{Key: "queue_depth", Value: len(a.steerQueue)},
@@ -613,7 +621,7 @@ func (a *Agent) Steer(message string) error {
 // belong to the loop's history (injected as user messages accompanied by
 // MessageStart/End events, which write the outer context back), so they
 // survive even if the run ends before that writeback lands.
-func (a *Agent) drainSteers() []string {
+func (a *Agent) drainSteers() []QueuedMessage {
 	a.steerMu.Lock()
 	defer a.steerMu.Unlock()
 	if len(a.steerQueue) == 0 {
@@ -624,12 +632,25 @@ func (a *Agent) drainSteers() []string {
 	return msgs
 }
 
-// popSteer removes the oldest queued steering message ("" when empty).
-func (a *Agent) popSteer() string {
+// drainEvents claims every queued machine event for the run loop, mirroring
+// drainSteers.
+func (a *Agent) drainEvents() []QueuedMessage {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	if len(a.eventQueue) == 0 {
+		return nil
+	}
+	msgs := a.eventQueue
+	a.eventQueue = nil
+	return msgs
+}
+
+// popSteer removes the oldest queued steering message (empty when none).
+func (a *Agent) popSteer() QueuedMessage {
 	a.steerMu.Lock()
 	defer a.steerMu.Unlock()
 	if len(a.steerQueue) == 0 {
-		return ""
+		return QueuedMessage{}
 	}
 	msg := a.steerQueue[0]
 	a.steerQueue = a.steerQueue[1:]
@@ -638,10 +659,10 @@ func (a *Agent) popSteer() string {
 
 // pushSteerFront puts a claimed steering message back at the front of the
 // queue (order-preserving put-back when a run is aborted mid-chain).
-func (a *Agent) pushSteerFront(msg string) {
+func (a *Agent) pushSteerFront(msg QueuedMessage) {
 	a.steerMu.Lock()
 	defer a.steerMu.Unlock()
-	a.steerQueue = append([]string{msg}, a.steerQueue...)
+	a.steerQueue = append([]QueuedMessage{msg}, a.steerQueue...)
 }
 
 // GetPendingSteer returns the number of steering messages waiting for the
@@ -673,7 +694,7 @@ func (a *Agent) EnqueueEvent(message string) error {
 		// is broken, not that one more event is fine to drop.
 		return fmt.Errorf("event queue full (depth %d)", defaultEventQueueDepth)
 	}
-	a.eventQueue = append(a.eventQueue, message)
+	a.eventQueue = append(a.eventQueue, QueuedMessage{Text: message, EnqueuedAt: time.Now()})
 	traceevent.Log(context.Background(), traceevent.CategoryEvent, "event_enqueued",
 		traceevent.Field{Key: "queue_depth", Value: len(a.eventQueue)},
 		traceevent.Field{Key: "message", Value: message},
@@ -684,12 +705,12 @@ func (a *Agent) EnqueueEvent(message string) error {
 	return nil
 }
 
-// popEvent dequeues the oldest event, or "" when the queue is empty.
-func (a *Agent) popEvent() string {
+// popEvent dequeues the oldest event (empty when none).
+func (a *Agent) popEvent() QueuedMessage {
 	a.eventMu.Lock()
 	defer a.eventMu.Unlock()
 	if len(a.eventQueue) == 0 {
-		return ""
+		return QueuedMessage{}
 	}
 	msg := a.eventQueue[0]
 	a.eventQueue = a.eventQueue[1:]
@@ -698,10 +719,10 @@ func (a *Agent) popEvent() string {
 
 // pushEventFront returns an unconsumed event to the head of the queue (abort
 // path), mirroring pushSteerFront.
-func (a *Agent) pushEventFront(msg string) {
+func (a *Agent) pushEventFront(msg QueuedMessage) {
 	a.eventMu.Lock()
 	defer a.eventMu.Unlock()
-	a.eventQueue = append([]string{msg}, a.eventQueue...)
+	a.eventQueue = append([]QueuedMessage{msg}, a.eventQueue...)
 }
 
 // GetPendingEvent reports how many machine events are queued.
@@ -763,14 +784,14 @@ func (a *Agent) steerTickFn() {
 	// waiting. Whichever is claimed becomes the run's first prompt, and
 	// runMessage drains the rest with the same human-first priority.
 	msg := a.popSteer()
-	if msg == "" {
+	if msg.Text == "" {
 		msg = a.popEvent()
 	}
-	if msg == "" {
+	if msg.Text == "" {
 		<-a.mu // queue emptied between the check and acquiring mu
 		return
 	}
-	a.startRunLocked(msg)
+	a.startRunLocked(msg.Text)
 }
 
 // Abort stops the current execution.

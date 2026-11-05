@@ -22,7 +22,9 @@ it happened rather than the time it was written, the agent's `cat:event`
 markers use it (`EventAt`), the new trace events `steer_enqueued` /
 `steer_injected` / `event_enqueued` / `event_injected` / `background_op`
 (phase `start`/`end`, with pid and elapsed) record queue latency and detached
-command lifetime, and `turn_start` is emitted per loop iteration instead of
+command lifetime. Queues hold `QueuedMessage` (text + `EnqueuedAt`) rather
+than bare strings, so the inject marker reports `waited_ms` directly instead
+of requiring the reader to subtract two markers., and `turn_start` is emitted per loop iteration instead of
 once per run.
 
 **Why**: Events were popped only by the run tail, so a background result

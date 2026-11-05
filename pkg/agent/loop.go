@@ -93,12 +93,12 @@ type LoopConfig struct {
 	// messages. The run loop calls it at the top of each iteration (before
 	// BeforeModel hooks), so steering is applied exactly at a model-call
 	// boundary. Nil means no steering support.
-	DrainSteer func() []string
-	// DrainEvent atomically claims and removes the oldest queued machine
-	// event, or "" when the queue is empty. The run loop calls it right after
-	// DrainSteer at each model-call boundary, so a background result waits at
-	// most one turn instead of the rest of the run. Nil means no event support.
-	DrainEvent func() string
+	DrainSteer func() []QueuedMessage
+	// DrainEvent atomically claims and removes all queued machine events.
+	// The run loop calls it right after DrainSteer at each model-call
+	// boundary, so a background result waits at most one turn instead of the
+	// rest of the run. Nil means no event support.
+	DrainEvent func() []QueuedMessage
 	// HasPendingSteer reports whether steering messages are queued. When it
 	// returns true after the final response, the loop stays alive to drain
 	// them instead of ending the run. Nil means no steering support.
@@ -219,38 +219,31 @@ func runInnerLoop(
 	// events. Injection happens only at a model-call boundary, never inside a
 	// tool call, so an in-flight call is neither cancelled nor split from its
 	// result.
+	inject := func(msgs []QueuedMessage, kind string) {
+		for _, qm := range msgs {
+			m := agentctx.NewUserMessage(qm.Text)
+			agentCtx.RecentMessages = append(agentCtx.RecentMessages, m)
+			state.newMessages = append(state.newMessages, m)
+			stream.Push(NewMessageStartEvent(m))
+			stream.Push(NewMessageEndEvent(m))
+			waitedMs := int64(-1)
+			if !qm.EnqueuedAt.IsZero() {
+				waitedMs = time.Since(qm.EnqueuedAt).Milliseconds()
+			}
+			slog.Info("[Loop] Queued message injected", "kind", kind, "waited_ms", waitedMs, "message", qm.Text)
+			traceevent.Log(ctx, traceevent.CategoryEvent, kind+"_injected",
+				traceevent.Field{Key: "turn", Value: state.turnCount},
+				traceevent.Field{Key: "waited_ms", Value: waitedMs},
+				traceevent.Field{Key: "message", Value: qm.Text},
+			)
+		}
+	}
 	injectQueued := func() {
 		if config.DrainSteer != nil {
-			for _, steerMsg := range config.DrainSteer() {
-				m := agentctx.NewUserMessage(steerMsg)
-				agentCtx.RecentMessages = append(agentCtx.RecentMessages, m)
-				state.newMessages = append(state.newMessages, m)
-				stream.Push(NewMessageStartEvent(m))
-				stream.Push(NewMessageEndEvent(m))
-				slog.Info("[Loop] Steering message injected", "message", steerMsg)
-				traceevent.Log(ctx, traceevent.CategoryEvent, "steer_injected",
-					traceevent.Field{Key: "turn", Value: state.turnCount},
-					traceevent.Field{Key: "message", Value: steerMsg},
-				)
-			}
+			inject(config.DrainSteer(), "steer")
 		}
 		if config.DrainEvent != nil {
-			for {
-				evtMsg := config.DrainEvent()
-				if evtMsg == "" {
-					break
-				}
-				m := agentctx.NewUserMessage(evtMsg)
-				agentCtx.RecentMessages = append(agentCtx.RecentMessages, m)
-				state.newMessages = append(state.newMessages, m)
-				stream.Push(NewMessageStartEvent(m))
-				stream.Push(NewMessageEndEvent(m))
-				slog.Info("[Loop] Event message injected", "message", evtMsg)
-				traceevent.Log(ctx, traceevent.CategoryEvent, "event_injected",
-					traceevent.Field{Key: "turn", Value: state.turnCount},
-					traceevent.Field{Key: "message", Value: evtMsg},
-				)
-			}
+			inject(config.DrainEvent(), "event")
 		}
 	}
 
