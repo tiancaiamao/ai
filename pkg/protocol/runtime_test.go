@@ -19,16 +19,16 @@ type testRuntime struct {
 	emit          func(agent.AgentEvent)
 }
 
-func (r *testRuntime) Commands() *command.Registry                          { return r.commands }
-func (r *testRuntime) Skills() *skill.LoadResult                            { return r.skills }
-func (r *testRuntime) SessionID() string                                    { return r.sessionID }
-func (r *testRuntime) CurrentWorkdir() string                               { return r.cwd }
-func (r *testRuntime) ContextWindow() int                                   { return r.contextWindow }
-func (r *testRuntime) ModelName() (string, string)                          { return r.provider, r.model }
-func (r *testRuntime) Agent() *agent.Agent                                  { return nil }
-func (r *testRuntime) HandlePrompt(string, bool, string, bool) (any, error) { return nil, nil }
-func (r *testRuntime) RegisterAllHandlers()                                 {}
-func (r *testRuntime) BuildSkillCommands()                                  {}
+func (r *testRuntime) Commands() *command.Registry                    { return r.commands }
+func (r *testRuntime) Skills() *skill.LoadResult                      { return r.skills }
+func (r *testRuntime) SessionID() string                              { return r.sessionID }
+func (r *testRuntime) CurrentWorkdir() string                         { return r.cwd }
+func (r *testRuntime) ContextWindow() int                             { return r.contextWindow }
+func (r *testRuntime) ModelName() (string, string)                    { return r.provider, r.model }
+func (r *testRuntime) Agent() *agent.Agent                            { return nil }
+func (r *testRuntime) HandlePrompt(string, bool, string) (any, error) { return nil, nil }
+func (r *testRuntime) RegisterAllHandlers()                           {}
+func (r *testRuntime) BuildSkillCommands()                            {}
 func (r *testRuntime) InitEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, chan struct{}) {
 	r.emit = emit
 	shutdown := make(chan struct{})

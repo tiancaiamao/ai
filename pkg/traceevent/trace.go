@@ -17,14 +17,6 @@ func GenerateTraceID(prefix string, seq int) []byte {
 
 // Log records a trace event if enabled.
 func Log(ctx context.Context, category TraceCategory, name string, fields ...Field) {
-	LogAt(ctx, category, name, time.Time{}, fields...)
-}
-
-// LogAt records a trace event stamped with at instead of the write time.
-// Use it for events that are handled some time after they happen (e.g. an
-// agent event drained from a channel), so the trace reflects when it occurred
-// rather than when the writer got to it. A zero at falls back to time.Now().
-func LogAt(ctx context.Context, category TraceCategory, name string, at time.Time, fields ...Field) {
 	tb := GetTraceBuf(ctx)
 	if tb == nil {
 		return
@@ -34,11 +26,8 @@ func LogAt(ctx context.Context, category TraceCategory, name string, at time.Tim
 		return
 	}
 
-	if at.IsZero() {
-		at = time.Now()
-	}
 	event := TraceEvent{
-		Timestamp: at,
+		Timestamp: time.Now(),
 		Name:      name,
 		Phase:     PhaseInstant,
 		Category:  category,

@@ -68,8 +68,6 @@ type LoopConfig struct {
     ContextWindow           int               // Model context window (0=default 128000)
     EnableCheckpoint        bool              // Auto checkpoint creation (default true)
     Hooks                   *HookRegistry     // Lifecycle hooks
-    DrainSteer              func() []QueuedMessage // Claims queued steering at each model-call boundary
-    DrainEvent              func() []QueuedMessage // Claims queued machine events at each boundary
     AgentContextPrefix      string            // Skills + AGENTS.md prefix for cache
     // ... many more timeout/retry/tool-output fields
 }
@@ -110,44 +108,6 @@ for event := range agent.Events() {
 The stream supports abort via `Push(agentEndEvent)` and cancellation through context.
 
 When the run's context is canceled mid-stream (steer/abort), `Iterator` returns on `ctx.Done()` while tail events the loop pushed afterwards — the salvaged `aborted` assistant message plus its `turn_end` — are still queued. `processPrompt` therefore calls `stream.WaitDone(eventDrainTimeout)` and processes `stream.DrainQueued()` before exiting, so the aborted message reaches `AgentContext` (and session persistence) instead of being dropped. Drained `agent_end` events are skipped: `abortCurrentStream` already emits its synthetic copy directly (a re-emit would duplicate the subscriber signal) and its pre-salvage snapshot would otherwise wipe a same-drain turn_end writeback; compaction still syncs via `EventCompactionEnd`.
-
-## Queued Input Delivery
-
-Two kinds of input can arrive while a run is busy, and both are delivered
-only at a model-call boundary — never inside a tool call, so an in-flight
-call is never cancelled or split from its result:
-
-| Input | API | Loop hook | Bound |
-|-------|-----|-----------|-------|
-| Human steering | `Agent.Steer` | `LoopConfig.DrainSteer` | 1 turn |
-| Machine event (background op result, `ai send --event`) | `Agent.EnqueueEvent` | `LoopConfig.DrainEvent` | 1 turn |
-
-`runInnerLoop` claims steering first, then events, before each LLM call
-(after `turn_start`, before pre-LLM compaction) and again immediately after a
-compaction, since a compaction can block for seconds. When the agent is idle
-both start a run instead of queueing. Both queues are bounded (64 each); a
-full steer or event queue returns an error rather than dropping a message.
-
-The cost of boundary delivery is that a run receives the message earlier than
-its author may have planned and can act on it mid-plan. The alternative —
-draining at the end of the run — leaves the wait unbounded (measured: 161s
-across 22 turns, and 13m07s / 15m44s in two other runs).
-
-Both sides of the queue are traced (`steer_enqueued`/`steer_injected`,
-`event_enqueued`/`event_injected`), and the inject marker carries `waited_ms`
-and the `path` that delivered the message: `boundary` (the loop injected it
-before an LLM call) or `run_tail` (the run ended first and the message became
-the next prompt in the chain). Every enqueue marker therefore has a
-counterpart, and the wait between queueing and delivery is read from the
-trace instead of inferred from spans. `DrainSteer`/`DrainEvent` return
-`[]QueuedMessage` (text plus `EnqueuedAt`), which is what makes that number
-available to the loop.
-
-`turn_start` is emitted per loop iteration, so turns 2..N are marked too. A
-turn abandoned before its `turn_end` — context-limit recovery, or an empty
-model response — leaves a start unpaired on purpose: both exits skip
-`turn_end`, because a `turn_end` with a nil message is how callers are told
-the run failed. Pairing is guaranteed on the normal path, not on error exits.
 
 ## Checkpoint Manager
 

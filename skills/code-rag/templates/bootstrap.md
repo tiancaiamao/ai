@@ -1,6 +1,6 @@
 # <PROJECT_NAME> Code Expert — Bootstrap Prompt
 
-> 用法：`ai serve --input-file wiki/snapshot/bootstrap.md --session wiki/snapshot/session --name <project>-expert`
+> 用法：`ai serve --input-file wiki/snapshot/bootstrap.md --session wiki/snapshot/session --name <project>-expert --timeout 0`
 > 然后通过 `ai send --wait "你的问题"` 来提问
 
 ---

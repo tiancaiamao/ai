@@ -75,7 +75,8 @@ tmux new-session -d -s "$TMUX_SESSION" \
   "ai serve --role coder \
    --input-file /tmp/task-add-jwt-auth.md \
    --name 'gen-jwt' \
-   --id-file $ID_FILE"
+   --id-file $ID_FILE \
+   --timeout 10m"
 
 # Wait for startup
 sleep 3
@@ -153,7 +154,8 @@ tmux new-session -d -s "$EVAL_TMUX" \
   "ai serve --role validator \
    --input-file /tmp/eval-add-jwt-auth.md \
    --name 'eval-jwt' \
-   --id-file $EVAL_ID_FILE"
+   --id-file $EVAL_ID_FILE \
+   --timeout 5m"
 
 sleep 3
 EVAL_ID=$(cat $EVAL_ID_FILE)
@@ -263,7 +265,8 @@ tmux new-session -d -s "$REVIEW_TMUX" \
     "ai serve --role reviewer \
    --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff \$(cat .pge/phase-start-commit)..HEAD (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
    --name 'rev-phase1' \
-   --id-file $REVIEW_ID_FILE"
+   --id-file $REVIEW_ID_FILE \
+   --timeout 5m"
 
 sleep 3
 REVIEW_ID=$(cat $REVIEW_ID_FILE)

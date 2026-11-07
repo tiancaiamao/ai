@@ -88,21 +88,6 @@ type LoopConfig struct {
 	// ConsumeManualCompaction reports and consumes a pending manual compaction request.
 	// It is called by the agent loop at a safe step boundary.
 	ConsumeManualCompaction func() bool
-
-	// DrainSteer atomically claims and removes all queued steering
-	// messages. The run loop calls it at the top of each iteration (before
-	// BeforeModel hooks), so steering is applied exactly at a model-call
-	// boundary. Nil means no steering support.
-	DrainSteer func() []QueuedMessage
-	// DrainEvent atomically claims and removes all queued machine events.
-	// The run loop calls it right after DrainSteer at each model-call
-	// boundary, so a background result waits at most one turn instead of the
-	// rest of the run. Nil means no event support.
-	DrainEvent func() []QueuedMessage
-	// HasPendingSteer reports whether steering messages are queued. When it
-	// returns true after the final response, the loop stays alive to drain
-	// them instead of ending the run. Nil means no steering support.
-	HasPendingSteer func() bool
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
@@ -179,7 +164,7 @@ func RunLoop(
 		// writebacks (AddMessage) append to agentCtx.RecentMessages from its
 		// own goroutine, so appending in place here would make this loop
 		// write and read the same slots concurrently (data race flagged by
-		// TestSteerMidThinking_NextRequestCarriesContext under -race).
+		// TestSteerMidThinking_NextRequestCarriesPartialThinking under -race).
 		currentCtx := &agentctx.AgentContext{
 			SystemPrompt:   agentCtx.SystemPrompt,
 			RecentMessages: append(append([]agentctx.AgentMessage{}, agentCtx.RecentMessages...), turnPrompts...),
@@ -188,6 +173,7 @@ func RunLoop(
 		}
 
 		stream.Push(NewAgentStartEvent())
+		stream.Push(NewTurnStartEvent())
 
 		for _, msg := range turnPrompts {
 			stream.Push(NewMessageStartEvent(msg))
@@ -214,65 +200,15 @@ func runInnerLoop(
 	state := newLoopState(config, agentCtx, stream, newMessages)
 	defer state.cleanup()
 
-	// injectQueued appends messages that arrived while the run was busy:
-	// steering messages first (a person outranks a machine), then machine
-	// events. Injection happens only at a model-call boundary, never inside a
-	// tool call, so an in-flight call is neither cancelled nor split from its
-	// result.
-	inject := func(msgs []QueuedMessage, kind string) {
-		for _, qm := range msgs {
-			m := agentctx.NewUserMessage(qm.Text)
-			agentCtx.RecentMessages = append(agentCtx.RecentMessages, m)
-			state.newMessages = append(state.newMessages, m)
-			stream.Push(NewMessageStartEvent(m))
-			stream.Push(NewMessageEndEvent(m))
-			waitedMs := int64(-1)
-			if !qm.EnqueuedAt.IsZero() {
-				waitedMs = time.Since(qm.EnqueuedAt).Milliseconds()
-			}
-			slog.Info("[Loop] Queued message injected", "kind", kind, "waited_ms", waitedMs, "message", qm.Text)
-			traceevent.Log(ctx, traceevent.CategoryEvent, kind+"_injected",
-				traceevent.Field{Key: "path", Value: "boundary"},
-				traceevent.Field{Key: "turn", Value: state.turnCount},
-				traceevent.Field{Key: "waited_ms", Value: waitedMs},
-				traceevent.Field{Key: "message", Value: qm.Text},
-			)
-		}
-	}
-	injectQueued := func() {
-		if config.DrainSteer != nil {
-			inject(config.DrainSteer(), "steer")
-		}
-		if config.DrainEvent != nil {
-			inject(config.DrainEvent(), "event")
-		}
-	}
-
 	for {
 		if state.shouldStop(ctx) {
 			return
 		}
 		state.advanceTurn()
 
-		// One turn_start per iteration. turn_end is emitted inside the loop,
-		// so a single turn_start before it left turns 2..N unmarked and made
-		// every run look like it lasted one turn in the trace. A turn that is
-		// abandoned before turn_end — context-limit recovery (the continue
-		// below) or an empty model response — leaves its start unpaired: both
-		// exits skip turn_end on purpose, because turn_end with a nil message
-		// is how callers are told the run failed.
-		stream.Push(NewTurnStartEvent())
-
-		injectQueued()
-
 		// Pre-LLM compaction: check thresholds and compact if needed.
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false, true)
 		_ = compacted
-
-		// Compaction can block for many seconds (summary generation). Pick up
-		// anything that arrived while it ran instead of making it wait for the
-		// next boundary.
-		injectQueued()
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
 		config.Hooks.RunBeforeModel(HookContext{
@@ -373,14 +309,6 @@ func runInnerLoop(
 					"retry_attempt", state.emptyRetries,
 					"max_retries", defaultEmptyResponseMaxRetries,
 				)
-				continue
-			}
-
-			// A steering message queued while the final response was
-			// streaming keeps the loop alive: the next iteration drains it
-			// and the run continues at the model-call boundary.
-			if config.HasPendingSteer != nil && config.HasPendingSteer() {
-				slog.Info("[Loop] pending steer — continuing past final response")
 				continue
 			}
 

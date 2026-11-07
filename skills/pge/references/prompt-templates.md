@@ -9,7 +9,7 @@
 | Review | `reviewer` | 代码审查 |
 | Orchestrator | 任意（不 spawn 自己） | 加载 pge 技能的 agent 本身，任意 role 均可充当 |
 
-具体的 `ai serve` 参数（`--name`, `--input-file`, `--id-file` 等）参见 `subagent` 技能。注意 `ai serve` **没有** `--timeout`（常驻进程不设墙钟上限），限制等待用 `ai watch --timeout`。
+具体的 `ai serve` 参数（`--name`, `--input-file`, `--id-file`, `--timeout` 等）参见 `subagent` 技能。
 
 ---
 
