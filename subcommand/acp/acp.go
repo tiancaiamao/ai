@@ -21,6 +21,7 @@ func ACPSubcommand() {
 	fs := flag.NewFlagSet("acp", flag.ExitOnError)
 	sessionPathFlag := fs.String("session", "", "Session file path")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
+	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	agentConfigFlag := fs.String("agent-config", "", "Path to agent.yaml configuration file")
 	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
@@ -33,6 +34,7 @@ func ACPSubcommand() {
 		Session:      *sessionPathFlag,
 		SystemPrompt: *systemPromptFlag,
 		MaxTurns:     *maxTurnsFlag,
+		Timeout:      *timeoutFlag,
 		HTTP:         *debugAddr,
 		AgentConfig:  *agentConfigFlag,
 		Role:         *roleFlag,

@@ -551,7 +551,7 @@ func TestE2E_SteerAndFollowUp(t *testing.T) {
 	// /follow-up while streaming: queued, processed by the loop after the current run.
 	rs.commandAck(t, "follow-up", "After this run, reply with exactly: ok")
 
-	// /steer while streaming: queued, applied at the next model-call boundary.
+	// /steer while streaming: cancels the current run and restarts with the new message.
 	rs.commandAck(t, "steer", "Reply with exactly: steered")
 
 	// The steered run and queued follow-up finish in order.

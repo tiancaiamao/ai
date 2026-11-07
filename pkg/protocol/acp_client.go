@@ -181,25 +181,10 @@ func (c *ACPClient) PromptResult(sessionID, text string) (json.RawMessage, error
 // PromptAsync sends a request without waiting for the turn to complete. A
 // server-side error is delivered as an ACPUpdateRequestError update.
 func (c *ACPClient) PromptAsync(sessionID, text string) error {
-	return c.promptAsync(sessionID, text, false)
-}
-
-// PromptEventAsync sends a machine-generated event. Events queue on a
-// separate low-priority queue in the agent and drain only after human
-// messages, so machine traffic cannot starve a person.
-func (c *ACPClient) PromptEventAsync(sessionID, text string) error {
-	return c.promptAsync(sessionID, text, true)
-}
-
-func (c *ACPClient) promptAsync(sessionID, text string, isEvent bool) error {
-	params := map[string]any{
+	return c.requestAsync("session/prompt", map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []acpContentBlock{{Type: "text", Text: text}},
-	}
-	if isEvent {
-		params["event"] = true
-	}
-	return c.requestAsync("session/prompt", params)
+	})
 }
 
 // Cancel aborts the in-flight turn (notification; no response).

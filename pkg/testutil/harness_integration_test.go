@@ -425,9 +425,9 @@ func TestSession_ConcurrentWrites(t *testing.T) {
 // Steer & Follow-up behavioral tests
 // ---------------------------------------------------------------------------
 
-// TestHarness_SteerDuringStreaming verifies that steering mid-stream queues
-// the message and the run continues with it at the next model-call boundary
-// — steer never cancels the in-flight response.
+// TestHarness_SteerDuringStreaming verifies that steering mid-stream cancels
+// the current execution and restarts with the steered message. The agent
+// should produce two agent_end cycles (or at least process the steered text).
 func TestHarness_SteerDuringStreaming(t *testing.T) {
 	// First call is slow (simulates mid-stream); second call responds immediately.
 	firstCallDone := make(chan struct{})
@@ -525,8 +525,8 @@ func TestHarness_FollowUpDuringStreaming(t *testing.T) {
 }
 
 // TestHarness_FollowUpSurvivesSteer verifies that a follow-up queued right
-// before a steer is not lost: the steer is applied inside the run at the next
-// model-call boundary, and the queued follow-up is still processed afterwards.
+// before a steer is not lost: the cancelled run must return the message to
+// the queue so the steered run processes it with a fresh context.
 func TestHarness_FollowUpSurvivesSteer(t *testing.T) {
 	// call 0: initial prompt (slow, so we can queue+steer mid-flight)
 	// call 1: steered response

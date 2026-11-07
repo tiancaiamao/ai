@@ -26,7 +26,7 @@ type Runtime interface {
 	ContextWindow() int
 	ModelName() (string, string)
 	Agent() *agent.Agent
-	HandlePrompt(message string, raw bool, streamingBehavior string, isEvent bool) (any, error)
+	HandlePrompt(string, bool, string) (any, error)
 	RegisterAllHandlers()
 	BuildSkillCommands()
 	InitEventEmitter(func(agent.AgentEvent)) (chan struct{}, chan struct{})
