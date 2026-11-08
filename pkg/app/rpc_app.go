@@ -116,6 +116,12 @@ type App struct {
 	showTools             bool
 	showPrefix            bool
 	busyMode              string
+
+	// --- Idle compaction (see idle_compact.go) ---
+	idleMu        sync.Mutex  // guards idleTimer and idleEpoch
+	idleTimer     *time.Timer // fires shortly before the provider cache TTL expires
+	idleEpoch     uint64      // bumped on every user input; stale timers abort
+	idleCompactMu sync.Mutex  // held while idle compaction runs; prompts queue behind it
 }
 
 // parseJSONArgs attempts to unmarshal args as JSON into target.
@@ -149,6 +155,9 @@ func (app *App) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, ch
 			app.isCompacting = false
 			app.pendingSteer = false
 			app.stateMu.Unlock()
+
+			// The turn is over: start counting idle time for idle compaction.
+			app.scheduleIdleCompaction()
 
 			// Session persistence is handled incrementally:
 			// - message_end/tool_execution_end → sessionWriter.Append (per message)
@@ -219,6 +228,8 @@ func (app *App) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, ch
 			case event := <-app.ag.Events():
 				processEvent(event)
 			case <-shutdownEmitter:
+				// A pending idle compaction must not outlive the event sink.
+				app.cancelIdleCompaction()
 				// Drain remaining events
 				for {
 					select {
@@ -336,6 +347,12 @@ func (app *App) handlePrompt(message string, raw bool, streamingBehavior string)
 	if message == "" {
 		return nil, fmt.Errorf("empty prompt message")
 	}
+
+	// User input ends the idle period: drop any pending idle compaction and
+	// queue behind one that is already running, so the prompt never races with
+	// a background compaction on the agent context.
+	app.cancelIdleCompaction()
+	app.waitForIdleCompaction()
 
 	// Expand /skill:name commands BEFORE generic slash dispatch.
 	if !raw && skill.IsSkillCommand(message) {

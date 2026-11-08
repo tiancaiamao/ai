@@ -10,6 +10,8 @@ command-result rendering for the AI agent.
 - Load and replay persisted sessions
 - Render slash-command results for local and external clients
 - Record session and trace events through the shared application layer
+- Run idle compaction after a turn ends, ahead of prompt-cache expiry
+  (`idle_compact.go`; policy lives in `pkg/compact/idle.go`)
 
 `pkg/app` exposes the runtime consumed by `pkg/protocol`. It does not own ACP
 message handling or wire transport; those responsibilities live in
