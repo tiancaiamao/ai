@@ -22,7 +22,6 @@ func SendSubcommand() {
 	waitFlag := fs.Bool("wait", false, "wait for agent to finish processing and stream the response")
 	summaryFlag := fs.Bool("summary", false, "with --wait: only show final assistant text (suppress tool output)")
 	timeoutFlag := fs.Duration("timeout", 4*time.Minute, "with --wait: max wait time (default 4m, 0 = unlimited)")
-	eventFlag := fs.Bool("event", false, "mark as a machine event: queued separately and drained only after human messages")
 	fs.Parse(os.Args[1:])
 
 	// Determine the message to send.
@@ -77,16 +76,12 @@ func SendSubcommand() {
 	defer client.Close()
 
 	if *waitFlag {
-		os.Exit(sendAndWait(client, sid, message, *summaryFlag, *timeoutFlag, *eventFlag, meta.ID))
+		os.Exit(sendAndWait(client, sid, message, *summaryFlag, *timeoutFlag, meta.ID))
 		return
 	}
 
 	// Fire-and-forget: send the message and exit immediately.
-	prompt := client.PromptAsync
-	if *eventFlag {
-		prompt = client.PromptEventAsync
-	}
-	if err := prompt(sid, message); err != nil {
+	if err := client.PromptAsync(sid, message); err != nil {
 		fmt.Fprintf(os.Stderr, "error sending message: %v\n", err)
 		os.Exit(1)
 	}
@@ -100,18 +95,14 @@ func SendSubcommand() {
 // turn is still in flight — the response is incomplete); 1 = error (stream
 // closed without _turn_end, or request error). Callers MUST propagate it,
 // otherwise a timed-out wait looks like success to the agent.
-func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, timeout time.Duration, isEvent bool, runID string) int {
+func sendAndWait(client *protocol.ACPClient, sid, message string, summary bool, timeout time.Duration, runID string) int {
 	updates := client.Updates()
 	var deadline <-chan time.Time
 	if timeout > 0 {
 		deadline = time.After(timeout)
 	}
 
-	prompt := client.PromptAsync
-	if isEvent {
-		prompt = client.PromptEventAsync
-	}
-	if err := prompt(sid, message); err != nil {
+	if err := client.PromptAsync(sid, message); err != nil {
 		fmt.Fprintf(os.Stderr, "error sending message: %v\n", err)
 		return 1
 	}

@@ -236,14 +236,6 @@ var eventNameToBit = map[string]int{
 	"llm_prefix_cache_check":          42,
 	"compact_llm_decide_check":        58,
 	"compact_llm_decide_ask":          59,
-
-	// Queue and background-operation visibility. These record the moment a
-	// message is queued and the moment the loop injects it, so the wait
-	// between the two is visible in the trace instead of inferred.
-	"steer_enqueued": 43,
-	"steer_injected": 44,
-	"event_enqueued": 45,
-	"event_injected": 46,
 }
 
 var defaultEnabledEvents = []string{
@@ -283,10 +275,6 @@ var defaultEnabledEvents = []string{
 	"tool_output_truncated",
 	"compact_llm_decide_check",
 	"compact_llm_decide_ask",
-	"steer_enqueued",
-	"steer_injected",
-	"event_enqueued",
-	"event_injected",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -333,10 +321,6 @@ var eventSelectorGroups = map[string][]string{
 		"compaction",
 		"compact_llm_decide_check",
 		"compact_llm_decide_ask",
-		"steer_enqueued",
-		"steer_injected",
-		"event_enqueued",
-		"event_injected",
 	},
 	"log": {
 		"log:info",

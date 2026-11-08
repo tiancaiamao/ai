@@ -65,22 +65,15 @@ ai history read --entry <entry-id>
 - `--session <path>` — Session directory path
 - `--system-prompt <text>` — Custom system prompt (`@file` to load from file)
 - `--max-turns <n>` — Maximum conversation turns (0 = unlimited)
+- `--timeout <duration>` — Total execution timeout (0 = unlimited)
 - `--input <text>` — Initial prompt to send after startup
 - `--input-file <path>` — Read initial prompt from file (avoids shell ARG_MAX)
 - `--role <name>` — Agent role name (loads `~/.ai/roles/<name>/agent.yaml`)
 - `--name <text>` — Human-readable name for the run
 
-**`run` only:**
-- `--timeout <duration>` — Total execution timeout; `ai run` stops the agent when it expires (0 = unlimited)
-
 **`serve` only:**
 - `--http <addr>` — Enable HTTP debug server (e.g., `:6060`)
 - `--id-file <path>` — Write run ID to file after startup
-
-> `serve` has no `--timeout`. A detached serve process is meant to stay alive across
-> prompts, so a wall-clock deadline anchored at startup would kill whatever turn
-> happens to be running. Bound the wait with `ai watch --timeout` (observer-side,
-> leaves the agent untouched) and end the process with `ai kill`.
 
 **`watch`:**
 - `--id <run-id>` — Run ID or prefix (auto-selects by cwd if omitted)

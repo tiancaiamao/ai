@@ -53,7 +53,8 @@ do_freeze() {
             --input-file $SNAPSHOT_DIR/bootstrap.md \
             --session $FREEZE_DIR \
             --name '${PROJECT_NAME}-expert-freeze' \
-            --id-file $tmp_id_file"
+            --id-file $tmp_id_file \
+            --timeout 10m"
 
     local agent_id=""
     for i in $(seq 1 30); do
@@ -130,7 +131,8 @@ do_start() {
             --session $RUNTIME_DIR \
             --name '${PROJECT_NAME}-expert' \
             --id-file $ID_FILE \
-            $prompt_arg"
+            $prompt_arg \
+            --timeout 0"
 
     for i in $(seq 1 30); do
         if [ -f "$ID_FILE" ] && [ -s "$ID_FILE" ]; then

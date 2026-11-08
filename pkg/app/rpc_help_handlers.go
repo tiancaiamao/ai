@@ -24,9 +24,19 @@ func (app *App) handleSteerSlash(args string) (any, error) {
 		slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
 	}
 
-	if err := app.ag.Steer(expandedMessage); err != nil {
-		return nil, err
+	app.stateMu.Lock()
+	mode := app.steeringMode
+	pending := app.pendingSteer
+	app.stateMu.Unlock()
+
+	if mode == "one-at-a-time" && pending {
+		return nil, fmt.Errorf("steer already pending")
 	}
+
+	app.stateMu.Lock()
+	app.pendingSteer = true
+	app.stateMu.Unlock()
+	app.ag.Steer(expandedMessage)
 	return map[string]any{"status": "steered"}, nil
 }
 
@@ -39,22 +49,21 @@ func (app *App) handleFollowUpSlash(args string) (any, error) {
 	slog.Info("Received follow-up command")
 	app.stateMu.Lock()
 	streaming := app.isStreaming
-	followMode := app.followUpMode
 	app.stateMu.Unlock()
 
-	expandedMessage := app.expandSkillCommands(message)
-
-	// Nothing is running to follow up on: run the message as a normal prompt
-	// instead of rejecting it. Queuing it would strand it in the follow-up
-	// channel, which is only drained by a running turn.
 	if !streaming {
-		return nil, app.ag.Prompt(expandedMessage)
+		return nil, fmt.Errorf("agent is not busy")
 	}
 
-	// Busy: mirror the busy-mode routing in handlePrompt.
-	if followMode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
+	if app.followUpMode != "one-at-a-time" && app.followUpMode != "queue" {
+		return nil, fmt.Errorf("follow-up mode is '%s', not enabled", app.followUpMode)
+	}
+
+	if app.followUpMode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
 		return nil, fmt.Errorf("follow-up queue already has a pending message")
 	}
+
+	expandedMessage := app.expandSkillCommands(message)
 	return nil, app.ag.FollowUp(expandedMessage)
 }
 
