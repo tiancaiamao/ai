@@ -13,6 +13,12 @@
 
 **目标**：持续优化 ai 项目的代码质量
 
+## 边界（不可妥协）
+
+- **只读**：绝不修改、移动、删除任何 session 文件和 trace 文件
+- **本地**：分析产物留在本机，不上传任何 session 内容或摘录
+- **证据摘录最小化**：每条问题引用对话原文不超过必要的几行，报告不得整段复制用户对话
+
 ## 核心思路：Code Review 范式
 
 **不是**技术指标统计（重试率、token 消耗）
@@ -72,6 +78,8 @@
 | `compactions/compaction_*.jsonl` | 压缩后的消息列表 | 追踪压缩质量、消息保留情况 |
 
 ## 工作流程
+
+**评价标准**：对每个 session 按四份 rubric 打分（efficiency / procedure-compliance / code-quality / verbosity），判定标准和分值见 `references/scoring-rubrics.md`。只有 raw 分 < 0.5 的失败会话能作为改进建议的证据；`insufficient_evidence`（如无代码 diff）不算失败，排除出对应维度。
 
 ### 步骤 0：快速会话概览
 
@@ -343,6 +351,27 @@ for e in data.get('traceEvents', []):
 
 ---
 
+## 改进建议提案门槛
+
+移植自 Warp skill-doctor 的 skill-improvements 规范。**默认不提案；投机性修改比不修改更糟。**
+
+每条改进建议必须同时满足：
+
+1. 问题由某个具体设计面的缺失/错误/欠明确导致（prompt、工具描述、skill、代码）
+2. 能点名归属面，以及它该有的一条可复用规则/设计
+3. 如果该规则/设计存在且被遵守，被评分的失败不会发生
+4. 同一缺口跨多个 session 出现，或严重到单次即可证明契约缺失
+
+**不提案清单**（命中任何一条就降级为观察，不进"优先修复"）：
+
+- 已有指令/代码已要求了正确行为，是模型没听 → 模型方差，不是设计缺陷
+- 唯一能做的修改是重述、加 hedge、从这批 run 里加例子 → 不许
+- 真正的修法无法归因到任何具体面 → 列入"下次关注点"而不是修复清单
+
+**没有建议过门槛时，逐条说明为什么不开——这也是一种成功。**
+
+跨 session 建议：先按根因聚类（跨模式、跨 session），按 频率 × 严重度 排序；**优先替换已有指导，不追加段落**（防止 skill/prompt 膨胀）。
+
 ## 报告格式（Code Review Style）
 
 ```markdown
@@ -456,5 +485,6 @@ Agent: 调用 bash 工具，执行 `cat pkg/agent/loop.go`
 
 ## 参考文档
 
+- **Scoring Rubrics**: `references/scoring-rubrics.md` — 四维度评分标准（效率/合规/产出质量/输出克制）
 - **Session Reader**: `references/session-reader.md` — 会话格式和读取方法
 - **Analyst**: `references/analyst.md` — 分析角色定义

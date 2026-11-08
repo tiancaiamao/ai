@@ -103,6 +103,13 @@ Judge 每轮 spawn 新 agent，保持独立性。
 - 输出结构化判定：`APPROVED` 或 `CHANGES_REQUESTED` + 具体问题列表
 - 应包含明确的 pass/fail 标准（"Must Pass" blockers）
 
+**Judge 提建议的证据门槛**（移植自 Warp skill-doctor 的 skill-improvements 规范）：
+
+- 每条改进建议必须引用 Worker 产出中的**具体位置**（文件/章节/段落）和它导致的缺陷；"建议加个总结""可以考虑更多例子"这类投机性建议一律不许提——**投机性修改比不修改更糟**
+- 无法判断时输出 `INSUFFICIENT_EVIDENCE` + 缺什么证据。**不算 `CHANGES_REQUESTED`**——不惩罚证据缺失，不因看不到而硬挑问题
+- 判 `APPROVED` 时不需要硬凑问题。**"不开变更并说明理由"是合格的审查结果**，和挑出真问题一样有价值
+- 建议优先**替换/修改** Worker 产出的已有内容，而不是追加新章节（防止产出越改越肥）
+
 ### Key Principle: Separation of Concerns
 | Worker | Judge |
 |--------|-------|
