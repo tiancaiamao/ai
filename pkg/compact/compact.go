@@ -320,6 +320,18 @@ func (c *Compactor) ContextWindow() int {
 	return c.contextWindow
 }
 
+// IdleCompactThreshold returns the token count from which an idle-triggered
+// compaction is worth running. It is the LLM-decide soft threshold: below it
+// the agent loop does not even ask the LLM whether to compact, which is the
+// "ask for compact" boundary a conversation has to reach before compacting on
+// idle makes sense. Returns 0 when thresholds are unavailable.
+func (c *Compactor) IdleCompactThreshold() int {
+	if c == nil || c.llmDecideConfig == nil {
+		return 0
+	}
+	return c.llmDecideConfig.SoftThreshold
+}
+
 // SetContextWindow updates the model context window used for compaction.
 func (c *Compactor) SetContextWindow(window int) {
 	c.contextWindow = window

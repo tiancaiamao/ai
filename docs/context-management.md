@@ -11,7 +11,7 @@ It is implementation-aligned with the current codebase. If behavior changes, upd
 │                        Agent Loop                            │
 │  (pkg/agent/loop.go, loop_state.go)                         │
 │                                                              │
-│  Two compaction triggers:                                    │
+│  Two in-loop compaction triggers:                            │
 │                                                              │
 │  ┌───────────────────┐    ┌───────────────────────────┐     │
 │  │  Pre-LLM          │    │  Context-Limit Recovery    │     │
@@ -213,6 +213,55 @@ After successful compaction:
 - `llmDecideAnswer` cache is cleared
 - Compaction result is recorded in trace events
 
+A third trigger lives outside the loop: **idle (off-cache) compaction**, driven
+by `pkg/app` after a turn ends. See below.
+
+### Idle (off-cache) Compaction
+
+**Files:** `pkg/app/idle_compact.go`, `pkg/compact/idle.go`
+
+A provider's prompt cache expires after a short idle period, so the first turn
+back re-reads the whole conversation at full price. Compacting *before* the TTL
+elapses (while the prefix cache is still warm) makes that read cheap and leaves
+the next turns with a small context instead of a large one.
+
+```
+agent_end event
+  → scheduleIdleCompaction(): timer = provider TTL − 5s
+  → user input (handlePrompt): cancelIdleCompaction() + waitForIdleCompaction()
+    → timer fires: runIdleCompaction()
+       epoch still current? (no user input since scheduling)
+       agent idle (not streaming, not compacting)?
+       autoCompactionEnabled? (honors /set auto_compaction false)
+       EstimateTokens() >= compactor.IdleCompactThreshold() (LLMDecide soft threshold)
+       → compactNow("idle", auto=true)
+```
+
+Rules:
+
+- **Once per idle period.** After a successful compaction the context drops below
+  the soft threshold, so a later timer finds nothing to do. There is no retry on
+  failure; the trace span (`source=idle`) and the `compaction_end` event carry
+  the error.
+- **Honors the opt-out.** `/set auto_compaction false` stops the idle trigger too
+  (gated on `App.autoCompactionEnabled`), so a user who wants the conversation
+  kept whole does not get it rewritten after every idle period.
+- **Provider TTL table.** `compact.IdleCompactDelay(provider)` returns `TTL − 5s`
+  for `anthropic` / `openai` / `zai` (5-minute class caches) and 0 — disabled —
+  for providers whose cache clearly survives longer (`deepseek`: hours to days)
+  or whose retention is unknown (gateways), where compacting early would burn
+  tokens against a still-warm cache.
+- **Prompts queue.** An idle compaction holds `idleCompactMu` for its duration;
+  user prompts wait on it, so a turn never races with a background compaction on
+  `AgentContext`. Stale timers are dropped by comparing an epoch counter that
+  every user input bumps. The wait is synchronous inside the ACP read loop (the
+  same way `/compact` already runs), so a prompt that arrives mid-compaction is
+  processed once the compaction finishes — `session/cancel` is queued behind it
+  rather than interrupting the summary call.
+- **Failed compactions are in-memory no-ops.** `Compact()` mutates
+  `AgentContext` only after the summary has been generated, so the next request
+  sends the pre-compaction context.
+
 ## 8. Tool Output Management
 
 ### Tool Output Normalization
@@ -244,6 +293,8 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | `pkg/compact/compact_summary.go` | Summary generation (`GenerateSummary`), message splitting |
 | `pkg/compact/compact_tools.go` | Tool-call pairing, tool result compaction |
 | `pkg/compact/canary.go` | Canary context retention check — `AppendCanary`, `FindCanaryValue`, `RemoveAllCanaries` |
+| `pkg/compact/idle.go` | `IdleCompactDelay` — per-provider cache TTL backing idle compaction |
+| `pkg/app/idle_compact.go` | Idle timer, epoch cancellation, prompt queueing, idle compaction run |
 | `pkg/context/context.go` | `AgentContext`, `EstimateTokens` |
 | `pkg/context/message.go` | `AgentMessage`, `ContentBlock` types |
 | `pkg/context/agent_state.go` | `AgentState` tracking metadata |

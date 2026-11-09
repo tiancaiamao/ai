@@ -3,6 +3,42 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Idle compaction ahead of prompt-cache expiry (2026-11)
+
+**What changed**: `pkg/app` now arms a per-session timer when a turn ends
+(`agent_end` → `scheduleIdleCompaction`). If no user input arrives before it
+fires, `runIdleCompaction` compacts the conversation outside the agent loop via
+the same detached path as `/compact` (`compactNow(trigger, auto)`, trigger
+`idle`, `Auto: true`). Four guards: a hardcoded per-provider delay
+`compact.IdleCompactDelay` (provider TTL − 5s: `anthropic`/`openai`/`zai` 4m55s,
+`deepseek` and unknown providers disabled), a token gate
+`Compactor.IdleCompactThreshold()` (the LLMDecide soft threshold, so a short
+conversation is never compacted), the user's auto-compaction opt-out
+(`autoCompactionEnabled`, so `/set auto_compaction false` also stops the idle
+trigger), and an epoch counter that any user input bumps so a stale timer can
+never fire. `handlePrompt` cancels the pending timer and
+then blocks on `idleCompactMu` until an in-flight idle compaction finishes, so a
+prompt queues behind it instead of racing on `AgentContext` — the wait is
+synchronous in the ACP read loop, exactly like `/compact`, so a request arriving
+mid-compaction (including `session/cancel`) is handled once it finishes. Failures are
+reported through the existing `compaction_end` event (`CompactionInfo.Error`)
+and a `compaction` trace span with `source=idle`; nothing is retried.
+
+**Why**: Provider prefix caches expire after a few idle minutes, so the first
+turn back re-reads the entire conversation at full price — on a long session
+that is the single most expensive request of the day. Compacting *after* the
+expiry looks like the fix but is a net loss: the compaction call itself is then a
+full-price miss on the old context, and it only pays off after many later turns.
+Compacting just *before* expiry makes the compaction a cache read (≈0.1×) and
+shrinks the miss the next turn pays. That timing is why the feature keys off the
+provider TTL rather than a fixed idle duration, and why providers with
+long-lived caches are excluded instead of being compacted needlessly. The token
+gate exists because the same eviction happens on conversations too small to
+matter; the epoch/queueing exists because a background compaction mutating
+`AgentContext` under a live turn would corrupt the next request.
+
+
+
 ## Assistant messages carry `reasoning_content` for models that require it (2026-10)
 
 **What changed**: Requests now include `"reasoning_content"` on *every* assistant
