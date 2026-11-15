@@ -3,6 +3,7 @@ package compact
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
@@ -39,6 +40,43 @@ func InsertCanary(agentCtx *agentctx.AgentContext) string {
 
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, msg)
 	return value
+}
+
+// FindCanaryValue returns the value of the most recently planted canary in
+// messages, or "" when no canary message is present.
+//
+// The canary message is the source of truth for the retention check: it lives
+// in RecentMessages, is persisted with the session and survives a restart,
+// whereas any in-memory copy of the value would be lost. Keeping the value and
+// the message together prevents the two from drifting apart (a stale in-memory
+// value makes every ask look like a failed retention check).
+func FindCanaryValue(messages []agentctx.AgentMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Metadata == nil || msg.Metadata.Kind != CanaryKind {
+			continue
+		}
+		if value := parseCanaryValue(msg.ExtractText()); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// parseCanaryValue extracts the value attribute from a
+// `<agent:canary value="..."/>` message body.
+func parseCanaryValue(content string) string {
+	const marker = `value="`
+	idx := strings.Index(content, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := content[idx+len(marker):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
 }
 
 // RemoveAllCanaries returns a new message slice with all canary messages

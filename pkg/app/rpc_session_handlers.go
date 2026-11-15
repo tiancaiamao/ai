@@ -25,6 +25,20 @@ var runSessionUpdater func(baseDir, runID, sessionID string) error
 func (app *App) setSession(newSess *session.Session, newID, newName string) {
 	app.sess = newSess
 
+	// Switch the session ID before building anything session-scoped:
+	// createBaseContext keys the frozen agent-context prefix on it, and
+	// restores the session's workdir from its metadata.
+	app.stateMu.Lock()
+	app.sessionID = newID
+	app.sessionName = newName
+	app.stateMu.Unlock()
+
+	// Build the base context first: it fixes this session's agent-context
+	// prefix, which the compactor copies at construction. Building the
+	// compactor first would leave it holding the previous session's prefix,
+	// so compaction asks would miss the prefix cache on every request.
+	app.setAgentContext(app.createBaseContext())
+
 	// Rebuild compactor with the new session directory so that
 	// archive files are written to the correct session dir.
 	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, app.model.ContextWindow, newSess.GetDir())
@@ -34,8 +48,6 @@ func (app *App) setSession(newSess *session.Session, newID, newName string) {
 	app.compactor.SetThinkingLevel(app.currentThinkingLevel)
 	app.sessionComp.Update(app.compactor)
 
-	app.setAgentContext(app.createBaseContext())
-
 	// Update trace handler to use the new session ID.
 	if handler := traceevent.GetHandler(); handler != nil {
 		if fh, ok := handler.(*traceevent.FileHandler); ok {
@@ -43,11 +55,6 @@ func (app *App) setSession(newSess *session.Session, newID, newName string) {
 			app.traceOutputPath = fh.TraceFilePath("")
 		}
 	}
-
-	app.stateMu.Lock()
-	app.sessionID = newID
-	app.sessionName = newName
-	app.stateMu.Unlock()
 
 	// Keep run.json in sync with the active session so run-id addressing
 	// (e.g. `ai history --id <run>`) follows /resume-style switches.

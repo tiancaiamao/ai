@@ -82,3 +82,43 @@ func TestBuildAgentContextPrefixIncludesSkillWarnings(t *testing.T) {
 }
 
 func ptrString(s string) *string { return &s }
+
+// TestEnsureAgentContextPrefixFrozen verifies the prefix is built once per
+// session/workdir and reused verbatim afterwards. Rebuilding it mid-session
+// rotates the skills exploration block, which invalidates the provider prefix
+// cache for every following request and makes compaction asks diverge from
+// normal turns.
+func TestEnsureAgentContextPrefixFrozen(t *testing.T) {
+	legacy := skill.Diagnostic{
+		Type:    "warning",
+		Code:    skill.DiagnosticCodeLegacyProjectSkills,
+		Message: "legacy project skills directory .ai/skills is no longer loaded; move skills to .agents/skills",
+	}
+	app := &App{skillResult: &skill.LoadResult{Diagnostics: []skill.Diagnostic{legacy}}}
+	app.sessionID = "sess-1"
+
+	first := app.ensureAgentContextPrefix()
+	if !contains(first, "legacy project skills directory") {
+		t.Fatalf("expected warning in prefix, got %q", first)
+	}
+
+	// A rebuild now would produce a different string; the frozen prefix must
+	// not be affected.
+	app.skillResult = &skill.LoadResult{Diagnostics: []skill.Diagnostic{{
+		Type:    "warning",
+		Code:    skill.DiagnosticCodeLegacyProjectSkills,
+		Message: "a different legacy warning",
+	}}}
+	if got := app.ensureAgentContextPrefix(); got != first {
+		t.Errorf("prefix changed within a session: %q != %q", got, first)
+	}
+	if got := app.agentContextPrefix; got != first {
+		t.Errorf("agentContextPrefix = %q, want %q", got, first)
+	}
+
+	// Switching sessions must rebuild.
+	app.sessionID = "sess-2"
+	if got := app.ensureAgentContextPrefix(); !contains(got, "a different legacy warning") {
+		t.Errorf("prefix after session switch = %q, want rebuilt value", got)
+	}
+}

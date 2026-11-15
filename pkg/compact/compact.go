@@ -148,21 +148,11 @@ type Compactor struct {
 	// LLM-decide ask, preventing re-asking every turn after a "no".
 	llmDecideLastAskCount int
 
-	// canaryValue is the expected value for the next context retention check.
-	// Set by InsertCanary after compaction, checked by askLLM, reset on compaction.
-	canaryValue string
-
 	// lastAskCanaryForced records whether the last askLLM call returned
 	// confirmed=true because the canary recall check failed (forced
 	// compaction) rather than the model answering "confirm". Written and
 	// read by the same goroutine, like llmDecideLastAskCount.
 	lastAskCanaryForced bool
-}
-
-// SetCanaryValue sets the canary value for context retention checks.
-// Called by the agent loop after compaction, after planting a canary message.
-func (c *Compactor) SetCanaryValue(val string) {
-	c.canaryValue = val
 }
 
 // SetRunID sets the agent's run ID, used to inline copy-paste-ready
@@ -522,10 +512,6 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	ctx.AgentState.ToolCallsSinceLastTrigger = 0
 	c.llmDecideLastAskCount = 0
 
-	// Reset canary — after compaction the context is fresh, start a new
-	// retention cycle on the next askLLM.
-	c.canaryValue = ""
-
 	// Append post-compaction hint so the LLM knows to reload skills and
 	// re-read design docs that were lost during compaction.
 	hint := prompt.CompactHint()
@@ -801,6 +787,17 @@ func buildCacheFriendlyLLMContext(
 	}
 }
 
+// Compaction-decision request budgets. They mirror the agent loop's
+// LLMTotalTimeout (10min) and LLMFirstResponseTimeout (2min) in pkg/agent: the
+// ask re-sends the whole conversation, so its latency is dominated by the same
+// prompt prefill as a normal turn (~200s for a ~140k-token context on a local
+// model). A shorter total makes the ask time out on every large context, and a
+// shorter chunk interval kills a single silent prefill.
+const (
+	askDecisionTimeout       = 10 * time.Minute
+	askDecisionChunkInterval = 2 * time.Minute
+)
+
 // askLLM sends a lightweight yes/no question to the LLM, reusing the main
 // conversation prefix for cache efficiency. Returns true if the LLM says yes.
 //
@@ -834,9 +831,11 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	span.AddField("tokens", tokens)
 	span.AddField("budget_pct", budgetPct)
 
-	// Canary recall check. The canary was planted after the last compaction
-	// and is never modified by askLLM — zero cache disruption.
-	canaryVal := c.canaryValue
+	// Canary recall check. The canary message was planted after the last
+	// compaction and askLLM never modifies it — zero cache disruption.
+	// The message is read rather than an in-memory copy so that the expected
+	// value always matches what the model actually sees.
+	canaryVal := FindCanaryValue(agentCtx.RecentMessages)
 	hasCanary := canaryVal != ""
 	if hasCanary {
 		// Prepend canary instruction BEFORE the base prompt so the format
@@ -862,13 +861,14 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		c.sessionID,
 	)
 
-	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, askDecisionTimeout)
 	defer cancel()
 
-	stream := llm.StreamLLM(callCtx, c.model, llmCtx, c.apiKey, 60*time.Second)
+	stream := llm.StreamLLM(callCtx, c.model, llmCtx, c.apiKey, askDecisionChunkInterval)
 
 	var response strings.Builder
 	var thinking strings.Builder
+	gotDone := false
 	for event := range stream.Iterator(callCtx) {
 		if event.Done {
 			break
@@ -879,6 +879,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		case llm.LLMThinkingDeltaEvent:
 			thinking.WriteString(e.Delta)
 		case llm.LLMDoneEvent:
+			gotDone = true
 			span.AddField("input_tokens", e.Usage.InputTokens)
 			span.AddField("output_tokens", e.Usage.OutputTokens)
 			span.AddField("total_tokens", e.Usage.TotalTokens)
@@ -891,11 +892,30 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		}
 	}
 
+	// A stream that never completed means the model produced no verdict at
+	// all (timeout, dropped connection, cancelled context). Reporting that as
+	// "reject" would look like a healthy decision and let the context grow
+	// until the model itself starts failing, so surface it as an error: the
+	// caller then falls back to compacting without the LLM's opinion.
+	if !gotDone {
+		span.AddField("error", "no completion event")
+		if err := callCtx.Err(); err != nil {
+			return false, fmt.Errorf("compaction decision: no response from model: %w", err)
+		}
+		return false, fmt.Errorf("compaction decision: stream ended without a completion event")
+	}
+
 	// Fall back to reasoning_content if text response is empty.
 	answerText := response.String()
 	if strings.TrimSpace(answerText) == "" && thinking.Len() > 0 {
 		answerText = thinking.String()
 		span.AddField("used_thinking_fallback", true)
+	}
+
+	// An empty answer carries no verdict either; treat it like a missing one.
+	if strings.TrimSpace(answerText) == "" {
+		span.AddField("error", "empty response")
+		return false, fmt.Errorf("compaction decision: model returned an empty response")
 	}
 
 	// Parse the response:
@@ -937,7 +957,11 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	}
 
 	span.AddField("response", answerText)
-	span.AddField("canary_ok", canaryOK)
+	if hasCanary {
+		// Only recorded when a check actually ran: an absent canary is not a
+		// pass, and a zero-value true here used to read as a healthy context.
+		span.AddField("canary_ok", canaryOK)
+	}
 	span.AddField("decision", confirmed)
 
 	return confirmed, nil

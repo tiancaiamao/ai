@@ -300,4 +300,11 @@ func TestIdleCompactionShrinksContext(t *testing.T) {
 			t.Errorf("unexpected compaction error: %s", info.Error)
 		}
 	}
+
+	// The compaction must plant a fresh canary into the surviving context: the
+	// value is later read back out of RecentMessages, so a missing canary means
+	// the next ask silently runs with no retention check at all.
+	if got := compact.FindCanaryValue(h.AgentCtx.RecentMessages); got == "" {
+		t.Error("compaction did not plant a canary in RecentMessages")
+	}
 }

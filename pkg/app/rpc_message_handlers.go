@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/compact"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -68,6 +69,14 @@ func (app *App) compactNow(trigger string, auto bool) (*CompactResult, error) {
 			}
 			if result == nil {
 				return fmt.Errorf("compactor returned nil result")
+			}
+
+			// Plant a canary exactly like the in-loop path does: without it the
+			// next LLM-decide ask has no retention check to run, so a degraded
+			// context cannot be detected (the value is read back out of
+			// RecentMessages, so it is persisted with the snapshot below).
+			if val := compact.InsertCanary(agentCtx); val != "" {
+				span.AddField("canary_value", val)
 			}
 
 			afterCount := len(agentCtx.RecentMessages)

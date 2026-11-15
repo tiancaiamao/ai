@@ -92,6 +92,11 @@ type App struct {
 	// injected before the first user message on each LLM call. Empty when neither
 	// is available. Merged into one message for maximum prefix cache stability.
 	agentContextPrefix string
+	// agentContextPrefixKey identifies the session/workdir the prefix was built
+	// for. The prefix is frozen while the key is unchanged: rebuilding it
+	// mid-session would rotate the skills exploration block and invalidate the
+	// provider prefix cache for every following request.
+	agentContextPrefixKey string
 
 	// --- Slash command registry ---
 	commands *command.Registry

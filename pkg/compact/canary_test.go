@@ -99,33 +99,68 @@ func TestRemoveAllCanaries_Nil(t *testing.T) {
 	}
 }
 
-// TestCompactorCanaryLifecycle verifies the full lifecycle:
-// no canary → planted after compact → removed on next compact.
-func TestCompactorCanaryLifecycle(t *testing.T) {
-	c := &Compactor{canaryValue: ""}
+// TestCanaryLifecycle verifies the full lifecycle:
+// no canary → planted after compact → found in messages → removed on next
+// compact. The planted message is the only record of the value, so removal and
+// lookup cannot drift apart.
+func TestCanaryLifecycle(t *testing.T) {
 	ctx := agentctx.NewAgentContext("test")
 	for i := 0; i < 5; i++ {
 		ctx.AddRecentMessage(agentctx.NewUserMessage("msg"))
 	}
 
+	if got := FindCanaryValue(ctx.RecentMessages); got != "" {
+		t.Fatalf("FindCanaryValue before planting = %q, want empty", got)
+	}
+
 	// Simulate planting after compaction.
 	val := InsertCanary(ctx)
-	c.canaryValue = val
-
-	if c.canaryValue == "" {
+	if val == "" {
 		t.Fatal("expected non-empty canary value")
+	}
+	if got := FindCanaryValue(ctx.RecentMessages); got != val {
+		t.Errorf("FindCanaryValue after planting = %q, want %q", got, val)
 	}
 
 	// Simulate compaction.
 	ctx.RecentMessages = RemoveAllCanaries(ctx.RecentMessages)
-	c.canaryValue = ""
 
 	for _, msg := range ctx.RecentMessages {
 		if msg.Metadata != nil && msg.Metadata.Kind == CanaryKind {
 			t.Error("canary should be removed after compaction")
 		}
 	}
-	if c.canaryValue != "" {
-		t.Error("tracked canary should be reset after compaction")
+	if got := FindCanaryValue(ctx.RecentMessages); got != "" {
+		t.Errorf("FindCanaryValue after removal = %q, want empty", got)
+	}
+}
+
+// TestFindCanaryValue_LastWins verifies that the most recent canary is used
+// when several are present (e.g. two compactions without a cleanup in between).
+func TestFindCanaryValue_LastWins(t *testing.T) {
+	ctx := agentctx.NewAgentContext("test")
+	first := InsertCanary(ctx)
+	second := InsertCanary(ctx)
+	if got := FindCanaryValue(ctx.RecentMessages); got != second {
+		t.Errorf("FindCanaryValue = %q, want newest %q (first was %q)", got, second, first)
+	}
+}
+
+// TestParseCanaryValue covers the message body format written by InsertCanary.
+func TestParseCanaryValue(t *testing.T) {
+	tests := []struct {
+		content string
+		want    string
+	}{
+		{`<agent:canary value="abc123"/>`, "abc123"},
+		{`wrapped: <agent:canary value="abc123"/> trailing`, "abc123"},
+		{`<agent:canary value=""/>`, ""},
+		{`<agent:canary/>`, ""},
+		{`no canary here`, ""},
+	}
+	for _, tt := range tests {
+		if got := parseCanaryValue(tt.content); got != tt.want {
+			t.Errorf("parseCanaryValue(%q) = %q, want %q", tt.content, got, tt.want)
+		}
 	}
 }
