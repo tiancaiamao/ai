@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/compact"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -25,40 +26,57 @@ func (app *App) handleCompact(args string) (any, error) {
 		return map[string]any{"status": "queued"}, nil
 	}
 
+	return app.compactNow("manual_command", false)
+}
+
+// compactNow runs one compaction outside the agent loop and persists it.
+// trigger identifies the caller in events and traces ("manual_command", "idle").
+// On error the agent context is left untouched: compact.Compactor.Compact only
+// mutates it after the summary has been generated, so the next request still
+// sends the pre-compaction context.
+func (app *App) compactNow(trigger string, auto bool) (*CompactResult, error) {
 	agentCtx := app.ag.GetContext()
 	beforeCount := len(agentCtx.RecentMessages)
 
 	compactionInfo := agent.CompactionInfo{
-		Auto:    false,
+		Auto:    auto,
 		Before:  beforeCount,
-		Trigger: "manual_command",
+		Trigger: trigger,
 	}
 	app.stateMu.Lock()
 	app.isCompacting = true
 	app.stateMu.Unlock()
-	app.emitEvent(agent.NewCompactionStartEvent(compactionInfo))
+	app.emitCompactionEvent(agent.NewCompactionStartEvent(compactionInfo))
 	defer func() {
 		app.stateMu.Lock()
 		app.isCompacting = false
 		app.stateMu.Unlock()
-		app.emitEvent(agent.NewCompactionEndEvent(compactionInfo))
+		app.emitCompactionEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}()
 
 	var response *CompactResult
 	err := runDetachedTraceSpan(
 		"compaction",
 		traceevent.CategoryEvent,
-		[]traceevent.Field{{Key: "source", Value: "manual"}},
+		[]traceevent.Field{{Key: "source", Value: trigger}},
 		func(ctx context.Context, span *traceevent.Span) error {
 			span.AddField("before_messages", beforeCount)
 
 			result, err := app.compactor.Compact(ctx, agentCtx)
 			if err != nil {
-				slog.Info("Compact failed:", "value", err)
+				slog.Info("Compact failed:", "trigger", trigger, "value", err)
 				return err
 			}
 			if result == nil {
 				return fmt.Errorf("compactor returned nil result")
+			}
+
+			// Plant a canary exactly like the in-loop path does: without it the
+			// next LLM-decide ask has no retention check to run, so a degraded
+			// context cannot be detected (the value is read back out of
+			// RecentMessages, so it is persisted with the snapshot below).
+			if val := compact.InsertCanary(agentCtx); val != "" {
+				span.AddField("canary_value", val)
 			}
 
 			afterCount := len(agentCtx.RecentMessages)
@@ -67,7 +85,7 @@ func (app *App) handleCompact(args string) (any, error) {
 			span.AddField("tokens_after", result.TokensAfter)
 			compactionInfo.After = afterCount
 
-			slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
+			slog.Info("Compact successful", "trigger", trigger, "before", beforeCount, "after", afterCount)
 			response = &CompactResult{
 				TokensBefore: result.TokensBefore,
 				TokensAfter:  result.TokensAfter,
@@ -79,7 +97,7 @@ func (app *App) handleCompact(args string) (any, error) {
 				if _, err := app.sess.AppendCompaction(
 					result.Summary, agentCtx.RecentMessages,
 				); err != nil {
-					slog.Error("Failed to persist manual compaction", "error", err)
+					slog.Error("Failed to persist compaction", "trigger", trigger, "error", err)
 				}
 			}
 
@@ -91,6 +109,14 @@ func (app *App) handleCompact(args string) (any, error) {
 		return nil, err
 	}
 	return response, nil
+}
+
+// emitCompactionEvent forwards a compaction event to the protocol sink when one
+// is wired. Detached compaction paths also run before an emitter exists.
+func (app *App) emitCompactionEvent(event agent.AgentEvent) {
+	if app.emitEvent != nil {
+		app.emitEvent(event)
+	}
 }
 
 func (app *App) handleGetMessages(args string) (any, error) {

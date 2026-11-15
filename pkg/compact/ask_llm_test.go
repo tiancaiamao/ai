@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -50,6 +51,17 @@ func jsonString(s string) string {
 func newAskTestCtx() *agentctx.AgentContext {
 	ctx := agentctx.NewAgentContext("sys")
 	ctx.RecentMessages = append(ctx.RecentMessages, agentctx.NewUserMessage("hello"))
+	return ctx
+}
+
+// newAskTestCtxWithCanary returns a context holding a canary message with an
+// explicit value (InsertCanary generates a random one).
+func newAskTestCtxWithCanary(value string) *agentctx.AgentContext {
+	ctx := newAskTestCtx()
+	ctx.RecentMessages = append(ctx.RecentMessages, agentctx.NewUserMessage(
+		`<agent:canary value="`+value+`"/>`).
+		WithKind(CanaryKind).
+		WithVisibility(true, false))
 	return ctx
 }
 
@@ -123,14 +135,16 @@ func TestAskLLM_CanaryCheck(t *testing.T) {
 
 			model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
 			c := NewCompactor(askTestConfig(), model, "k", "sys", 0, "")
-			c.SetCanaryValue(tt.canary)
 
-			got, err := c.askLLM(context.Background(), newAskTestCtx(), 1000)
+			got, err := c.askLLM(context.Background(), newAskTestCtxWithCanary(tt.canary), 1000)
 			if err != nil {
 				t.Fatalf("askLLM error: %v", err)
 			}
 			if got != tt.want {
 				t.Errorf("canary case %q: askLLM = %v, want %v", tt.name, got, tt.want)
+			}
+			if c.lastAskCanaryForced != tt.wantForced {
+				t.Errorf("canary case %q: lastAskCanaryForced = %v, want %v", tt.name, c.lastAskCanaryForced, tt.wantForced)
 			}
 		})
 	}
@@ -177,10 +191,6 @@ func TestAskLLM_ThinkingFallback(t *testing.T) {
 
 func TestCompactorSetters(t *testing.T) {
 	c := NewCompactor(nil, llm.Model{}, "k", "sys", 0, "")
-	c.SetCanaryValue("v")
-	if c.canaryValue != "v" {
-		t.Errorf("canaryValue = %q, want 'v'", c.canaryValue)
-	}
 	c.SetAgentContextPrefix("prefix")
 	if c.agentContextPrefix != "prefix" {
 		t.Errorf("agentContextPrefix = %q, want 'prefix'", c.agentContextPrefix)
@@ -323,5 +333,78 @@ func TestShouldCompactLLMDecide_CanaryForcedReason(t *testing.T) {
 				t.Errorf("trace decision = %v, want %v", gotDecision, tt.wantDecision)
 			}
 		})
+	}
+}
+
+// TestAskLLM_NoCompletionEventIsError covers the silent-degradation bug: when
+// the decision stream never completes (here: the caller's context expires while
+// the server holds the connection), askLLM must report an error instead of
+// answering "do not compact". An empty verdict used to look like a healthy
+// rejection, so compaction never happened and the context kept growing.
+func TestAskLLM_NoCompletionEventIsError(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+
+	model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
+	c := NewCompactor(askTestConfig(), model, "k", "sys", 0, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	got, err := c.askLLM(ctx, newAskTestCtx(), 1000)
+	if err == nil {
+		t.Fatalf("askLLM = (%v, nil), want an error when no completion event arrives", got)
+	}
+	if got {
+		t.Errorf("askLLM = true, want false alongside the error")
+	}
+}
+
+// TestAskLLM_EmptyAnswerIsError verifies that a completed but empty response is
+// an error, not a "reject" verdict.
+func TestAskLLM_EmptyAnswerIsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseTwoLineResponse("", ""))
+	}))
+	defer server.Close()
+
+	model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
+	c := NewCompactor(askTestConfig(), model, "k", "sys", 0, "")
+	if _, err := c.askLLM(context.Background(), newAskTestCtx(), 1000); err == nil {
+		t.Fatal("expected error for empty response")
+	}
+}
+
+// TestShouldCompactLLMDecide_AskErrorFallsBack verifies that a failed ask
+// (here: the no-completion path) compacts instead of continuing. Before, the
+// ask answered "do not compact" with no error, so a context that could no
+// longer be summarised kept growing.
+func TestShouldCompactLLMDecide_AskErrorFallsBack(t *testing.T) {
+	cfg := askTestConfig()
+	cfg.LLMDecide = &LLMDecideConfig{SoftThreshold: 10, HardLimit: 100000, IntervalLow: 1}
+	c := NewCompactor(cfg, llm.Model{}, "k", "sys", 0, "")
+	c.askFunc = func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
+		return false, fmt.Errorf("compaction decision: no response from model: %w", context.DeadlineExceeded)
+	}
+
+	agentCtx := newAskTestCtx()
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage(strings.Repeat("x", 4000)))
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 5
+
+	if !c.shouldCompactLLMDecide(context.Background(), agentCtx) {
+		t.Fatal("a failed ask must fall back to compacting")
 	}
 }

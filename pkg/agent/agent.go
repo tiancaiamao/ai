@@ -660,6 +660,18 @@ func (a *Agent) SetContextWindow(contextWindow int) {
 	a.LoopConfig.ContextWindow = contextWindow
 }
 
+// SetAgentContextPrefix sets the skills + AGENTS.md prefix that is injected as
+// the first message of every request.
+//
+// The agent embeds a copy of the LoopConfig it was built from, so a change made
+// after construction (for example after switching sessions) does not reach the
+// running loop on its own. Callers must update it here, otherwise the loop and
+// the compactor send different prefixes and every request loses its prefix
+// cache.
+func (a *Agent) SetAgentContextPrefix(prefix string) {
+	a.LoopConfig.AgentContextPrefix = prefix
+}
+
 // GetPendingFollowUps returns the number of queued follow-up messages.
 func (a *Agent) GetPendingFollowUps() int {
 	return len(a.followUpQueue)

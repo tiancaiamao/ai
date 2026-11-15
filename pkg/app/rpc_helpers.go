@@ -34,6 +34,28 @@ func (app *App) buildSystemPrompt(currentSess *session.Session) string {
 	return promptBuilder.Build()
 }
 
+// ensureAgentContextPrefix returns the agent-context prefix for the current
+// session and working directory, building it only when that key changes.
+//
+// The prefix must stay frozen for the whole session: buildAgentContextPrefix
+// advances the skills exploration rotation (and persists it), so rebuilding
+// returns a different block every time. The prefix is message #0 of every
+// request, so regenerating it mid-session throws away the provider prefix cache
+// for the entire conversation and makes the compaction ask diverge from normal
+// turns (which forces a full re-prefill on every ask).
+func (app *App) ensureAgentContextPrefix() string {
+	cwd := ""
+	if app.ws != nil {
+		cwd = app.ws.GetCWD()
+	}
+	key := app.sessionID + "\x00" + cwd
+	if app.agentContextPrefixKey != key {
+		app.agentContextPrefix = app.buildAgentContextPrefix()
+		app.agentContextPrefixKey = key
+	}
+	return app.agentContextPrefix
+}
+
 func (app *App) buildAgentContextPrefix() string {
 	var parts []string
 
@@ -89,11 +111,16 @@ func (app *App) createBaseContext() *agentctx.AgentContext {
 		}
 	}
 	app.systemPrompt = app.buildSystemPrompt(app.sess)
-	app.agentContextPrefix = app.buildAgentContextPrefix()
+	app.agentContextPrefix = app.ensureAgentContextPrefix()
 	// Keep loopCfg in sync if it has been constructed (createBaseContext
 	// may be re-invoked on session resume while loopCfg already exists).
 	if app.loopCfg != nil {
 		app.loopCfg.AgentContextPrefix = app.agentContextPrefix
+	}
+	// The running agent embeds its own copy of LoopConfig, so it needs the
+	// prefix pushed explicitly or it keeps sending the one from construction.
+	if app.ag != nil {
+		app.ag.SetAgentContextPrefix(app.agentContextPrefix)
 	}
 	// Sync prefix to compactor: AgentContext.AgentContextPrefix has json:"-"
 	// and is lost on checkpoint/restore, so the compactor stores its own copy.

@@ -42,6 +42,25 @@ When compaction triggers (`Compact`), all canary messages are removed and `canar
 6. Clean stale runtime_state messages
 7. Return `CompactionResult` with before/after token counts
 
+## Idle (off-cache) Compaction
+
+A provider's prompt cache expires after a short idle period, so the first turn
+back pays a full-price miss on the whole conversation. Compacting *before* the
+TTL elapses turns that into a cheap cached read plus a small context for later
+turns. `pkg/app` owns the timer; this package owns the policy:
+
+```go
+func IdleCompactDelay(provider string) time.Duration // TTL − 5s, or 0 when disabled
+func (c *Compactor) IdleCompactThreshold() int       // LLMDecide SoftThreshold
+```
+
+`IdleCompactDelay` is a hardcoded per-provider table — `anthropic`, `openai` and
+`zai` use the 5-minute class, while providers whose cache outlives the window
+(`deepseek`) or whose retention is unknown (gateways) return 0 (disabled), where
+compacting early would burn tokens against a still-warm cache. The timer also
+respects the auto-compaction opt-out: `pkg/app` refuses to run it when
+`/set auto_compaction false` has been issued.
+
 ## Config
 
 ```go
@@ -117,6 +136,8 @@ This maximizes provider prefix-cache hits, reducing latency and cost.
 | `compact_summary.go` | Summary generation, message splitting (`splitMessagesByTokenBudget`) |
 | `compact_tools.go` | Tool-call pairing, tool result compaction |
 | `canary.go` | Canary context retention check — `AppendCanary`, `FindCanaryValue`, `RemoveAllCanaries` |
+| `idle.go` | `IdleCompactDelay` — per-provider prompt-cache TTL backing idle compaction |
+
 
 ## Dependencies
 
