@@ -16,13 +16,34 @@ func TestCompactSummarizePrompt(t *testing.T) {
 	}
 }
 
+func TestCompactSummarizePromptRequiresExecutableSkillRules(t *testing.T) {
+	p := CompactSummarizePrompt()
+	for _, want := range []string{
+		"the exact rules it needs are written in this summary",
+		"including exact commands, flags, tool-call syntax, and file paths",
+		"do not replace exact syntax with abstract advice",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("CompactSummarizePrompt should contain %q", want)
+		}
+	}
+	if strings.Contains(p, "The agent MUST reload these skills") {
+		t.Error("CompactSummarizePrompt should not demand unconditional skill reloads")
+	}
+}
+
 func TestCompactHintSkillReloadIsConditional(t *testing.T) {
 	p := CompactHint()
-	if !strings.Contains(p, "Check the summary first") {
-		t.Error("CompactHint should direct the agent to check the summary before reloading a skill")
-	}
-	if !strings.Contains(p, "only when you need details that are not preserved there") {
-		t.Error("CompactHint should make skill reload conditional on missing details")
+	for _, want := range []string{
+		"Check the summary first",
+		"only when you need details that are not preserved there",
+		"a paraphrase, general knowledge, or recollection does NOT count",
+		"If exact rules are missing, reload before using the skill",
+		"do not reload skills whose needed rules are fully captured",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("CompactHint should contain %q", want)
+		}
 	}
 }
 
