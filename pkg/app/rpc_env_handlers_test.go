@@ -85,6 +85,13 @@ func TestHandleEnvSetGetListUnset(t *testing.T) {
 	if _, ok := os.LookupEnv(nameOne); ok {
 		t.Errorf("%s leaked into the agent process environment after unset", nameOne)
 	}
+	gotAfterUnset, err := app.handleEnv("get " + nameOne)
+	if err != nil {
+		t.Fatalf("get after unset failed: %v", err)
+	}
+	if want := nameOne + " is not set"; gotAfterUnset != want {
+		t.Fatalf("get after unset = %q, want %q", gotAfterUnset, want)
+	}
 }
 
 func TestHandleEnvUnsetHidesProcessEnvForBashOnly(t *testing.T) {
@@ -166,4 +173,19 @@ func TestEnvSlashCommandStaysOutOfAgentTurn(t *testing.T) {
 		t.Fatalf("result = %q, want %q", got, "set "+name)
 	}
 	// If the slash text had reached ag.Prompt, the nil agent would have panicked.
+}
+func TestHandleEnvGetEmptyValueRendersFeedback(t *testing.T) {
+	const name = "AI_TEST_ENV_EMPTY"
+	cleanupTestEnv(t, name)
+	if err := os.Setenv(name, ""); err != nil {
+		t.Fatalf("set empty process env: %v", err)
+	}
+
+	got, err := testAppWithEnv().handleEnv("get " + name)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if want := name + " is set to an empty value"; got != want {
+		t.Fatalf("get = %q, want %q", got, want)
+	}
 }

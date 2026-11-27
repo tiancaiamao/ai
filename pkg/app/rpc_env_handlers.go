@@ -49,7 +49,10 @@ func (app *App) handleEnv(args string) (any, error) {
 		}
 		value, ok := app.envInjector.Lookup(name)
 		if !ok {
-			return "", nil
+			return name + " is not set", nil
+		}
+		if value == "" {
+			return name + " is set to an empty value", nil
 		}
 		slog.Info("Received env get", "name", name)
 		return value, nil

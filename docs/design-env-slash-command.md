@@ -75,6 +75,9 @@ Notes:
 
 - `get` and `list` deliberately return plaintext. This is the human reading their own
   credentials, not a leak into the model. The operator channel is the point.
+- `get` always returns visible text: a missing variable reports that it is not set, and an
+  empty value is reported explicitly, so a typo or a cleared variable never looks like a
+  command that silently did nothing.
 - `list` covers the effective bash-child view: variables inherited at process startup plus
   operator overrides and deletions. A password supplied at startup (for example
   `SUDO_PASSWORD`) is visible there too, because bash would see it.

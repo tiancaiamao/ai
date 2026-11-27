@@ -136,6 +136,7 @@ func bashOutputText(t *testing.T, inj *EnvInjector, command string) string {
 func TestBashToolSudoUsesInjectedPassword(t *testing.T) {
 	const name = "SUDO_PASSWORD"
 	t.Cleanup(func() { _ = os.Unsetenv(name) })
+	_ = os.Unsetenv(name)
 
 	inj := fakeSudoInjector(t)
 	inj.Set(name, "bbb")
