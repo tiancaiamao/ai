@@ -4,17 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"sort"
 	"strings"
 )
 
 const envCommandUsage = "usage: /env set NAME value | get NAME | list | unset NAME"
 
 // registerEnvHandlers registers the operator-only environment command. The
-// handler mutates this process environment; it never touches agent context.
+// handler edits the injection table used by the bash tool; it never touches
+// the agent process environment or agent context.
 func (app *App) registerEnvHandlers() {
-	app.commands.Register("env", "Set or inspect environment variables for this process", func(args string) (any, error) {
+	app.commands.Register("env", "Set or inspect environment variables injected into bash", func(args string) (any, error) {
 		return app.handleEnv(args)
 	})
 }
@@ -39,9 +38,7 @@ func (app *App) handleEnv(args string) (any, error) {
 		if !validEnvName(name) {
 			return nil, fmt.Errorf("invalid environment variable name %q", name)
 		}
-		if err := os.Setenv(name, value); err != nil {
-			return nil, err
-		}
+		app.envInjector.Set(name, value)
 		slog.Info("Received env set", "name", name)
 		return "set " + name, nil
 
@@ -50,22 +47,22 @@ func (app *App) handleEnv(args string) (any, error) {
 		if !validEnvName(name) {
 			return nil, errors.New("usage: /env get NAME")
 		}
+		value, ok := app.envInjector.Lookup(name)
+		if !ok {
+			return "", nil
+		}
 		slog.Info("Received env get", "name", name)
-		return os.Getenv(name), nil
+		return value, nil
 
 	case "list":
-		entries := os.Environ()
-		sort.Strings(entries)
-		return strings.Join(entries, "\n"), nil
+		return strings.Join(app.envInjector.Environ(), "\n"), nil
 
 	case "unset":
 		name := strings.TrimSpace(rest)
 		if !validEnvName(name) {
 			return nil, errors.New("usage: /env unset NAME")
 		}
-		if err := os.Unsetenv(name); err != nil {
-			return nil, err
-		}
+		app.envInjector.Unset(name)
 		slog.Info("Received env unset", "name", name)
 		return "unset " + name, nil
 
@@ -74,8 +71,9 @@ func (app *App) handleEnv(args string) (any, error) {
 	}
 }
 
-// validEnvName accepts the conventional shell identifier form. os.Setenv only
-// rejects '=' and NUL, but a stricter check turns typos into clear errors.
+// validEnvName accepts the conventional shell identifier form. The injection
+// table accepts any name exec can pass, but a strict check turns typos into
+// clear errors.
 func validEnvName(name string) bool {
 	if name == "" {
 		return false

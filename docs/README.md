@@ -32,7 +32,7 @@ stale when code moves.
 
 | Document | Topic |
 |----------|-------|
-| [`design-env-slash-command.md`](design-env-slash-command.md) | Operator-only `/env` slash command for runtime secret injection |
+| [`design-env-slash-command.md`](design-env-slash-command.md) | Operator-only `/env` slash command for bash environment injection |
 
 ## ADRs
 

@@ -60,6 +60,8 @@ type App struct {
 	// --- Workspace & Tools ---
 	ws       *tools.Workspace
 	registry *tools.Registry
+	// envInjector is the operator-managed view passed to bash children only.
+	envInjector *tools.EnvInjector
 
 	// --- Compaction ---
 	compactor       *compact.Compactor

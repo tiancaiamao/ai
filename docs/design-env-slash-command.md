@@ -1,4 +1,4 @@
-# Design: Operator-Only `/env` Slash Command for Runtime Secret Injection
+# Design: Operator-Only `/env` Slash Command for Bash Environment Injection
 
 > Status: **Accepted — implemented.** This document describes behavior and rationale, not implementation
 > details. Code paths, line numbers, and file layouts are intentionally omitted so the design
@@ -10,9 +10,10 @@
 Two concrete failures motivate this design:
 
 1. **sudo blocks the agent.** Password-based sudo support exists, but the password has to be
-   present in the agent process environment before startup. There is no way to supply or rotate
-   it mid-session. Without it, sudo either succeeds via a narrow passwordless rule or a valid
-   timestamp cache, or fails fast — it must never hang on a non-interactive stdin.
+   present in the agent process environment before startup. That is a process-wide setting, not
+   a per-bash one, and there is no way to supply or rotate it for bash commands mid-session.
+   Without it, sudo either succeeds via a narrow passwordless rule or a valid timestamp cache,
+   or fails fast — it must never hang on a non-interactive stdin.
 2. **Other credentials cannot be handed to the model.** For a Jenkins skill, a token cannot be
    sent in a prompt or stored in a plaintext file that the agent may read: either path puts the
    value into the model context, which sends it to the model provider. The agent needs to *use*
@@ -26,8 +27,9 @@ entering a tool call argument or the conversation.
 
 ### Goals
 
-- Human operator can set, read, list, and unset environment variables at runtime with a slash
-  command.
+- Human operator can set, read, list, and unset variables injected into future bash children
+  with a slash command.
+- The agent process environment is never modified; only the view handed to the bash tool is.
 - Agent can use values indirectly from bash via ordinary shell expansion (`$NAME`).
 - The secret value never enters the agent/model context.
 - Minimum implementation: no new infrastructure, no new model-facing tool.
@@ -35,9 +37,11 @@ entering a tool call argument or the conversation.
 ### Non-goals
 
 - Multi-user isolation, per-agent scopes, ACLs, audit logs.
+- Changing the agent process environment. `/env` is not `export` for the agent itself.
 - `SecretRef`, redaction hooks, credential helper services, or MCP-based per-tool injection.
 - Preventing an agent from deliberately printing or exfiltrating a value it can expand.
-- Persistence across restarts. Values live for the lifetime of the agent process.
+- No persistence across restarts. Values live in memory for the lifetime of the agent process
+  and are never written to the process environment or to disk.
 - Encrypting or hiding values from the operator. The operator is trusted.
 
 ## 3. Core invariant: slash commands are an operator channel
@@ -62,17 +66,20 @@ and do not copy the special handling used by commands that echo their own comman
 
 | Command | Behavior |
 |---|---|
-| `/env set NAME value` | Set `NAME` to `value` in the agent process. `value` may contain spaces. |
-| `/env get NAME` | Return the plaintext value to the human client. |
-| `/env list` | List the agent process environment as `NAME=value` lines, plaintext, to the human client. |
-| `/env unset NAME` | Remove `NAME` from the agent process environment. |
+| `/env set NAME value` | Set `NAME` to `value` in the environment of future bash children. `value` may contain spaces. |
+| `/env get NAME` | Return the plaintext value bash will see to the human client. |
+| `/env list` | List the effective bash-child environment as `NAME=value` lines, plaintext, to the human client. |
+| `/env unset NAME` | Hide `NAME` from future bash children, even if the agent process was started with it. |
 
 Notes:
 
 - `get` and `list` deliberately return plaintext. This is the human reading their own
   credentials, not a leak into the model. The operator channel is the point.
-- `list` covers the process environment, so a password supplied at startup (for example
-  `SUDO_PASSWORD`) is visible there too.
+- `list` covers the effective bash-child view: variables inherited at process startup plus
+  operator overrides and deletions. A password supplied at startup (for example
+  `SUDO_PASSWORD`) is visible there too, because bash would see it.
+- `unset` is a deletion in that view, not an `unset` in the agent process. The parent shell that
+  launched the agent is unaffected, and so is every non-bash child of the agent.
 - Names must be valid environment-variable names. A value containing spaces must survive
   parsing intact.
 - Unknown subcommands produce a short usage error on the human client.
@@ -82,16 +89,18 @@ spellings; only the canonical name is recognized.
 
 ## 5. Runtime model
 
-- The agent process owns its environment. A setter changes that process environment; it does
-  not write a file and does not put the value in a prompt.
-- Shell commands executed by the agent inherit that environment, so `$NAME` expands at
-  execution time in the shell.
+- The operator owns an injection table, not a process environment. It contains overrides and
+  deletions layered on top of the environment the agent was started with.
+- For each bash call, the tool builds a child environment from that view and passes it to the
+  shell. `$NAME` therefore expands at execution time in the shell.
+- The agent process's own `os.Getenv`-style environment is unchanged. `get` and `list` report
+  what bash will see, not what the agent process holds.
 - Expansion is the shell's job. The tool must not parse `$NAME` or substitute placeholders in
   Go: shell syntax is arbitrary and any Go-side parser would be both incomplete and unnecessary.
-- `SUDO_PASSWORD` is read on each sudo invocation, so a runtime set or unset takes effect for
-  the next command in the same session.
-- Unset removes the variable from the process only. The parent shell that launched the agent is
-  unaffected; this is desirable.
+- `SUDO_PASSWORD` is read from the effective view on each sudo invocation, so a runtime set or
+  unset takes effect for the next bash command in the same session.
+- A deletion hides even an inherited variable, so `unset` means the shell sees no value rather
+  than falling back to the startup environment.
 
 The agent's side of the contract is prompt-level only: use `$NAME` in bash commands, never ask
 the model to print the value. There is no enforcement beyond the fact that the value was never
@@ -110,7 +119,7 @@ to fetch a build log.
 /env list
 ```
 
-`/env list` shows, among other process variables:
+`/env list` shows, among the variables visible to bash:
 
 ```text
 JENKINS_USER=aaa
@@ -164,7 +173,7 @@ of the context window entirely.
   workspace but do not read another process's environment, and recommends injecting secrets at
   process start rather than keeping them in `.env`.
   <https://infisical.com/blog/your-ai-coding-agent-is-reading-your-env-file>
-  `/env set` is the manual, process-lifetime version of that pattern.
+  `/env set` is the manual, bash-scoped version of that pattern.
 - **Operator-channel precedent.** Hermes Agent documents `/reload` as "Reload `.env` variables
   into the running session (picks up new API keys without restarting)" and supports custom
   slash commands that run shell commands without invoking the LLM. Same shape: a human-facing
@@ -225,10 +234,11 @@ has a small blast radius. No new agent-side machinery is needed for that.
 ## 10. Acceptance criteria
 
 1. A runtime set is immediately visible to later bash calls via `$NAME`, including values with
-   spaces.
-2. `get` and `list` show plaintext values in the human client only; the conversation history
-   contains neither the slash command nor its output.
-3. `unset` removes the variable so later bash calls see an empty expansion.
+   spaces, while the agent process environment still has no such variable.
+2. `get` and `list` show the effective bash-child environment in plaintext in the human client
+   only; the conversation history contains neither the slash command nor its output.
+3. `unset` hides the variable from later bash calls, even when it was present in the agent
+   process environment at startup; the process environment itself is unchanged.
 4. Setting `SUDO_PASSWORD` at runtime makes the next sudo command use the password path.
 5. Invalid names and malformed invocations return a short human-readable error instead of
    changing the environment.
@@ -237,6 +247,8 @@ has a small blast radius. No new agent-side machinery is needed for that.
 
 - **`list` output:** includes plaintext values, since the operator explicitly wants to read
   what is set.
+- **Scope:** the bash-child environment only. The agent process environment is never written
+  to.
 - **Persistence:** none; values disappear when the agent process exits.
 - **Variable name:** canonical `SUDO_PASSWORD` only.
 - **`unset`:** included in the initial command set; `set NAME ""` is not the intended way to

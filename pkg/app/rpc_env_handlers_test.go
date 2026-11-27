@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/command"
+	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 func cleanupTestEnv(t *testing.T, names ...string) {
@@ -17,6 +18,10 @@ func cleanupTestEnv(t *testing.T, names ...string) {
 	}
 }
 
+func testAppWithEnv() *App {
+	return &App{envInjector: tools.NewEnvInjector()}
+}
+
 func TestHandleEnvSetGetListUnset(t *testing.T) {
 	const (
 		nameOne = "AI_TEST_ENV_ONE"
@@ -24,7 +29,7 @@ func TestHandleEnvSetGetListUnset(t *testing.T) {
 	)
 	cleanupTestEnv(t, nameOne, nameTwo)
 
-	app := &App{}
+	app := testAppWithEnv()
 
 	result, err := app.handleEnv("set " + nameOne + " aaa")
 	if err != nil {
@@ -33,16 +38,23 @@ func TestHandleEnvSetGetListUnset(t *testing.T) {
 	if got := fmt.Sprint(result); got != "set "+nameOne {
 		t.Fatalf("set result = %q, want %q", got, "set "+nameOne)
 	}
-	if got := os.Getenv(nameOne); got != "aaa" {
-		t.Fatalf("%s = %q, want aaa", nameOne, got)
+	// The agent process environment must not be modified.
+	if _, ok := os.LookupEnv(nameOne); ok {
+		t.Fatalf("%s leaked into the agent process environment", nameOne)
+	}
+	if got, ok := app.envInjector.Lookup(nameOne); !ok || got != "aaa" {
+		t.Fatalf("injected %s = %q, present=%v, want aaa", nameOne, got, ok)
 	}
 
 	// A value containing spaces must survive parsing intact.
 	if _, err := app.handleEnv("set " + nameTwo + " two words here"); err != nil {
 		t.Fatalf("set with spaces failed: %v", err)
 	}
-	if got := os.Getenv(nameTwo); got != "two words here" {
-		t.Fatalf("%s = %q, want %q", nameTwo, got, "two words here")
+	if got, ok := app.envInjector.Lookup(nameTwo); !ok || got != "two words here" {
+		t.Fatalf("injected %s = %q, present=%v, want %q", nameTwo, got, ok, "two words here")
+	}
+	if _, ok := os.LookupEnv(nameTwo); ok {
+		t.Fatalf("%s leaked into the agent process environment", nameTwo)
 	}
 
 	got, err := app.handleEnv("get " + nameOne)
@@ -67,8 +79,37 @@ func TestHandleEnvSetGetListUnset(t *testing.T) {
 	if _, err := app.handleEnv("unset " + nameOne); err != nil {
 		t.Fatalf("unset failed: %v", err)
 	}
+	if _, ok := app.envInjector.Lookup(nameOne); ok {
+		t.Errorf("%s still visible to bash after unset", nameOne)
+	}
 	if _, ok := os.LookupEnv(nameOne); ok {
-		t.Errorf("%s still present after unset", nameOne)
+		t.Errorf("%s leaked into the agent process environment after unset", nameOne)
+	}
+}
+
+func TestHandleEnvUnsetHidesProcessEnvForBashOnly(t *testing.T) {
+	const name = "AI_TEST_ENV_FROM_PROCESS"
+	cleanupTestEnv(t, name)
+	if err := os.Setenv(name, "process-value"); err != nil {
+		t.Fatalf("set process env: %v", err)
+	}
+
+	app := testAppWithEnv()
+	if _, err := app.handleEnv("unset " + name); err != nil {
+		t.Fatalf("unset failed: %v", err)
+	}
+
+	// The agent process keeps its variable; only bash's view loses it.
+	if got := os.Getenv(name); got != "process-value" {
+		t.Fatalf("agent process %s = %q, want process-value", name, got)
+	}
+	if _, ok := app.envInjector.Lookup(name); ok {
+		t.Errorf("%s still visible to bash after unset", name)
+	}
+	for _, entry := range app.envInjector.Environ() {
+		if strings.HasPrefix(entry, name+"=") {
+			t.Errorf("bash env still contains %s: %q", name, entry)
+		}
 	}
 }
 
@@ -76,7 +117,7 @@ func TestHandleEnvSetDoesNotEchoValue(t *testing.T) {
 	const name = "AI_TEST_ENV_SECRET"
 	cleanupTestEnv(t, name)
 
-	app := &App{}
+	app := testAppWithEnv()
 	result, err := app.handleEnv("set " + name + " bbb")
 	if err != nil {
 		t.Fatalf("set failed: %v", err)
@@ -87,7 +128,7 @@ func TestHandleEnvSetDoesNotEchoValue(t *testing.T) {
 }
 
 func TestHandleEnvRejectsMalformedInput(t *testing.T) {
-	app := &App{}
+	app := testAppWithEnv()
 	for _, args := range []string{
 		"",
 		"bogus",
@@ -108,15 +149,18 @@ func TestEnvSlashCommandStaysOutOfAgentTurn(t *testing.T) {
 	const name = "AI_TEST_ENV_PROMPT"
 	cleanupTestEnv(t, name)
 
-	app := &App{commands: command.New()}
+	app := &App{commands: command.New(), envInjector: tools.NewEnvInjector()}
 	app.registerEnvHandlers()
 
 	result, err := app.handlePrompt("/env set "+name+" value", false, "")
 	if err != nil {
 		t.Fatalf("slash dispatch failed: %v", err)
 	}
-	if got := os.Getenv(name); got != "value" {
-		t.Fatalf("%s = %q, want value", name, got)
+	if got, ok := app.envInjector.Lookup(name); !ok || got != "value" {
+		t.Fatalf("injected %s = %q, present=%v, want value", name, got, ok)
+	}
+	if _, ok := os.LookupEnv(name); ok {
+		t.Fatalf("%s leaked into the agent process environment", name)
 	}
 	if got := fmt.Sprint(result); got != "set "+name {
 		t.Fatalf("result = %q, want %q", got, "set "+name)

@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -125,11 +124,11 @@ func TestRewriteSudoInvocations_SudoSubshell(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// transformSudoCommand — SUDO_PASSWORD env var path
+// transformSudoCommand — explicit effective password
 // ---------------------------------------------------------------------------
 
 func TestTransformSudoCommand_NoSudo(t *testing.T) {
-	result := transformSudoCommand("ls -la")
+	result := transformSudoCommand("ls -la", "")
 	if result.command != "ls -la" {
 		t.Errorf("expected unchanged command, got %q", result.command)
 	}
@@ -139,10 +138,7 @@ func TestTransformSudoCommand_NoSudo(t *testing.T) {
 }
 
 func TestTransformSudoCommand_WithEnvPassword(t *testing.T) {
-	os.Setenv("SUDO_PASSWORD", "hunter2")
-	defer os.Unsetenv("SUDO_PASSWORD")
-
-	result := transformSudoCommand("sudo apt update")
+	result := transformSudoCommand("sudo apt update", "hunter2")
 	if !strings.Contains(result.command, "sudo -S -p ''") {
 		t.Errorf("expected sudo -S rewrite, got: %s", result.command)
 	}
@@ -152,24 +148,18 @@ func TestTransformSudoCommand_WithEnvPassword(t *testing.T) {
 }
 
 func TestTransformSudoCommand_WithEnvPasswordMultipleSudo(t *testing.T) {
-	os.Setenv("SUDO_PASSWORD", "hunter2")
-	defer os.Unsetenv("SUDO_PASSWORD")
-
-	result := transformSudoCommand("sudo a && sudo b")
+	result := transformSudoCommand("sudo a && sudo b", "hunter2")
 	if result.passwordLines != "hunter2\nhunter2\n" {
 		t.Errorf("expected 2 password lines, got %q", result.passwordLines)
 	}
 }
 
 func TestTransformSudoCommand_NoEnvPassword(t *testing.T) {
-	os.Setenv("SUDO_PASSWORD", "")
-	defer os.Unsetenv("SUDO_PASSWORD")
-
 	// Without SUDO_PASSWORD, sudo is rewritten to -n (non-interactive):
 	// it succeeds via a NOPASSWD rule or a still-valid timestamp cache,
 	// and fails immediately otherwise — never blocking on a password.
 	// No password lines are injected.
-	result := transformSudoCommand("sudo apt update")
+	result := transformSudoCommand("sudo apt update", "")
 	if result.command != "sudo -n apt update" {
 		t.Errorf("expected 'sudo -n apt update', got %q", result.command)
 	}
@@ -179,11 +169,8 @@ func TestTransformSudoCommand_NoEnvPassword(t *testing.T) {
 }
 
 func TestTransformSudoCommand_NoEnvPasswordCompound(t *testing.T) {
-	os.Setenv("SUDO_PASSWORD", "")
-	defer os.Unsetenv("SUDO_PASSWORD")
-
 	// Every sudo in a compound command gets the -n rewrite.
-	result := transformSudoCommand("sudo a && sudo b; sudo c")
+	result := transformSudoCommand("sudo a && sudo b; sudo c", "")
 	if result.command != "sudo -n a && sudo -n b; sudo -n c" {
 		t.Errorf("expected all sudo rewritten to -n, got %q", result.command)
 	}
@@ -193,11 +180,8 @@ func TestTransformSudoCommand_NoEnvPasswordCompound(t *testing.T) {
 }
 
 func TestTransformSudoCommand_NoEnvPasswordNoSudo(t *testing.T) {
-	os.Setenv("SUDO_PASSWORD", "")
-	defer os.Unsetenv("SUDO_PASSWORD")
-
 	// Commands without sudo are untouched.
-	result := transformSudoCommand("apt update")
+	result := transformSudoCommand("apt update", "")
 	if result.command != "apt update" {
 		t.Errorf("expected unchanged command, got %q", result.command)
 	}

@@ -1,9 +1,6 @@
 package tools
 
-import (
-	"os"
-	"strings"
-)
+import "strings"
 
 // ---------------------------------------------------------------------------
 // sudo password support for the bash tool.
@@ -11,7 +8,9 @@ import (
 // Inspired by the approach in hermes-agent/tools/terminal_tool.py.
 //
 // Bare `sudo` invocations are rewritten so they can never hang waiting
-// for a password on a non-tty stdin. Two modes, chosen by SUDO_PASSWORD:
+// for a password on a non-tty stdin. Two modes, chosen by the SUDO_PASSWORD
+// value visible to the bash child (from the operator injection table or the
+// inherited process environment):
 //
 //   • SUDO_PASSWORD set → rewrite `sudo cmd` → `sudo -S -p '' cmd` and
 //     pipe the password to stdin. Every sudo invocation goes through.
@@ -43,35 +42,35 @@ const (
 
 // transformSudoCommand inspects a bash command for bare `sudo` invocations
 // and returns a transformed version that can never block on a password
-// prompt.
+// prompt. password is the effective SUDO_PASSWORD for this bash child.
 //
 // Decision tree:
 //
 //  1. No sudo invocations → return command unchanged, no password.
-//  2. SUDO_PASSWORD env var is set → rewrite to `sudo -S -p ”`, return
-//     the password (repeated per invocation) for stdin injection.
+//  2. password is set → rewrite to `sudo -S -p ”`, return the password
+//     (repeated per invocation) for stdin injection.
 //  3. Otherwise → rewrite to `sudo -n` so sudo can't block waiting for
 //     input: it succeeds via a NOPASSWD rule or a still-valid timestamp
 //     cache, and fails immediately otherwise (SudoHint explains how to
 //     enable passwordless sudo).
-func transformSudoCommand(command string) sudoResult {
+func transformSudoCommand(command, password string) sudoResult {
 	if command == "" {
 		return sudoResult{command: command}
 	}
 
-	// SUDO_PASSWORD set — every sudo invocation goes through.
-	if pwd := os.Getenv("SUDO_PASSWORD"); pwd != "" {
+	// Password available — every sudo invocation goes through.
+	if password != "" {
 		transformed, sudoCount := rewriteSudoInvocations(command, sudoStdinRewrite)
 		if sudoCount == 0 {
 			return sudoResult{command: command}
 		}
 		return sudoResult{
 			command:       transformed,
-			passwordLines: strings.Repeat(pwd+"\n", sudoCount),
+			passwordLines: strings.Repeat(password+"\n", sudoCount),
 		}
 	}
 
-	// No SUDO_PASSWORD — lower bound: never hang. `sudo -n` fails fast
+	// No password — lower bound: never hang. `sudo -n` fails fast
 	// instead of blocking on a non-tty stdin, while still succeeding via
 	// a NOPASSWD rule or a still-valid timestamp cache. We must not probe
 	// with `sudo -k` here: it would clear a user's still-valid cache.
