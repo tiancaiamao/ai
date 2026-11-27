@@ -36,14 +36,26 @@ var maxBashTimeout = 4 * time.Hour
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
 	workspace   *Workspace
+	env         *EnvInjector
 	timeout     time.Duration
 	execTimeout time.Duration
 }
 
-// NewBashTool creates a new Bash tool with dynamic workspace support.
+// NewBashTool creates a new Bash tool with dynamic workspace support and an
+// empty environment injection table.
 func NewBashTool(ws *Workspace) *BashTool {
+	return NewBashToolWithEnv(ws, NewEnvInjector())
+}
+
+// NewBashToolWithEnv creates a Bash tool that passes env's effective view to
+// every child shell. The agent process environment itself is not changed.
+func NewBashToolWithEnv(ws *Workspace, env *EnvInjector) *BashTool {
+	if env == nil {
+		env = NewEnvInjector()
+	}
 	return &BashTool{
 		workspace:   ws,
+		env:         env,
 		timeout:     120 * time.Second, // Default 120s for overall timeout
 		execTimeout: 120 * time.Second, // Default 120s for individual commands (LLM can override)
 	}
@@ -199,10 +211,11 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	// Transform sudo commands: rewrite to sudo -S -p '' with the password
-	// piped when SUDO_PASSWORD is set, or to sudo -n (non-interactive,
-	// never blocks) otherwise. Must happen after all safety guards (which
-	// check the original command) and before exec.CommandContext below.
-	sudoResult := transformSudoCommand(command)
+	// piped when the effective SUDO_PASSWORD is set, or to sudo -n
+	// (non-interactive, never blocks) otherwise. Must happen after all safety
+	// guards (which check the original command) and before exec below.
+	sudoPassword, _ := t.env.Lookup("SUDO_PASSWORD")
+	sudoResult := transformSudoCommand(command, sudoPassword)
 	execCommand := sudoResult.command
 
 	// Get current working directory from workspace
@@ -252,6 +265,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Create command — use the sudo-transformed version if applicable.
 	cmd := exec.CommandContext(cmdCtx, "/bin/sh", "-c", execCommand)
+	cmd.Env = t.env.Environ()
 	cmd.Dir = cwd
 
 	// Set process group to enable cleanup of entire process tree

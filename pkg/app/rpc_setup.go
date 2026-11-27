@@ -178,7 +178,7 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 	}
 
 	// --- Workspace & Tools ---
-	ws, registry, err := createWorkspaceAndRegistry(cwd, cfg)
+	ws, registry, envInjector, err := createWorkspaceAndRegistry(cwd, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +239,7 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 		sessionName:          sessionName,
 		ws:                   ws,
 		registry:             registry,
+		envInjector:          envInjector,
 		commands:             command.New(),
 		emitEvent:            func(event agent.AgentEvent) {},
 
@@ -376,25 +377,26 @@ func loadOrCreateSession(sessionPath string, cwd string) (*session.Session, stri
 }
 
 // createWorkspaceAndRegistry creates the workspace and tool registry.
-func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspace, *tools.Registry, error) {
+func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspace, *tools.Registry, *tools.EnvInjector, error) {
 	ws, err := tools.NewWorkspace(cwd)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create workspace: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create workspace: %w", err)
 	}
 
 	registry := tools.NewRegistry()
 	readTool := tools.NewReadTool(ws)
 	editTool := tools.NewEditTool(ws)
+	envInjector := tools.NewEnvInjector()
 
 	registry.Register(readTool)
-	registry.Register(tools.NewBashTool(ws))
+	registry.Register(tools.NewBashToolWithEnv(ws, envInjector))
 	registry.Register(tools.NewWriteTool(ws))
 	registry.Register(tools.NewGrepTool(ws))
 	registry.Register(editTool)
 	registry.Register(tools.NewMultiEditTool(ws))
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
-	return ws, registry, nil
+	return ws, registry, envInjector, nil
 }
 
 // createCompactor creates the main compactor.

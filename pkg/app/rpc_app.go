@@ -60,6 +60,8 @@ type App struct {
 	// --- Workspace & Tools ---
 	ws       *tools.Workspace
 	registry *tools.Registry
+	// envInjector is the operator-managed view passed to bash children only.
+	envInjector *tools.EnvInjector
 
 	// --- Compaction ---
 	compactor       *compact.Compactor
@@ -444,6 +446,7 @@ func (app *App) registerHandlers(
 	app.registerMessageHandlers()
 	app.registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
 	app.registerHelpHandlers()
+	app.registerEnvHandlers()
 }
 
 // Commands returns the registered slash commands.
