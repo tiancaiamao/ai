@@ -58,7 +58,16 @@ func (app *App) handleEnv(args string) (any, error) {
 		return value, nil
 
 	case "list":
-		return strings.Join(app.envInjector.Environ(), "\n"), nil
+		entries := app.envInjector.ManagedEntries()
+		lines := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if entry.Deleted {
+				lines = append(lines, entry.Name+"=<unset>")
+			} else {
+				lines = append(lines, entry.Name+"="+entry.Value)
+			}
+		}
+		return strings.Join(lines, "\n"), nil
 
 	case "unset":
 		name := strings.TrimSpace(rest)

@@ -57,6 +57,30 @@ func (e *EnvInjector) Lookup(name string) (string, bool) {
 	return os.LookupEnv(name)
 }
 
+// ManagedEntry is a variable the operator explicitly changed through /env.
+type ManagedEntry struct {
+	Name    string
+	Value   string
+	Deleted bool
+}
+
+// ManagedEntries returns only the variables the operator has set or unset,
+// sorted by name. Variables merely inherited from the agent process are not
+// included, so this is the view /env list reports.
+func (e *EnvInjector) ManagedEntries() []ManagedEntry {
+	e.mu.RLock()
+	entries := make([]ManagedEntry, 0, len(e.set)+len(e.deleted))
+	for name, value := range e.set {
+		entries = append(entries, ManagedEntry{Name: name, Value: value})
+	}
+	for name := range e.deleted {
+		entries = append(entries, ManagedEntry{Name: name, Deleted: true})
+	}
+	e.mu.RUnlock()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries
+}
+
 // Environ builds the effective child environment: the agent process
 // environment with injected overrides applied and removed names filtered out.
 func (e *EnvInjector) Environ() []string {

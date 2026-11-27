@@ -61,6 +61,39 @@ func TestEnvInjectorSetClearsDeletion(t *testing.T) {
 	}
 }
 
+func TestEnvInjectorManagedEntriesExcludesInherited(t *testing.T) {
+	const (
+		inherited = "AI_TEST_INJECTOR_NOT_MANAGED"
+		setName   = "AI_TEST_INJECTOR_MANAGED_SET"
+		unsetName = "AI_TEST_INJECTOR_MANAGED_UNSET"
+	)
+	t.Cleanup(func() {
+		_ = os.Unsetenv(inherited)
+		_ = os.Unsetenv(unsetName)
+	})
+	if err := os.Setenv(inherited, "process-value"); err != nil {
+		t.Fatalf("set inherited env: %v", err)
+	}
+	if err := os.Setenv(unsetName, "hidden-value"); err != nil {
+		t.Fatalf("set env to hide: %v", err)
+	}
+
+	inj := NewEnvInjector()
+	inj.Set(setName, "operator-value")
+	inj.Unset(unsetName)
+
+	entries := inj.ManagedEntries()
+	if len(entries) != 2 {
+		t.Fatalf("ManagedEntries = %v, want 2 entries", entries)
+	}
+	if entries[0].Name != setName || entries[0].Value != "operator-value" || entries[0].Deleted {
+		t.Errorf("first entry = %+v, want set %s", entries[0], setName)
+	}
+	if entries[1].Name != unsetName || !entries[1].Deleted {
+		t.Errorf("second entry = %+v, want deleted %s", entries[1], unsetName)
+	}
+}
+
 func TestBashToolUsesInjectedEnvironment(t *testing.T) {
 	const name = "AI_TEST_BASH_INJECTED"
 	t.Cleanup(func() { _ = os.Unsetenv(name) })

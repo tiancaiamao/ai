@@ -68,7 +68,7 @@ and do not copy the special handling used by commands that echo their own comman
 |---|---|
 | `/env set NAME value` | Set `NAME` to `value` in the environment of future bash children. `value` may contain spaces. |
 | `/env get NAME` | Return the plaintext value bash will see to the human client. |
-| `/env list` | List the effective bash-child environment as `NAME=value` lines, plaintext, to the human client. |
+| `/env list` | List only the variables the operator has set or unset, as `NAME=value` lines (or `NAME=<unset>`), plaintext, to the human client. |
 | `/env unset NAME` | Hide `NAME` from future bash children, even if the agent process was started with it. |
 
 Notes:
@@ -78,9 +78,11 @@ Notes:
 - `get` always returns visible text: a missing variable reports that it is not set, and an
   empty value is reported explicitly, so a typo or a cleared variable never looks like a
   command that silently did nothing.
-- `list` covers the effective bash-child view: variables inherited at process startup plus
-  operator overrides and deletions. A password supplied at startup (for example
-  `SUDO_PASSWORD`) is visible there too, because bash would see it.
+- `list` covers only what the operator has changed through `/env`, not the process environment:
+  `NAME=value` for a set variable and `NAME=<unset>` for a hidden one. A password merely inherited
+  at process startup is not listed, because the operator did not introduce it through this
+  command. This keeps the output to a short, operator-owned view instead of dumping every
+  variable bash will see.
 - `unset` is a deletion in that view, not an `unset` in the agent process. The parent shell that
   launched the agent is unaffected, and so is every non-bash child of the agent.
 - Names must be valid environment-variable names. A value containing spaces must survive
@@ -96,8 +98,8 @@ spellings; only the canonical name is recognized.
   deletions layered on top of the environment the agent was started with.
 - For each bash call, the tool builds a child environment from that view and passes it to the
   shell. `$NAME` therefore expands at execution time in the shell.
-- The agent process's own `os.Getenv`-style environment is unchanged. `get` and `list` report
-  what bash will see, not what the agent process holds.
+- The agent process's own `os.Getenv`-style environment is unchanged. `get` reports what bash will
+  see for a name; `list` reports only the operator-managed entries, not the full inherited set.
 - Expansion is the shell's job. The tool must not parse `$NAME` or substitute placeholders in
   Go: shell syntax is arbitrary and any Go-side parser would be both incomplete and unnecessary.
 - `SUDO_PASSWORD` is read from the effective view on each sudo invocation, so a runtime set or
@@ -122,7 +124,7 @@ to fetch a build log.
 /env list
 ```
 
-`/env list` shows, among the variables visible to bash:
+`/env list` shows only the variables the operator introduced:
 
 ```text
 JENKINS_USER=aaa
@@ -238,8 +240,9 @@ has a small blast radius. No new agent-side machinery is needed for that.
 
 1. A runtime set is immediately visible to later bash calls via `$NAME`, including values with
    spaces, while the agent process environment still has no such variable.
-2. `get` and `list` show the effective bash-child environment in plaintext in the human client
-   only; the conversation history contains neither the slash command nor its output.
+2. `get` reports what bash will see for a name and `list` shows only operator-introduced entries,
+   in plaintext in the human client only; the conversation history contains neither the slash
+   command nor its output. Inherited process variables never appear in `list`.
 3. `unset` hides the variable from later bash calls, even when it was present in the agent
    process environment at startup; the process environment itself is unchanged.
 4. Setting `SUDO_PASSWORD` at runtime makes the next sudo command use the password path.
@@ -248,8 +251,9 @@ has a small blast radius. No new agent-side machinery is needed for that.
 
 ## 11. Resolved decisions
 
-- **`list` output:** includes plaintext values, since the operator explicitly wants to read
-  what is set.
+- **`list` output:** includes plaintext values for operator-set variables, since the operator
+  explicitly wants to read what is set. It excludes inherited process variables; unset entries
+  appear as `NAME=<unset>` so the operator can see the whole view they own.
 - **Scope:** the bash-child environment only. The agent process environment is never written
   to.
 - **Persistence:** none; values disappear when the agent process exits.
