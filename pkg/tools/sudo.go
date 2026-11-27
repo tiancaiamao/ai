@@ -310,5 +310,5 @@ func SudoHint(output string) string {
 	if !hasSudoFailure(output) {
 		return ""
 	}
-	return "\n\n💡 Tip: To enable sudo without interactive prompts, add SUDO_PASSWORD to your .env file or export it in your shell profile."
+	return "\n\n💡 Tip: Ask the human operator to run `/env set SUDO_PASSWORD <password>` in the client, or use a narrowly scoped NOPASSWD sudoers rule. Do not put the password in a prompt or a plaintext file."
 }

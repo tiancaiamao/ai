@@ -209,8 +209,12 @@ func TestSudoHint(t *testing.T) {
 	}
 	for _, tc := range tests {
 		hint := SudoHint(tc.output)
-		if tc.hasTip && hint == "" {
-			t.Errorf("SudoHint(%q) should return a hint", tc.output)
+		if tc.hasTip {
+			if hint == "" {
+				t.Errorf("SudoHint(%q) should return a hint", tc.output)
+			} else if !strings.Contains(hint, "/env set SUDO_PASSWORD") || strings.Contains(hint, ".env file") {
+				t.Errorf("SudoHint(%q) should point to /env, got %q", tc.output, hint)
+			}
 		}
 		if !tc.hasTip && hint != "" {
 			t.Errorf("SudoHint(%q) should not return a hint, got %q", tc.output, hint)
