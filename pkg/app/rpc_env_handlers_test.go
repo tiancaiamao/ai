@@ -94,6 +94,47 @@ func TestHandleEnvSetGetListUnset(t *testing.T) {
 	}
 }
 
+func TestHandleEnvListOnlyShowsOperatorEntries(t *testing.T) {
+	const (
+		inherited = "AI_TEST_ENV_INHERITED_FOR_LIST"
+		setName   = "AI_TEST_ENV_SET_FOR_LIST"
+		unsetName = "AI_TEST_ENV_UNSET_FOR_LIST"
+	)
+	cleanupTestEnv(t, inherited, setName, unsetName)
+	if err := os.Setenv(inherited, "process-secret"); err != nil {
+		t.Fatalf("set inherited env: %v", err)
+	}
+	if err := os.Setenv(unsetName, "hidden-secret"); err != nil {
+		t.Fatalf("set env to hide: %v", err)
+	}
+
+	app := testAppWithEnv()
+	if _, err := app.handleEnv("set " + setName + " operator-value"); err != nil {
+		t.Fatalf("set failed: %v", err)
+	}
+	if _, err := app.handleEnv("unset " + unsetName); err != nil {
+		t.Fatalf("unset failed: %v", err)
+	}
+
+	listed, err := app.handleEnv("list")
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	listText := fmt.Sprint(listed)
+	if strings.Contains(listText, "process-secret") || strings.Contains(listText, inherited+"=") {
+		t.Errorf("list leaked an inherited variable: %q", listText)
+	}
+	if !strings.Contains(listText, setName+"=operator-value") {
+		t.Errorf("list missing operator value: %q", listText)
+	}
+	if !strings.Contains(listText, unsetName+"=<unset>") {
+		t.Errorf("list missing unset marker: %q", listText)
+	}
+	if strings.Contains(listText, "hidden-secret") {
+		t.Errorf("list leaked the value of an unset variable: %q", listText)
+	}
+}
+
 func TestHandleEnvUnsetHidesProcessEnvForBashOnly(t *testing.T) {
 	const name = "AI_TEST_ENV_FROM_PROCESS"
 	cleanupTestEnv(t, name)

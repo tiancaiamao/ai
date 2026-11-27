@@ -10,8 +10,10 @@ Not a git log mirror — focus on what changed at the design level, not just wha
 shell; the agent process environment is never modified. The command is dispatched outside the
 agent turn, so its text and output go only to the human client and are never appended to the
 conversation. Shell children receive the effective view and expand `$NAME` themselves; no custom
-parsing was added to the bash tool. `SUDO_PASSWORD` can now be supplied or revoked mid-session.
-The design rationale is recorded in `docs/design-env-slash-command.md`.
+parsing was added to the bash tool. `/env list` reports only operator-introduced entries — set
+values and `NAME=<unset>` markers — rather than the whole inherited process environment.
+`SUDO_PASSWORD` can now be supplied or revoked mid-session. The design rationale is recorded in
+`docs/design-env-slash-command.md`.
 
 **Why**: Credentials such as a Jenkins password or a sudo password could previously only be
 provided before the agent started, or placed in a file or prompt that the agent might read —
