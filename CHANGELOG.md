@@ -3,6 +3,26 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Runtime secret injection via `/env` (2026-11)
+
+**What changed**: Added an operator-only `/env` slash command with `set`, `get`, `list`, and
+`unset`. It mutates the agent process environment at runtime and is dispatched outside the
+agent turn, so the command text and its output go only to the human client and are never
+appended to the conversation. Shell children inherit the environment and expand `$NAME`
+themselves; no custom parsing was added to the bash tool. `SUDO_PASSWORD` can now be supplied
+or revoked mid-session. The design rationale is recorded in
+`docs/design-env-slash-command.md`.
+
+**Why**: Credentials such as a Jenkins password or a sudo password could previously only be
+provided before the agent started, or placed in a file or prompt that the agent might read —
+both routes can carry the plaintext value into model context. Keeping the value in process
+memory and giving the model only a name follows the standard "decide/do" separation: the model
+decides to use `$JENKINS_PASSWORD`, deterministic code performs the expansion. The accepted
+residual risk is that a compromised agent can still expand a secret into command output; for
+local use the practical mitigation is a short-lived token and a narrowly scoped passwordless
+sudo rule, not more agent-side machinery.
+
+
 ## Idle compaction ahead of prompt-cache expiry (2026-11)
 
 **What changed**: `pkg/app` now arms a per-session timer when a turn ends

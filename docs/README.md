@@ -25,6 +25,15 @@ These documents describe the **current** codebase and must stay in sync.
 | [`planner-system-prompt.md`](planner-system-prompt.md) | System prompt for evolve planner agent | Evolve planner prompt changed |
 | [`../pkg/*/README.md`](../pkg/) | Package-level API, types, key files | Package API changed; files added/removed/renamed |
 
+## Design Notes
+
+Behavior and rationale kept separate from implementation details so the design does not go
+stale when code moves.
+
+| Document | Topic |
+|----------|-------|
+| [`design-env-slash-command.md`](design-env-slash-command.md) | Operator-only `/env` slash command for runtime secret injection |
+
 ## ADRs
 
 Architecture Decision Records — immutable historical decisions.

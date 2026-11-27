@@ -444,6 +444,7 @@ func (app *App) registerHandlers(
 	app.registerMessageHandlers()
 	app.registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
 	app.registerHelpHandlers()
+	app.registerEnvHandlers()
 }
 
 // Commands returns the registered slash commands.
