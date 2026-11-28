@@ -191,6 +191,9 @@ func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
 	if spec.SupportsVision {
 		model.SupportsVision = true
 	}
+	if spec.SupportsVideo {
+		model.SupportsVideo = true
+	}
 	return model
 }
 

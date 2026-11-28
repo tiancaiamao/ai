@@ -20,13 +20,14 @@ type Model struct {
     MaxTokens     int          `json:"maxTokens,omitempty"`
             Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
     SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
+    SupportsVideo  bool        `json:"-"`                        // Model supports video input (from models.json "input")
     ReasoningEfforts []string  `json:"-"`                        // Supported reasoning_effort values (from models.json "reasoningEfforts")
     ReasoningContext string    `json:"-"`                        // reasoning.context value required by the gateway (from models.json "reasoningContext")
     RequireReasoning bool      `json:"-"`                        // every assistant message must carry "reasoning_content", even empty (from models.json "requireReasoning")
 }
 ```
 
-`SupportsVision` is a runtime-derived field, not part of the JSON model config. It comes from `ModelSpec.SupportsVision`, which is `true` when the model's `input` types in `models.json` include `"image"` or `"vision"` (mirroring the "vision" check on `Model.input`).
+`SupportsVision` and `SupportsVideo` are runtime-derived fields, not part of the JSON model config. They come from `ModelSpec`, and are `true` when the model's `input` types in `models.json` include `"image"`/`"vision"` or `"video"` respectively.
 
 `ReasoningContext` is a gateway capability declared per-model in `models.json`
 (`"reasoningContext": "all_turns"`). When set, it is sent as `reasoning.context`
@@ -73,11 +74,14 @@ Custom `MarshalJSON`: serializes `Content` or `ContentParts` as `content`, and `
 
 ```go
 type ContentPart struct {
-    Type     string `json:"type"` // "text" or "image_url"
+    Type     string `json:"type"` // "text", "image_url", or "video_url"
     Text     string `json:"text,omitempty"`
     ImageURL *struct {
         URL string `json:"url"`
     } `json:"image_url,omitempty"`
+    VideoURL *struct {
+        URL string `json:"url"`
+    } `json:"video_url,omitempty"`
 }
 ```
 
@@ -188,20 +192,20 @@ Accumulates streaming deltas into a complete `LLMMessage`. Handles:
 
 ## Capability Filtering
 
-`filter.go` filters message content the active model doesn't support. The only
-case today is stripping `image_url` parts when the model doesn't support vision
-(e.g. resuming a vision session with a text-only model):
+`filter.go` filters message content the active model doesn't support:
+`image_url` parts for models without vision, and `video_url` parts for models
+without video (e.g. resuming a multimodal session with a text-only model):
 
 ```go
-func FilterUnsupportedContent(messages []LLMMessage, supportsVision bool) ([]LLMMessage, int)
+func FilterUnsupportedContent(messages []LLMMessage, supportsVision, supportsVideo bool) ([]LLMMessage, int)
 ```
 
 `FilterUnsupportedContent` returns the filtered messages and the number of
 removed content parts:
-- Text-only models: all `image_url` content parts are removed
+- Text-only models: all `image_url` and `video_url` content parts are removed
 - Unknown content part types are preserved (forward compatible)
 - A message is dropped only when no text and no content parts remain
-- If `supportsVision` is true, messages are returned unchanged
+- If both capability flags are true, messages are returned unchanged
 
 This filtering is applied in `pkg/agent/llm_stream.go` before calling `StreamLLM`.
 
@@ -244,7 +248,7 @@ func RetryAfter(err error) time.Duration
 | `errors.go` | `APIError`, `ContextLengthExceededError`, `RateLimitError`, error classification |
 | `eventstream.go` | `EventStream` — generic push-based async event stream |
 | `thinking.go` | `buildThinkingParams` — reasoning/thinking parameter injection |
-| `filter.go` | `FilterUnsupportedContent()` — strips unsupported content (image_url for text-only models) |
+| `filter.go` | `FilterUnsupportedContent()` — strips unsupported content (image_url / video_url) |
 
 ## Dependencies
 

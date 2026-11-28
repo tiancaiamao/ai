@@ -89,7 +89,7 @@ func TestFilterUnsupportedContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, removed := FilterUnsupportedContent(tt.messages, tt.supportsVision)
+			got, removed := FilterUnsupportedContent(tt.messages, tt.supportsVision, true)
 
 			if removed != tt.wantRemoved {
 				t.Errorf("removed = %d, want %d", removed, tt.wantRemoved)
@@ -111,6 +111,52 @@ func TestFilterUnsupportedContent(t *testing.T) {
 			}
 			if other != tt.wantOther {
 				t.Errorf("other parts = %d, want %d", other, tt.wantOther)
+			}
+		})
+	}
+}
+
+func videoPart(url string) ContentPart {
+	return ContentPart{Type: "video_url", VideoURL: &struct {
+		URL string `json:"url"`
+	}{URL: url}}
+}
+
+func TestFilterUnsupportedContentVideo(t *testing.T) {
+	messages := []LLMMessage{{
+		Role: "user",
+		ContentParts: []ContentPart{
+			{Type: "text", Text: "Describe this"},
+			videoPart("data:video/mp4;base64,abc"),
+		},
+	}}
+
+	tests := []struct {
+		name          string
+		supportsVideo bool
+		wantVideos    int
+		wantRemoved   int
+	}{
+		{name: "video model keeps video", supportsVideo: true, wantVideos: 1},
+		{name: "text-only model strips video", supportsVideo: false, wantVideos: 0, wantRemoved: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, removed := FilterUnsupportedContent(messages, true, tt.supportsVideo)
+			if removed != tt.wantRemoved {
+				t.Errorf("removed = %d, want %d", removed, tt.wantRemoved)
+			}
+			videos := 0
+			for _, msg := range got {
+				for _, part := range msg.ContentParts {
+					if part.Type == "video_url" {
+						videos++
+					}
+				}
+			}
+			if videos != tt.wantVideos {
+				t.Errorf("videos = %d, want %d", videos, tt.wantVideos)
 			}
 		})
 	}

@@ -3,6 +3,24 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Native video understanding (2026-11)
+
+**What changed**: The agent can now attach local video files to model requests as `video_url`
+content parts. `read` recognizes video files (by sniffed MIME or extension), returns a
+`VideoContent` base64 block, and `pkg/context` converts it into the OpenAI-compatible
+`{"type":"video_url","video_url":{"url":"data:video/mp4;base64,..."}}` shape, reusing the
+existing tool-result-to-user-message injection path used for images. Model capability is
+derived from `models.json` `input` containing `"video"`; `FilterUnsupportedContent` strips
+video parts for models without that capability, and ACP events replace video base64 with a
+size placeholder just like image data.
+
+**Why**: Video-capable models (e.g. MiMo V2.6 Flash) were already listed in `models.json`,
+but the agent had no content part, no file read path, and no capability gate for video, so
+the declaration had no effect. Keeping video structurally identical to the existing image
+path avoids a second multimodal pipeline and preserves tool-result ordering and prefix-cache
+behavior. Video payloads are capped at 32MB raw (≈43MB base64) to stay under provider limits.
+
+
 ## Runtime secret injection via `/env` (2026-11)
 
 **What changed**: Added an operator-only `/env` slash command with `set`, `get`, `list`, and

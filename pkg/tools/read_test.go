@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -586,5 +587,68 @@ func TestReadTool_LongLineTailHintRecoversMultibyteTail(t *testing.T) {
 	}
 	if !bytes.Equal(out, []byte(content)[n-1:]) {
 		t.Errorf("hint command output %d bytes, want %d (file bytes from offset %d)", len(out), len(content)-n+1, n)
+	}
+}
+
+func TestReadTool_VideoFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "clip.mp4")
+	// Minimal MP4 signature so http.DetectContentType reports video/mp4.
+	data := append([]byte{0, 0, 0, 0x18, 'f', 't', 'y', 'p'}, make([]byte, 16)...)
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+	result, err := tool.Execute(context.Background(), map[string]any{"path": filePath})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(result))
+	}
+	if text, ok := result[0].(agentctx.TextContent); !ok || !strings.Contains(text.Text, "video/mp4") {
+		t.Fatalf("first block = %+v, want video/mp4 text", result[0])
+	}
+	vc, ok := result[1].(agentctx.VideoContent)
+	if !ok {
+		t.Fatalf("second block = %T, want VideoContent", result[1])
+	}
+	if vc.MimeType != "video/mp4" || vc.Type != "video" {
+		t.Errorf("video content = %+v", vc)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(vc.Data)
+	if err != nil {
+		t.Fatalf("invalid base64: %v", err)
+	}
+	if !bytes.Equal(decoded, data) {
+		t.Error("decoded video data differs from original")
+	}
+}
+
+func TestReadTool_VideoByExtension(t *testing.T) {
+	dir := t.TempDir()
+	// MKV is not recognized by http.DetectContentType, so the extension
+	// mapping is what makes this a video attachment.
+	filePath := filepath.Join(dir, "clip.mkv")
+	data := []byte("not a recognizable media header")
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+	result, err := tool.Execute(context.Background(), map[string]any{"path": filePath})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	vc, ok := result[1].(agentctx.VideoContent)
+	if !ok {
+		t.Fatalf("second block = %T, want VideoContent", result[1])
+	}
+	if vc.MimeType != "video/x-matroska" {
+		t.Errorf("MimeType = %q, want video/x-matroska", vc.MimeType)
 	}
 }

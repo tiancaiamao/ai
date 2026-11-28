@@ -77,6 +77,7 @@ type ModelSpec struct {
     ContextWindow    int
     MaxTokens        int
     SupportsVision   bool // true when Input includes image/vision
+    SupportsVideo    bool // true when Input includes video
 }
 ```
 

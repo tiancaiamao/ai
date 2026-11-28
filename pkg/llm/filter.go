@@ -1,13 +1,14 @@
 package llm
 
 // FilterUnsupportedContent removes content parts the model doesn't support.
-// Currently only image_url parts are removed when the model doesn't support
-// vision — the case where a session created with a vision-capable model is
-// resumed with a text-only model would otherwise cause API errors.
+// Image parts are removed when the model doesn't support vision, and video
+// parts are removed when the model doesn't support video — the case where a
+// session created with a multimodal model is resumed with a text-only model
+// would otherwise cause API errors.
 //
 // It returns the filtered messages and the number of content parts removed.
-func FilterUnsupportedContent(messages []LLMMessage, supportsVision bool) ([]LLMMessage, int) {
-	if supportsVision {
+func FilterUnsupportedContent(messages []LLMMessage, supportsVision, supportsVideo bool) ([]LLMMessage, int) {
+	if supportsVision && supportsVideo {
 		return messages, 0
 	}
 
@@ -23,13 +24,17 @@ func FilterUnsupportedContent(messages []LLMMessage, supportsVision bool) ([]LLM
 		for _, part := range msg.ContentParts {
 			switch part.Type {
 			case "image_url":
-				removed++
-			case "text":
-				parts = append(parts, part)
-			default:
-				// Keep unknown parts (don't break on new content types)
-				parts = append(parts, part)
+				if !supportsVision {
+					removed++
+					continue
+				}
+			case "video_url":
+				if !supportsVideo {
+					removed++
+					continue
+				}
 			}
+			parts = append(parts, part)
 		}
 
 		msg.ContentParts = parts

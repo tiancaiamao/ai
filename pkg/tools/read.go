@@ -25,7 +25,23 @@ const (
 	// defaultReadLimit is the default maximum number of lines to return.
 	// Can be overridden via AI_READ_MAX_LINES environment variable.
 	defaultReadLimit = 4000
+	// maxVideoBytes caps raw video input. The provider-side base64 limit is
+	// around 50MB, which this stays safely below after encoding.
+	maxVideoBytes = 32 * 1024 * 1024
 )
+
+// videoMimeByExtension covers formats that http.DetectContentType does not
+// recognize (e.g. AVI, WMV, MKV) but that multimodal providers accept.
+var videoMimeByExtension = map[string]string{
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".mov":  "video/quicktime",
+	".webm": "video/webm",
+	".avi":  "video/x-msvideo",
+	".mkv":  "video/x-matroska",
+	".wmv":  "video/x-ms-wmv",
+	".3gp":  "video/3gpp",
+}
 
 // getReadMaxBytes returns the effective max bytes for read operations.
 // Checks AI_READ_MAX_BYTES env var first, then falls back to default.
@@ -72,7 +88,7 @@ func (t *ReadTool) Name() string {
 
 // Description returns the tool description.
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. Supports text files and image files. Use offset and limit to read specific line ranges from text files. For large or unfamiliar text files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially. For image files, the image content is returned directly and can be seen by multimodal models."
+	return "Read the contents of a file. Supports text files, image files, and video files. Use offset and limit to read specific line ranges from text files. For large or unfamiliar text files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially. For image and video files, the content is returned directly and can be seen by multimodal models."
 }
 
 // Parameters returns the JSON Schema for the tool parameters.
@@ -143,6 +159,32 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 				Type:     "image",
 				Data:     encoded,
 				MimeType: contentType,
+			},
+		}, nil
+	}
+
+	// Video files are returned as base64 content for multimodal models.
+	// DetectContentType handles MP4/WebM; extensions cover the rest.
+	videoMime := ""
+	if strings.HasPrefix(contentType, "video/") {
+		videoMime = contentType
+	} else if extMime, ok := videoMimeByExtension[strings.ToLower(filepath.Ext(path))]; ok {
+		videoMime = extMime
+	}
+	if videoMime != "" {
+		if len(data) > maxVideoBytes {
+			return nil, fmt.Errorf("video file %s is too large (%d bytes, max %d)", path, len(data), maxVideoBytes)
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Read video file [%s]", videoMime),
+			},
+			agentctx.VideoContent{
+				Type:     "video",
+				Data:     encoded,
+				MimeType: videoMime,
 			},
 		}, nil
 	}
