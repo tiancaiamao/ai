@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -477,6 +478,14 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 							"image_url": part.ImageURL.URL,
 						})
 					}
+				case "video_url":
+					// The Responses API has no video input type. Make the drop
+					// visible to both the model and the operator.
+					slog.Warn("[LLM] Responses API does not support video input; dropping video_url part")
+					content = append(content, map[string]any{
+						"type": "input_text",
+						"text": "[video omitted: video input is not supported by this API]",
+					})
 				}
 			}
 			input = append(input, map[string]any{

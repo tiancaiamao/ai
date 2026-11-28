@@ -111,6 +111,7 @@ func (app *App) handleModelSet(args string) (any, error) {
 		ReasoningContext: spec.ReasoningContext,
 		RequireReasoning: spec.RequireReasoning,
 		SupportsVision:   spec.SupportsVision,
+		SupportsVideo:    spec.SupportsVideo,
 	}
 	app.apiKey = newAPIKey
 

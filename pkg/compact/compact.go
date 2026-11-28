@@ -408,6 +408,9 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 		case agentctx.ImageContent:
 			// Roughly estimate images as 1200 tokens (4800 chars).
 			charCount += 4800
+		case agentctx.VideoContent:
+			// Same fixed cost as images; media token usage is provider-specific.
+			charCount += 4800
 		}
 	}
 	if charCount == 0 {
@@ -758,13 +761,14 @@ func buildCacheFriendlyLLMContext(
 	trailingInstruction string,
 	thinkingLevel string,
 	supportsVision bool,
+	supportsVideo bool,
 	sessionID string,
 ) llm.LLMContext {
 	llmMessages := agentctx.ConvertMessagesToLLM(messages)
 	// Same capability filtering as the agent loop: a session created with a
 	// vision-capable model can be resumed with a text-only model, in which
 	// case image_url parts must be stripped or the LLM call will error.
-	llmMessages, _ = llm.FilterUnsupportedContent(llmMessages, supportsVision)
+	llmMessages, _ = llm.FilterUnsupportedContent(llmMessages, supportsVision, supportsVideo)
 
 	if strings.TrimSpace(contextPrefix) != "" {
 		llmMessages = append([]llm.LLMMessage{{
@@ -858,6 +862,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		askContent,
 		c.thinkingLevel,
 		c.model.SupportsVision,
+		c.model.SupportsVideo,
 		c.sessionID,
 	)
 

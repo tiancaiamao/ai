@@ -152,6 +152,22 @@ func TestEstimateMessageTokens(t *testing.T) {
 		}
 	})
 
+	t.Run("video content fixed cost", func(t *testing.T) {
+		msg := AgentMessage{
+			Role: "user",
+			Content: []ContentBlock{
+				VideoContent{Type: "video", Data: "x", MimeType: "video/mp4"},
+			},
+		}
+		// 4800 chars => 1200 tokens, same as images
+		if got := EstimateMessageTokens(msg); got != 1200 {
+			t.Fatalf("expected 1200 tokens for video, got %d", got)
+		}
+		if got := estimateMessageChars(msg); got != 4800 {
+			t.Fatalf("estimateMessageChars = %d, want 4800", got)
+		}
+	})
+
 	t.Run("empty content falls back to ExtractText", func(t *testing.T) {
 		// No content blocks at all — ExtractText returns "".
 		msg := AgentMessage{Role: "user", Content: nil}

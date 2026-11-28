@@ -30,6 +30,15 @@ type ImageContent struct {
 
 func (i ImageContent) IsContentBlock() {}
 
+// VideoContent represents video content (base64 encoded).
+type VideoContent struct {
+	Type     string `json:"type"`
+	Data     string `json:"data"` // base64 encoded
+	MimeType string `json:"mimeType"`
+}
+
+func (v VideoContent) IsContentBlock() {}
+
 // ToolCallContent represents a tool call from the assistant.
 type ToolCallContent struct {
 	ID        string         `json:"id"`
@@ -320,6 +329,11 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 			var ic ImageContent
 			if err := json.Unmarshal(rawBlock, &ic); err == nil {
 				m.Content = append(m.Content, ic)
+			}
+		case "video":
+			var vc VideoContent
+			if err := json.Unmarshal(rawBlock, &vc); err == nil {
+				m.Content = append(m.Content, vc)
 			}
 		case "toolCall":
 			var tcc ToolCallContent

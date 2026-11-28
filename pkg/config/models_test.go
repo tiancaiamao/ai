@@ -391,3 +391,65 @@ func TestLoadModelSpecsSupportsVision(t *testing.T) {
 		t.Errorf("vision-model SupportsVision = false, want true")
 	}
 }
+
+func TestSupportsVideo(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []string
+		want  bool
+	}{
+		{name: "text only", input: []string{"text"}, want: false},
+		{name: "image only", input: []string{"text", "image"}, want: false},
+		{name: "video input", input: []string{"text", "image", "video"}, want: true},
+		{name: "case insensitive", input: []string{"TEXT", "VIDEO"}, want: true},
+		{name: "empty defaults to text", input: nil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := supportsVideo(tt.input); got != tt.want {
+				t.Errorf("supportsVideo(%v) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadModelSpecsSupportsVideo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "test": {
+      "models": [
+        { "id": "text-only", "name": "Text Only", "input": ["text"] },
+        { "id": "video-model", "name": "Video Model", "input": ["text", "image", "video"] }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs error: %v", err)
+	}
+
+	byID := make(map[string]ModelSpec)
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+
+	if spec, ok := byID["text-only"]; !ok {
+		t.Fatal("text-only model not found")
+	} else if spec.SupportsVideo {
+		t.Errorf("text-only model SupportsVideo = true, want false")
+	}
+
+	if spec, ok := byID["video-model"]; !ok {
+		t.Fatal("video-model not found")
+	} else if !spec.SupportsVideo || !spec.SupportsVision {
+		t.Errorf("video-model SupportsVideo=%v SupportsVision=%v, want true/true", spec.SupportsVideo, spec.SupportsVision)
+	}
+}

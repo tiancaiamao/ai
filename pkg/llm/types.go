@@ -18,6 +18,7 @@ type Model struct {
 	MaxTokens      int    `json:"maxTokens,omitempty"`
 	Reasoning      bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
 	SupportsVision bool   `json:"-"`                   // model supports image input (from models.json "input")
+	SupportsVideo  bool   `json:"-"`                   // model supports video input (from models.json "input")
 	// ReasoningEfforts lists the wire-level reasoning_effort values this model
 	// accepts (from models.json "reasoningEfforts"), e.g. low/high/max. Empty
 	// means no restriction; requested levels outside the list are clamped to
@@ -112,11 +113,14 @@ func (m LLMMessage) MarshalJSON() ([]byte, error) {
 
 // ContentPart represents a part of multimodal content.
 type ContentPart struct {
-	Type     string `json:"type"` // "text" or "image_url"
+	Type     string `json:"type"` // "text", "image_url", or "video_url"
 	Text     string `json:"text,omitempty"`
 	ImageURL *struct {
 		URL string `json:"url"`
 	} `json:"image_url,omitempty"`
+	VideoURL *struct {
+		URL string `json:"url"`
+	} `json:"video_url,omitempty"`
 }
 
 // ToolCall represents a tool call from the LLM.

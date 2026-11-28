@@ -63,7 +63,7 @@ type AgentMessage struct {
 
 ### ContentBlock
 
-Discriminated union (interface) with implementations: `TextContent` (type `"text"`), `ImageContent` (type `"image"`), `ToolCallContent` (type `"toolCall"`), `ThinkingContent` (type `"thinking"`).
+Discriminated union (interface) with implementations: `TextContent` (type `"text"`), `ImageContent` (type `"image"`), `VideoContent` (type `"video"`), `ToolCallContent` (type `"toolCall"`), `ThinkingContent` (type `"thinking"`).
 
 ### AgentState
 
@@ -127,7 +127,7 @@ Estimates use a simple heuristic (~4 characters per token). Used by the compacto
 | File | Description |
 |------|-------------|
 | `context.go` | `AgentContext`, `Tool` interface, message management, token estimation, tool whitelist |
-| `message.go` | `AgentMessage`, `ContentBlock`, `TextContent`, `ImageContent`, `ToolCallContent`, `ThinkingContent` |
+| `message.go` | `AgentMessage`, `ContentBlock`, `TextContent`, `ImageContent`, `VideoContent`, `ToolCallContent`, `ThinkingContent` |
 | `agent_state.go` | `AgentState` tracking metadata, `LLMRequestFingerprint` |
 | `compactor.go` | `Compactor` interface, `CompactionResult`, `ToolCallRecord` |
 | `conversion.go` | `ConvertMessagesToLLM`, `ConvertToolsToLLM` — agent-to-LLM type conversion |

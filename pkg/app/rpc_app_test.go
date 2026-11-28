@@ -12,7 +12,7 @@ func TestStripImageDataFromMessage(t *testing.T) {
 	bigData := strings.Repeat("A", 5000)
 
 	t.Run("nil message", func(t *testing.T) {
-		stripImageDataFromMessage(nil) // should not panic
+		stripMediaDataFromMessage(nil) // should not panic
 	})
 
 	t.Run("no images", func(t *testing.T) {
@@ -21,7 +21,7 @@ func TestStripImageDataFromMessage(t *testing.T) {
 				agentctx.TextContent{Text: "hello"},
 			},
 		}
-		stripImageDataFromMessage(msg)
+		stripMediaDataFromMessage(msg)
 		if tc, ok := msg.Content[0].(agentctx.TextContent); !ok || tc.Text != "hello" {
 			t.Errorf("non-image content should be unchanged")
 		}
@@ -35,7 +35,7 @@ func TestStripImageDataFromMessage(t *testing.T) {
 				agentctx.TextContent{Text: "after"},
 			},
 		}
-		stripImageDataFromMessage(msg)
+		stripMediaDataFromMessage(msg)
 		if len(msg.Content) != 3 {
 			t.Fatalf("expected 3 blocks, got %d", len(msg.Content))
 		}
@@ -64,7 +64,7 @@ func TestStripImageDataFromMessage(t *testing.T) {
 				agentctx.ImageContent{Type: "image", Data: "", MimeType: "image/png"},
 			},
 		}
-		stripImageDataFromMessage(msg)
+		stripMediaDataFromMessage(msg)
 		ic := msg.Content[0].(agentctx.ImageContent)
 		if ic.Data != "" {
 			t.Errorf("empty data should not be modified")
@@ -132,4 +132,25 @@ func TestStripImageDataFromEvent(t *testing.T) {
 			t.Errorf("message field image data should be stripped")
 		}
 	})
+}
+
+func TestStripVideoDataFromMessage(t *testing.T) {
+	bigData := strings.Repeat("V", 5000)
+	msg := &agentctx.AgentMessage{
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Text: "before"},
+			agentctx.VideoContent{Type: "video", Data: bigData, MimeType: "video/mp4"},
+		},
+	}
+	stripMediaDataFromMessage(msg)
+	vc, ok := msg.Content[1].(agentctx.VideoContent)
+	if !ok {
+		t.Fatalf("expected VideoContent at index 1, got %T", msg.Content[1])
+	}
+	if vc.Data == bigData || !strings.Contains(vc.Data, "5000 bytes") {
+		t.Errorf("video data should be replaced with size placeholder, got %q", vc.Data)
+	}
+	if vc.MimeType != "video/mp4" || vc.Type != "video" {
+		t.Errorf("video metadata should be preserved, got %+v", vc)
+	}
 }

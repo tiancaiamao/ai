@@ -28,6 +28,7 @@ type ModelSpec struct {
 	ContextWindow    int
 	MaxTokens        int
 	SupportsVision   bool // true when Input includes image/vision
+	SupportsVideo    bool // true when Input includes video
 }
 
 type modelsFile struct {
@@ -117,6 +118,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				ContextWindow:    model.ContextWindow,
 				MaxTokens:        model.MaxTokens,
 				SupportsVision:   supportsVision(model.Input),
+				SupportsVideo:    supportsVideo(model.Input),
 			})
 		}
 	}
@@ -160,6 +162,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// supportsVideo reports whether the model's input types include video.
+func supportsVideo(inputs []string) bool {
+	for _, input := range inputs {
+		if strings.EqualFold(strings.TrimSpace(input), "video") {
+			return true
+		}
+	}
+	return false
 }
 
 // supportsVision reports whether the model's input types include images.

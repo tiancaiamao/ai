@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -615,4 +616,42 @@ func TestBuildOpenAIResponsesRequest_ReasoningEffort(t *testing.T) {
 			t.Errorf("level %q: effort = %v, want %v", tc.level, reasoning["effort"], tc.want)
 		}
 	}
+}
+
+func TestBuildOpenAIResponsesRequestReportsUnsupportedVideo(t *testing.T) {
+	ctx := LLMContext{
+		Messages: []LLMMessage{{
+			Role:    "user",
+			Content: "describe this clip",
+			ContentParts: []ContentPart{{
+				Type: "video_url",
+				VideoURL: &struct {
+					URL string `json:"url"`
+				}{URL: "data:video/mp4;base64,AAAA"},
+			}},
+		}},
+	}
+
+	req := buildOpenAIResponsesRequest(Model{ID: "responses-model"}, ctx)
+	input := req["input"].([]map[string]any)
+	content := input[0]["content"].([]map[string]any)
+	if len(content) != 2 {
+		t.Fatalf("content parts = %d, want 2 (prompt + omission notice)", len(content))
+	}
+	notice := content[1]
+	if notice["type"] != "input_text" || !strings.Contains(notice["text"].(string), "video omitted") {
+		t.Fatalf("notice = %#v, want explicit video omission text", notice)
+	}
+	if strings.Contains(reqString(t, req), "base64,AAAA") {
+		t.Fatal("request still contains the video payload")
+	}
+}
+
+func reqString(t *testing.T, req map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

@@ -265,35 +265,44 @@ func stripImageDataFromEvent(event *agent.AgentEvent) {
 	}
 	// tool_execution_end: Result contains the full tool output
 	if event.Result != nil {
-		stripImageDataFromMessage(event.Result)
+		stripMediaDataFromMessage(event.Result)
 	}
 	// turn_end: ToolResults contains tool outputs from this turn
 	for i := range event.ToolResults {
-		stripImageDataFromMessage(&event.ToolResults[i])
+		stripMediaDataFromMessage(&event.ToolResults[i])
 	}
 	// agent_end: Messages contains all session messages
 	for i := range event.Messages {
-		stripImageDataFromMessage(&event.Messages[i])
+		stripMediaDataFromMessage(&event.Messages[i])
 	}
 	// message_end / message_update: Message may contain image content
 	if event.Message != nil {
-		stripImageDataFromMessage(event.Message)
+		stripMediaDataFromMessage(event.Message)
 	}
 }
 
-// stripImageDataFromMessage replaces base64 data in ImageContent blocks
-// with a short placeholder showing the original data length.
+// stripMediaDataFromMessage replaces base64 data in ImageContent and
+// VideoContent blocks with a short placeholder showing the original length.
 // It deep-copies the Content slice to avoid mutating shared underlying arrays;
 // callers (sessionWriter, AgentContext) may hold value-copied AgentMessages
 // that share the same Content backing array.
-func stripImageDataFromMessage(msg *agentctx.AgentMessage) {
+func stripMediaDataFromMessage(msg *agentctx.AgentMessage) {
 	if msg == nil {
 		return
 	}
 	needsStrip := false
 	for _, block := range msg.Content {
-		if ic, ok := block.(agentctx.ImageContent); ok && len(ic.Data) > 0 {
-			needsStrip = true
+		switch media := block.(type) {
+		case agentctx.ImageContent:
+			if len(media.Data) > 0 {
+				needsStrip = true
+			}
+		case agentctx.VideoContent:
+			if len(media.Data) > 0 {
+				needsStrip = true
+			}
+		}
+		if needsStrip {
 			break
 		}
 	}
@@ -305,11 +314,22 @@ func stripImageDataFromMessage(msg *agentctx.AgentMessage) {
 	newContent := make([]agentctx.ContentBlock, len(msg.Content))
 	copy(newContent, msg.Content)
 	for i, block := range newContent {
-		if ic, ok := block.(agentctx.ImageContent); ok && len(ic.Data) > 0 {
-			newContent[i] = agentctx.ImageContent{
-				Type:     ic.Type,
-				Data:     fmt.Sprintf("<base64 image data: %d bytes>", len(ic.Data)),
-				MimeType: ic.MimeType,
+		switch media := block.(type) {
+		case agentctx.ImageContent:
+			if len(media.Data) > 0 {
+				newContent[i] = agentctx.ImageContent{
+					Type:     media.Type,
+					Data:     fmt.Sprintf("<base64 image data: %d bytes>", len(media.Data)),
+					MimeType: media.MimeType,
+				}
+			}
+		case agentctx.VideoContent:
+			if len(media.Data) > 0 {
+				newContent[i] = agentctx.VideoContent{
+					Type:     media.Type,
+					Data:     fmt.Sprintf("<base64 video data: %d bytes>", len(media.Data)),
+					MimeType: media.MimeType,
+				}
 			}
 		}
 	}
