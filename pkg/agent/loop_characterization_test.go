@@ -122,78 +122,6 @@ func hasEvent(events []AgentEvent, eventType string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: MaxTurns enforcement via public API
-// ---------------------------------------------------------------------------
-
-// TestCharacterization_MaxTurnsEnforcement verifies that the agent stops after
-// exactly MaxTurns LLM calls, even when the LLM keeps returning tool_calls.
-// This tests through the full public API (Prompt → Events → Wait).
-func TestCharacterization_MaxTurnsEnforcement(t *testing.T) {
-	llmCallCount := 0
-	var mu sync.Mutex
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		llmCallCount++
-		count := llmCallCount
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "text/event-stream")
-
-		// Every LLM call returns a tool call — the agent should stop at MaxTurns anyway
-		fmt.Fprint(w, sseToolCallsResponse(
-			[]map[string]any{
-				{"id": fmt.Sprintf("call-%d", count), "name": "echo", "arguments": map[string]any{"input": "test"}},
-			},
-			"",
-			"tool_calls",
-		))
-	}))
-	defer server.Close()
-
-	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
-	cfg := DefaultLoopConfig()
-	cfg.MaxTurns = 2
-	cfg.MaxConsecutiveToolCalls = 100 // don't trigger loop guard
-
-	model := llm.Model{
-		ID:       "test-model",
-		Provider: "test",
-		BaseURL:  server.URL,
-		API:      "openai-completions",
-	}
-
-	agent := NewAgentFromConfigWithContext(model, "test-key", agentCtx, cfg)
-	agent.AddTool(&characterizationTestTool{name: "echo"})
-
-	if err := agent.Prompt("keep calling echo"); err != nil {
-		t.Fatalf("Prompt failed: %v", err)
-	}
-
-	events := collectAgentEvents(t, agent.Events(), 10*time.Second)
-	agent.Wait()
-
-	// Agent should have made exactly 2 LLM calls (MaxTurns=2)
-	mu.Lock()
-	count := llmCallCount
-	mu.Unlock()
-	if count != 2 {
-		t.Errorf("expected exactly 2 LLM calls with MaxTurns=2, got %d", count)
-	}
-
-	// Must have an agent_end event
-	if !hasEvent(events, EventAgentEnd) {
-		t.Error("expected EventAgentEnd")
-	}
-
-	// Turn end events should be exactly MaxTurns
-	turnEnds := countEvent(events, EventTurnEnd)
-	if turnEnds != 2 {
-		t.Errorf("expected 2 turn_end events, got %d", turnEnds)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Test 2: Tool loop guard via public API
 // ---------------------------------------------------------------------------
 
@@ -224,7 +152,6 @@ func TestCharacterization_ToolLoopGuard(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
 	cfg.MaxConsecutiveToolCalls = 3 // trigger after 3 consecutive identical calls
-	cfg.MaxTurns = 20               // high enough that MaxTurns doesn't kick in first
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -290,7 +217,6 @@ func TestCharacterization_ContextCancellation(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.MaxTurns = 100
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -477,81 +403,6 @@ func TestCharacterization_ManualCompactionRequestRunsInLoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: MaxTurns=2 with text final response
-// ---------------------------------------------------------------------------
-
-// TestCharacterization_MaxTurnsStopsExactlyAtLimit verifies that the agent stops
-// exactly at the turn limit, even if the LLM switches from tool_calls to text.
-func TestCharacterization_MaxTurnsStopsExactlyAtLimit(t *testing.T) {
-	llmCallCount := 0
-	var mu sync.Mutex
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		llmCallCount++
-		count := llmCallCount
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "text/event-stream")
-
-		if count <= 2 {
-			// First 2 calls return tool calls
-			fmt.Fprint(w, sseToolCallsResponse(
-				[]map[string]any{
-					{"id": fmt.Sprintf("call-%d", count), "name": "echo", "arguments": map[string]any{"input": "test"}},
-				},
-				"",
-				"tool_calls",
-			))
-		} else {
-			// Would return text, but MaxTurns should prevent this call
-			fmt.Fprint(w, sseTextResponse("final answer"))
-		}
-	}))
-	defer server.Close()
-
-	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
-	cfg := DefaultLoopConfig()
-	cfg.MaxTurns = 2
-	cfg.MaxConsecutiveToolCalls = 100
-
-	model := llm.Model{
-		ID:       "test-model",
-		Provider: "test",
-		BaseURL:  server.URL,
-		API:      "openai-completions",
-	}
-
-	agent := NewAgentFromConfigWithContext(model, "test-key", agentCtx, cfg)
-	agent.AddTool(&characterizationTestTool{name: "echo"})
-
-	if err := agent.Prompt("test max turns"); err != nil {
-		t.Fatalf("Prompt failed: %v", err)
-	}
-
-	events := collectAgentEvents(t, agent.Events(), 10*time.Second)
-	agent.Wait()
-
-	mu.Lock()
-	count := llmCallCount
-	mu.Unlock()
-
-	if count != 2 {
-		t.Errorf("expected exactly 2 LLM calls with MaxTurns=2, got %d", count)
-	}
-
-	turnEnds := countEvent(events, EventTurnEnd)
-	if turnEnds != 2 {
-		t.Errorf("expected 2 turn_end events, got %d", turnEnds)
-	}
-
-	// Should end cleanly with agent_end
-	if !hasEvent(events, EventAgentEnd) {
-		t.Error("expected EventAgentEnd")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Test 6: Compaction does not fire when ShouldCompact returns false
 // ---------------------------------------------------------------------------
 
@@ -704,7 +555,6 @@ func TestCharacterization_ToolExecutionEvents(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.MaxTurns = 1
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -833,7 +683,6 @@ func TestAbortEmitsSingleAgentEnd(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.MaxTurns = 100
 
 	model := llm.Model{
 		ID:       "test-model",

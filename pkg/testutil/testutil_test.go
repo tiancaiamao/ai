@@ -330,9 +330,7 @@ func TestLLMServerFactoryDynamic(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAgentHarnessTextResponse(t *testing.T) {
-	h := NewAgentHarness(t, []string{TextResponse("hello world")},
-		WithMaxTurns(1),
-	)
+	h := NewAgentHarness(t, []string{TextResponse("hello world")})
 	defer h.Close()
 
 	h.PromptAndWait("say hello", 10*time.Second)
@@ -353,7 +351,6 @@ func TestAgentHarnessWithTools(t *testing.T) {
 	}
 	h := NewAgentHarness(t, responses,
 		WithTools(echo),
-		WithMaxTurns(3),
 	)
 	defer h.Close()
 
@@ -367,28 +364,6 @@ func TestAgentHarnessWithTools(t *testing.T) {
 	}
 	if echo.CallCount() != 1 {
 		t.Errorf("expected echo to be called once, got %d", echo.CallCount())
-	}
-}
-
-func TestAgentHarnessMaxTurnsEnforcement(t *testing.T) {
-	// LLM always returns tool calls — should stop at MaxTurns
-	responses := []string{
-		ToolCallResponse("c1", "echo", map[string]any{"input": "a"}, "tool_calls"),
-		ToolCallResponse("c2", "echo", map[string]any{"input": "b"}, "tool_calls"),
-		ToolCallResponse("c3", "echo", map[string]any{"input": "c"}, "tool_calls"),
-	}
-	echo := EchoTool("echo")
-	h := NewAgentHarness(t, responses,
-		WithTools(echo),
-		WithMaxTurns(2),
-	)
-	defer h.Close()
-
-	h.PromptAndWait("call echo repeatedly", 10*time.Second)
-
-	turnEnds := h.Events.CountEvent(agent.EventTurnEnd)
-	if turnEnds != 2 {
-		t.Errorf("expected 2 turn_end events (MaxTurns=2), got %d", turnEnds)
 	}
 }
 

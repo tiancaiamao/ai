@@ -117,33 +117,6 @@ func TestRegression004_MaxToolCallsPerName(t *testing.T) {
 	}
 }
 
-// TestRegression005_MaxTurnsConfiguration tests that MaxTurns prevents runaway conversations
-func TestRegression005_MaxTurnsConfiguration(t *testing.T) {
-	// Bug: Agent can continue conversation indefinitely
-	// Fix: Added MaxTurns limit
-
-	cfg := DefaultLoopConfig()
-	cfg.MaxTurns = 3
-
-	// Verify default config allows unlimited turns (0)
-	defaultCfg := DefaultLoopConfig()
-	if defaultCfg.MaxTurns != 0 {
-		t.Errorf("DefaultLoopConfig should have MaxTurns = 0 (unlimited), got %d", defaultCfg.MaxTurns)
-	}
-
-	// Verify custom config can be set
-	if cfg.MaxTurns != 3 {
-		t.Errorf("MaxTurns not set correctly: got %d, want 3", cfg.MaxTurns)
-	}
-
-	agent := NewAgentFromConfig(llm.Model{}, "test-key", "Test agent", cfg)
-
-	// Verify config is embedded in agent
-	if agent.MaxTurns != 3 {
-		t.Errorf("agent.MaxTurns not set: got %d, want 3", agent.MaxTurns)
-	}
-}
-
 // TestRegression006_ContextWindowConfiguration tests that context window limits are configurable
 func TestRegression006_ContextWindowConfiguration(t *testing.T) {
 	// Bug: Agent ignores context window limits

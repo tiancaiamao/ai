@@ -259,7 +259,7 @@ Recovery: load messages from session JSONL (handles compaction snapshots) → re
 
 - **Tool output truncation**: Prevents context overflow from large tool outputs
 - **Execution timeout**: Configurable per-tool and per-turn timeouts
-- **Resource limits**: Max consecutive tool calls, max turns, token limits
+- **Resource limits**: Max consecutive tool calls, token limits
 - **Session isolation**: Sessions scoped by git repository root
 - **Agent isolation**: Each sub-agent runs as an independent process
 - **Path protection**: Tools validate file paths within workspace

@@ -84,7 +84,7 @@ spawn 时不传任务，然后用 `send --wait` 发送任务。`send --wait` 同
 - 不带 `--input` spawn 空壳是支持的用法（如预热、条件分发、多轮交互），但务必在流程中安排好后续 `ai send`，避免遗忘导致空跑浪费 token。
 
 **⚠️ 推荐用 `--role`，避免手写 `--system-prompt`：** 大多数场景应使用 `--role coder`（默认值），`ai` 会自动加载对应的 system prompt。仅在需要高度定制化的 role（如 validator with specific checklist）时才用 `--system-prompt`。注意：同时设置两者时，`--system-prompt` 会覆盖 `--role`。
-**🩹 防泄漏纪律（2026-09-26 实测修正）：** `ai serve` **无论是否加 `--max-turns` 都不会自动退出**——实测 `--max-turns 1` 的 agent turn 完成 45s 后进程仍存活（且仍能接受 `ai send`）。`--max-turns` 只约束对话轮数，不约束进程生命周期。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；session 命名必须守 `agent-$RUN_ID-*` 约定，否则 recipe 的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。
+**🩹 防泄漏纪律（2026-09-26 实测）：** `ai serve` 是长驻进程，**不会自动退出**——`agent_end` 只代表当前 prompt 处理完，不代表进程退出；turn 完成后进程仍存活（且仍能接受 `ai send`）。因此：**cleanup 没有捷径，唯一可靠方式是显式 kill**（见下方 Cleanup recipe）；session 命名必须守 `agent-$RUN_ID-*` 约定，否则 recipe 的 grep 匹配不到。泄漏实测案例（2026-09-26 tinyactor PGE run）：~20 个 tmux session + 29 个 `ai serve` 进程，全部源于漏 kill + 命名违约。
 
 ```bash
 # 从 runtime_state 获取自己的 run ID
@@ -264,7 +264,7 @@ rm -f ~/.ai/runs/$RUN_ID/subagent
 ```
 
 **为什么会泄漏（真实根因，2026-09-26 实测）：**
-1. `ai serve` 是长驻服务，**任何 flag 都不会让它自动退出**（`--max-turns` 也不行，实测 45s 仍存活）——退出只能由调用方显式 kill，没有例外。
+1. `ai serve` 是长驻服务，**不会自动退出**——退出只能由调用方显式 kill，没有例外。
 2. session 命名偏离 `agent-$RUN_ID-*` 约定（如自定义 `pge5-gen`、`b7t3-eval` 等前缀）会让上面的 cleanup recipe `grep "^agent-$RUN_ID-"` 匹配不到任何东西，整批泄漏。命名规则不是建议，是 cleanup recipe 能工作的前提。
 ### 生命周期铁律
 
@@ -400,7 +400,6 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | `--role <coder\|orchestrator\|validator>` | Agent role (affects system prompt) |
 | `--timeout <duration>` | Total execution timeout (e.g., `10m`, `600s`) |
 | `--session <path>` | Resume from existing session — **must be the session DIRECTORY path** (containing messages.jsonl), NOT the file path itself |
-| `--max-turns <int>` | Max conversation turns |
 | `--id-file <path>` | Write run ID to file after startup (for background mode) |
 
 ## ai send --wait Flags
@@ -438,10 +437,18 @@ cat ~/.ai/runs/$RUN_ID/subagent
 
 ## Error Handling
 
-1. **报告给用户** — 不要静默重试
-2. 用 `ai watch --id "$CHILD_ID" --follow --pretty` 观察子 agent 状态
-3. 让用户决定下一步
-4. **无论成功或失败，都必须 cleanup** — 失败的 agent 也不会自动退出
+**先诊断，再决定动作**——区分"方法错了"（approach wrong）与"环境问题"（env：限流、外部服务、缺凭证）：
+
+- 方法错了 → 带上"上次做了什么、为何失败"的上下文，用修正后的指令重新委派
+- 任务太大导致失败 → 拆窄重试
+- 明确越界（缺凭证、外部服务挂了）→ 立即上报用户
+- 重试不再收敛 → 停下来报告，不要无限重试
+
+通用操作顺序：
+
+1. 用 `ai watch --id "$CHILD_ID" --follow --pretty` 观察子 agent 状态
+2. **无论成功或失败，都必须 cleanup** — 失败的 agent 也不会自动退出
+3. 报告给用户时说明是哪种失败（方法 / 环境 / 越界），让用户决定下一步
 
 ### 发送指令必须确认送达
 

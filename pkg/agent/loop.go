@@ -63,8 +63,6 @@ type LoopConfig struct {
 	MaxConsecutiveToolCalls int
 	// MaxToolCallsPerName is the maximum number of tool calls per tool name in one run (0=default, <0=disabled).
 	MaxToolCallsPerName int
-	// MaxTurns is the maximum number of conversation turns (0=default=unlimited).
-	MaxTurns int
 	// ContextWindow is the context window for the model (0=use default 128000).
 	ContextWindow int
 	// LLMTotalTimeout is the total timeout for an LLM request (default 10min).
@@ -204,7 +202,6 @@ func runInnerLoop(
 		if state.shouldStop(ctx) {
 			return
 		}
-		state.advanceTurn()
 
 		// Pre-LLM compaction: check thresholds and compact if needed.
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false, true)
@@ -305,7 +302,6 @@ func runInnerLoop(
 				state.emptyRetries++
 				slog.Warn("[Loop] LLM returned stop_reason=stop with empty actionable output (no text, no tool calls); retrying",
 					"stopReason", msg.StopReason,
-					"turn", state.turnCount,
 					"retry_attempt", state.emptyRetries,
 					"max_retries", defaultEmptyResponseMaxRetries,
 				)

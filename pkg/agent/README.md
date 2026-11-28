@@ -64,7 +64,6 @@ type LoopConfig struct {
     ThinkingLevel      string                 // off, minimal, low, medium, high, xhigh
     MaxConsecutiveToolCalls int               // Default: 6
     MaxToolCallsPerName      int              // Per-name tool call limit
-    MaxTurns                int               // Max conversation turns (0=unlimited)
     ContextWindow           int               // Model context window (0=default 128000)
     EnableCheckpoint        bool              // Auto checkpoint creation (default true)
     Hooks                   *HookRegistry     // Lifecycle hooks

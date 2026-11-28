@@ -3,6 +3,21 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level, not just what the commit did.
 
+## Removal of the `--max-turns` turn limit (2026-11)
+
+**What changed**: Removed `--max-turns` from `run`, `serve` and `acp`, along with
+the whole parameter chain behind it: `AppSetupParams.MaxTurns`, the `RunACP*`
+signatures, `App.SetupAgent`, `LoopConfig.MaxTurns`, the loop's turn counter and
+stop branch, and the `testutil.WithMaxTurns` harness option. Tests and docs that
+only exercised the turn limit were removed; the tool-loop guard, timeouts and
+`--timeout` are unchanged.
+
+**Why**: The flag did not actually exit the process when the limit was reached.
+That bug went unreported and unnoticed for a long time, which the owner took as
+evidence that nobody uses the feature. Fixing it would preserve unused surface,
+so the feature was deleted instead of repaired.
+
+
 ## Runtime secret injection via `/env` (2026-11)
 
 **What changed**: Added an operator-only `/env` slash command with `set`, `get`, `list`, and

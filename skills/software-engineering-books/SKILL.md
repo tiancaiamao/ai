@@ -1,3 +1,8 @@
+---
+name: software-engineering-books
+description: Distilled decision rules from classic software engineering books, organized by scenario. Use when a task matches a software-engineering scenario covered by the routing table (design, architecture, testing, refactoring, review, debugging) and you need the established decision rules and checklists from a reference file.
+---
+
 # Software Engineering Books
 
 Distilled decision rules from classic software engineering books, organized by scenario.

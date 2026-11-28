@@ -64,7 +64,6 @@ ai history read --entry <entry-id>
 **`run` / `serve`:**
 - `--session <path>` — Session directory path
 - `--system-prompt <text>` — Custom system prompt (`@file` to load from file)
-- `--max-turns <n>` — Maximum conversation turns (0 = unlimited)
 - `--timeout <duration>` — Total execution timeout (0 = unlimited)
 - `--input <text>` — Initial prompt to send after startup
 - `--input-file <path>` — Read initial prompt from file (avoids shell ARG_MAX)

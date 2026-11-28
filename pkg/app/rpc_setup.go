@@ -52,7 +52,6 @@ func (app *App) LoadSession(id string) (*session.Session, string, error) {
 // AppSetupParams holds the parameters needed to construct an App.
 type AppSetupParams struct {
 	CustomSystemPrompt string
-	MaxTurns           int
 	DebugAddr          string
 	ModelOverride      string
 	RunID              string
@@ -220,7 +219,6 @@ func NewApp(sessionPath string, params AppSetupParams) (*App, error) {
 	// --- Build App ---
 	app := &App{
 		customSystemPrompt:   params.CustomSystemPrompt,
-		maxTurns:             params.MaxTurns,
 		debugAddr:            params.DebugAddr,
 		cfg:                  cfg,
 		configPath:           configPath,
