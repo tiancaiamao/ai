@@ -13,7 +13,7 @@ import (
 // setupAgent wires the agent loop: agent context, session writer, tool
 // executor, compactor and LoopConfig. Shared by ACP.
 // The caller owns the returned sessionWriter (Close) and agent (Shutdown).
-func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
+func (app *App) setupAgent() (*agent.Agent, *sessionWriter, error) {
 	// --- Create agent context ---
 	agentCtx := app.createBaseContext()
 
@@ -76,12 +76,6 @@ func (app *App) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 		return ""
 	}
 	loopCfg.GetSessionID = app.SessionID
-
-	// Set max turns limit if specified
-	if maxTurns > 0 {
-		loopCfg.MaxTurns = maxTurns
-		slog.Info("Max turns limit set", "max_turns", maxTurns)
-	}
 
 	// Apply agent config hooks if available
 	if app.agentConfig != nil {

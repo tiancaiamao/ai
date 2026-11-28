@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,7 +28,6 @@ import (
 type ServeConfig struct {
 	Session      string
 	SystemPrompt string
-	MaxTurns     int
 	Timeout      time.Duration
 	HTTP         string
 	Name         string
@@ -50,7 +48,6 @@ func ServeSubcommand(binPath string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
-	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
@@ -69,7 +66,6 @@ func ServeSubcommand(binPath string) {
 	sp := startServeApp(ServeConfig{
 		Session:      *sessionFlag,
 		SystemPrompt: *systemPromptFlag,
-		MaxTurns:     *maxTurnsFlag,
 		Timeout:      *timeoutFlag,
 		HTTP:         *httpFlag,
 		Name:         *nameFlag,
@@ -313,9 +309,9 @@ func startServeApp(cfg ServeConfig) *serveApp {
 	go func() {
 		var err error
 		if cfg.AgentConfig != "" {
-			err = app.RunACPWithAgentConfigContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Timeout, cfg.AgentConfig, cfg.Model, id)
+			err = app.RunACPWithAgentConfigContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.Timeout, cfg.AgentConfig, cfg.Model, id)
 		} else {
-			err = app.RunACPWithContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.MaxTurns, cfg.Timeout, cfg.Role, cfg.Model, id)
+			err = app.RunACPWithContext(ctx, hub, cfg.Session, cfg.HTTP, sysPrompt, cfg.Timeout, cfg.Role, cfg.Model, id)
 		}
 		if err != nil {
 			fmt.Fprintf(logFile, "[serve] agent error: %v\n", err)
@@ -427,7 +423,6 @@ func RunSubcommand(binPath string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to agent)")
-	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (e.g. ':6060')")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
@@ -439,7 +434,6 @@ func RunSubcommand(binPath string) {
 	cfg := ServeConfig{
 		Session:      *sessionFlag,
 		SystemPrompt: *systemPromptFlag,
-		MaxTurns:     *maxTurnsFlag,
 		Timeout:      *timeoutFlag,
 		HTTP:         *httpFlag,
 		Name:         *nameFlag,
@@ -539,9 +533,6 @@ func startServeProcess(binPath string, cfg ServeConfig, idFile string) (*servePr
 	}
 	if cfg.SystemPrompt != "" {
 		args = append(args, "--system-prompt", cfg.SystemPrompt)
-	}
-	if cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", strconv.Itoa(cfg.MaxTurns))
 	}
 	if cfg.Timeout > 0 {
 		args = append(args, "--timeout", cfg.Timeout.String())

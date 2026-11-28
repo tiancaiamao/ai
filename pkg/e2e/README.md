@@ -66,7 +66,7 @@ mock server cannot do.
 | `TestE2E_BusyAndAbort` | Streaming-time policies (`reject`/`cancel`/`submit`), abort |
 | `TestE2E_SteerAndFollowUp` | `/steer` + `/follow-up` slash handlers — main path while streaming, error branches idle |
 | `TestE2E_TimeoutWatchdog` | Stall watchdog terminates the agent |
-| `TestE2E_FlagsAndRoles` | CLI flags (`-max-turns`/`-session`) and `--role` wiring |
+| `TestE2E_FlagsAndRoles` | CLI flags (`-session`) and `--role` wiring |
 | `TestE2E_Subcommands` | `ai models` (+ filters) / `serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
 | `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
 | `TestE2E_Skills` | Skill discovery via `find_skill` + `/skill:` expansion (existing + missing) |

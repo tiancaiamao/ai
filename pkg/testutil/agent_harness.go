@@ -17,18 +17,12 @@ type HarnessOption func(*harnessConfig)
 
 type harnessConfig struct {
 	model        llm.Model
-	maxTurns     int
 	tools        []agentctx.Tool
 	compactor    agentctx.Compactor
 	systemPrompt string
 	apiKey       string
 	// Advanced options
 	maxConsecutiveToolCalls int
-}
-
-// WithMaxTurns limits the number of agent loop turns.
-func WithMaxTurns(n int) HarnessOption {
-	return func(c *harnessConfig) { c.maxTurns = n }
 }
 
 // WithTools adds tools to the agent context.
@@ -52,7 +46,6 @@ func WithCompactor(c agentctx.Compactor) HarnessOption {
 //	h := NewAgentHarness(t,
 //	    TextResponse("hello"),
 //	    WithTools(EchoTool("echo")),
-//	    WithMaxTurns(3),
 //	)
 //	defer h.Close()
 //
@@ -76,7 +69,7 @@ type AgentHarness struct {
 // or the TextResponse/ToolCallResponse helpers).
 //
 // Options override defaults: model=test-model, apiKey=test-key,
-// systemPrompt="You are a test assistant.", maxTurns=0 (unlimited).
+// systemPrompt="You are a test assistant.".
 func NewAgentHarness(t *testing.T, responses []string, opts ...HarnessOption) *AgentHarness {
 	t.Helper()
 
@@ -114,9 +107,6 @@ func NewAgentHarness(t *testing.T, responses []string, opts ...HarnessOption) *A
 
 	// Create loop config
 	loopCfg := agent.DefaultLoopConfig()
-	if cfg.maxTurns > 0 {
-		loopCfg.MaxTurns = cfg.maxTurns
-	}
 	if cfg.maxConsecutiveToolCalls > 0 {
 		loopCfg.MaxConsecutiveToolCalls = cfg.maxConsecutiveToolCalls
 	}

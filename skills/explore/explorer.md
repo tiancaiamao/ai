@@ -152,7 +152,7 @@ This checklist is the bridge between explore and design. It ensures the design p
 
 **Rules for this checklist:**
 - Be exhaustive — missing an item here means the design phase won't know to consider it
-- Be specific — "agent loop" is too vague; "agent loop with concurrent tool execution and max-turns guard" is useful
+- Be specific — "agent loop" is too vague; "agent loop with concurrent tool execution and structured error events" is useful
 - Don't judge importance — just list what exists. The design phase decides what to keep.
 
 ---

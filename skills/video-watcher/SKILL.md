@@ -1,3 +1,8 @@
+---
+name: video-watcher
+description: Fetch transcripts from YouTube and Bilibili videos to enable summarization, QA, and content extraction. Use when the user shares a YouTube or Bilibili URL and wants a summary, transcript, or questions answered about the video content.
+---
+
 # Video Watcher
 
 Fetch transcripts from **YouTube** and **Bilibili** videos to enable summarization, QA, and content extraction.

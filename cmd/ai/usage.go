@@ -27,7 +27,6 @@ Flags for 'run':
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
     --role <role>            Agent role name: loads ~/.ai/roles/<role>/agent.yaml
-  --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --input <text>           Initial prompt to send after startup
   --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
@@ -36,7 +35,6 @@ Flags for 'serve':
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
     --role <role>            Agent role name: loads ~/.ai/roles/<role>/agent.yaml
-  --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --http <addr>            Enable HTTP debug server (e.g., ':6060')
   --input <text>           Initial prompt to send after startup

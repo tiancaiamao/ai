@@ -620,14 +620,6 @@ func TestE2E_FlagsAndRoles(t *testing.T) {
 	httpSrv.closeStdin()
 	httpSrv.waitExit(15 * time.Second)
 
-	// Max turns: one turn then the agent stops.
-	turns := startACPServer(t, m, "", "-max-turns", "1")
-	turns.promptAsync(t, "Reply with exactly: hi")
-	turns.waitUpdate(t, "_turn_end", 3*time.Minute)
-
-	turns.closeStdin()
-	turns.waitExit(15 * time.Second)
-
 	// Unknown role → startup failure with nonzero exit.
 	code := expectExit(t, m, "", "-role", "does-not-exist-role")
 	if code == 0 {

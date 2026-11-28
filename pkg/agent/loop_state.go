@@ -20,7 +20,6 @@ type loopState struct {
 	agentCtx       *agentctx.AgentContext
 	stream         *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	compactionRecs int
-	turnCount      int
 	loopGuard      *toolLoopGuard
 
 	emptyRetries  int
@@ -51,7 +50,7 @@ func newLoopState(
 // cleanup is a no-op now that the checkpoint manager holds no resources.
 func (s *loopState) cleanup() {}
 
-// shouldStop checks for context cancellation and max turns limit.
+// shouldStop checks for context cancellation.
 // Returns true if the loop should terminate. Pushes AgentEndEvent on stop.
 func (s *loopState) shouldStop(ctx context.Context) bool {
 	select {
@@ -61,20 +60,7 @@ func (s *loopState) shouldStop(ctx context.Context) bool {
 	default:
 	}
 
-	if s.config.MaxTurns > 0 && s.turnCount >= s.config.MaxTurns {
-		slog.Info("[Loop] max turns limit reached",
-			"turns", s.turnCount,
-			"maxTurns", s.config.MaxTurns)
-		s.stream.Push(NewAgentEndEvent(s.agentCtx.RecentMessages))
-		return true
-	}
-
 	return false
-}
-
-// advanceTurn increments the turn counter.
-func (s *loopState) advanceTurn() {
-	s.turnCount++
 }
 
 // performCompaction executes compaction using the configured compactors.

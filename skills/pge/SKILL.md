@@ -98,7 +98,7 @@ Design (用户需求)
    对比基线 = task 开始时的已变更文件集（用户既有未提交修改、上一 task 未 commit 的产物不算越界）。
    有超出范围的文件 → 单文件机械越界：Orchestrator 直接 `git restore` 并记 progress.md；范围不清或跨多文件：progress.md → ai send 让 Generator 回滚 → 回到步骤 2
    未超出范围 → progress.md → 继续
-5. Spawn Evaluator (validator role) → 独立读代码、跑验证命令
+5. Spawn Evaluator (validator role) → 先对照 spec 列出用户可感知的端到端 I/O 验收场景（写成验证计划），再独立读代码、跑验证；**禁止只跑自选 smoke 就宣称验证完毕**——smoke 只能证明机器转起来，不能证明用户可感知的行为符合 spec
 6. Evaluator 写报告 → .pge/eval-{task}.md → progress.md（含 PASS/FAIL + 摘要）
 
             ┌── PASS ──→ ① 更新 .pge/state.md（表格 + Next Task + Attempt Log）
@@ -244,7 +244,7 @@ Design (用户需求)
 2. **Validate against spec, not against tasks** — tasks are means, spec is the end
 3. **Generator and Evaluator are separate agents** — self-evaluation is unreliable
 4. **FAIL/卡住时首选 `ai send` 指导**（保持上下文连续性）——实测 send 对 turn 已完成的 agent 有效（2026-09-26：完成 45s 后 send 仍被立即执行）。指导内容：eval 报告路径 + 问题清单 + 关键指引（如"extern 声明照 buffer.ta 先例"）。send 连续两轮无响应时按上表 hung 分支走：`pgrep` 只能证明进程还在、不能证明它还能处理 send，所以**不要因为进程活着就无限重发**——先看 `git diff`，有产出就按有产出处理，无产出就 kill 重来
-5. **Generator 在 task 循环内保持存活**（为 send 指导保留通道），配 `--timeout` 兜底；eval PASS + commit 后立即 kill。Evaluator 一次性报告型，kill 时机同前——注意 `--max-turns` 不会让进程自动退出（实测），kill 没有替代品
+5. **Generator 仅在「本 task」的验证/修复循环内保持存活**——Evaluator 判 FAIL 时，planner 把反馈 `ai send` 回同一个 Generator 做修复，它仍持有实现上下文，比重新 spawn 省 token。**不跨 task 复用**：每个新 task 都 spawn 全新 Generator 和全新 Evaluator——沿用旧 agent 会让新 task 被上一 task 的上下文干扰，且干净上下文更省 token。配 `--timeout` 兜底；本 task eval PASS + commit 后立即 kill 该 task 的 Generator 与 Evaluator——`ai serve` 是长驻进程，turn 完成不代表进程退出，kill 没有替代品
 6. **Eval report 是门禁** — 文件必须存在且 PASS，才能进入下一个 task
 7. **每个 task PASS 后更新 state.md** — 按需更新 Task Status + Next Task（必做）+ Attempt Log（条件）+ Phase Log（条件）。见 State Tracking 章节；compaction 后恢复上下文唯一依据
 8. **Task 级 commit 可在 eval PASS 后执行** — 每个 task 通过 Evaluator 验证后即可独立 commit。Phase end 的 review 检查跨 task 代码质量，review 无 P1 后执行 Phase 合入

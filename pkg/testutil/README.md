@@ -9,7 +9,6 @@ func TestMyFeature(t *testing.T) {
     h := testutil.NewAgentHarness(t,
         []string{testutil.TextResponse("hello world")},
         testutil.WithTools(testutil.EchoTool("echo")),
-        testutil.WithMaxTurns(5),
     )
     defer h.Close()
 

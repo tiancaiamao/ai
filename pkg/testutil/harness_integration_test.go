@@ -89,7 +89,7 @@ func TestHarness_ToolCallFollowedByResponse(t *testing.T) {
 		testutil.ToolCallResponse("c1", "echo", map[string]any{"input": "hello"}, "tool_calls"),
 		testutil.TextResponse("I called echo with hello"),
 	}
-	h := testutil.NewAgentHarness(t, responses, testutil.WithTools(echo), testutil.WithMaxTurns(5))
+	h := testutil.NewAgentHarness(t, responses, testutil.WithTools(echo))
 	defer h.Close()
 
 	h.PromptAndWait("use echo", 10*time.Second)
@@ -126,7 +126,6 @@ func TestHarness_CompactionTriggerDuringLoop(t *testing.T) {
 	}
 	h := testutil.NewAgentHarness(t, responses,
 		testutil.WithCompactor(compactor),
-		testutil.WithMaxTurns(3),
 	)
 	defer h.Close()
 
@@ -150,7 +149,7 @@ func TestHarness_FollowUpQueue(t *testing.T) {
 		testutil.TextResponse("first"),
 		testutil.TextResponse("second"),
 	}
-	h := testutil.NewAgentHarness(t, responses, testutil.WithMaxTurns(3))
+	h := testutil.NewAgentHarness(t, responses)
 	defer h.Close()
 
 	h.Prompt("initial")
@@ -211,7 +210,6 @@ func TestHarness_MultipleToolCallsInOneTurn(t *testing.T) {
 	responses := []string{sse, testutil.TextResponse("done")}
 	h := testutil.NewAgentHarness(t, responses,
 		testutil.WithTools(tool1, tool2),
-		testutil.WithMaxTurns(5),
 	)
 	defer h.Close()
 
@@ -235,7 +233,6 @@ func TestHarness_FailingToolReportsError(t *testing.T) {
 	}
 	h := testutil.NewAgentHarness(t, responses,
 		testutil.WithTools(failTool),
-		testutil.WithMaxTurns(5),
 	)
 	defer h.Close()
 
@@ -260,10 +257,7 @@ func TestHarness_FailingToolReportsError(t *testing.T) {
 // a single-turn text response. Mirrors pi's "emits the expected event order
 // for a single prompt".
 func TestHarness_EventOrderForSingleTurn(t *testing.T) {
-	h := testutil.NewAgentHarness(t,
-		[]string{testutil.TextResponse("hello")},
-		testutil.WithMaxTurns(1),
-	)
+	h := testutil.NewAgentHarness(t, []string{testutil.TextResponse("hello")})
 	defer h.Close()
 
 	h.PromptAndWait("hi", 10*time.Second)
@@ -583,7 +577,7 @@ func TestHarness_MultipleFollowUps(t *testing.T) {
 		testutil.TextResponse("response-1"),
 		testutil.TextResponse("response-2"),
 	}
-	h := testutil.NewAgentHarness(t, responses, testutil.WithMaxTurns(5))
+	h := testutil.NewAgentHarness(t, responses)
 	defer h.Close()
 
 	h.Prompt("start")

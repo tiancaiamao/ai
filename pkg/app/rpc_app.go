@@ -29,7 +29,6 @@ import (
 type App struct {
 	// --- Parameters from runRPC ---
 	customSystemPrompt string
-	maxTurns           int
 	output             io.Writer
 	debugAddr          string
 	runID              string // run ID from parent ai serve (empty for standalone rpc)
@@ -485,8 +484,8 @@ func (app *App) FormatCommandResult(command string, data any) string {
 }
 
 // SetupAgent initializes the agent loop and session persistence.
-func (app *App) SetupAgent(maxTurns int) (*agent.Agent, func(), error) {
-	writerAgent, writer, err := app.setupAgent(maxTurns)
+func (app *App) SetupAgent() (*agent.Agent, func(), error) {
+	writerAgent, writer, err := app.setupAgent()
 	if err != nil {
 		return nil, nil, err
 	}

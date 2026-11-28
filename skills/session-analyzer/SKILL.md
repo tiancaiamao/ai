@@ -1,3 +1,8 @@
+---
+name: session-analyzer
+description: 像 senior engineer review 代码一样，分析 AI agent 的运行会话，发现设计问题并提供改进建议。当任务涉及周期性分析最近的 AI 对话、排查 agent 行为、发现 prompt 设计问题或复盘会话时使用。
+---
+
 # Session Analyzer - AI Code Review
 
 像 senior engineer review 代码一样，分析 AI agent 的运行会话，发现设计问题并提供改进建议。

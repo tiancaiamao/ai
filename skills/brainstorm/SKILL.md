@@ -95,8 +95,8 @@ NO IMPLEMENTATION until design.md is approved by the user.
 1. User sends prompt → agent returns text response
 2. LLM returns tool_call → tool executes → result fed back → agent continues
 3. LLM returns 3 concurrent tool_calls → all execute in parallel
-4. MaxTurns=2 → agent stops after 2 turns even if LLM wants more
-5. Context cancelled mid-stream → agent stops and emits AgentEnd
+4. Context cancelled mid-stream → agent stops and emits AgentEnd
+5. LLM returns malformed tool_call → error surfaced, agent stops cleanly
 ```
 
 **为什么这很重要：** 验收场景是实现和验证的基准。如果 design 没有定义具体场景，实现时就只能靠 "go test passes" 这种不可靠的验证标准。

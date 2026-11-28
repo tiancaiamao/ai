@@ -144,7 +144,6 @@ Prevent regression of critical safety and behavior properties.
 | `TestRegression002_AutoCompactConfiguration` | Context overflow recovery |
 | `TestRegression003_ToolCallCutoffConfiguration` | Stale tool output truncation |
 | `TestRegression004_MaxToolCallsPerName` | Prevent tool abuse |
-| `TestRegression005_MaxTurnsConfiguration` | Prevent runaway conversations |
 | `TestRegression006_ContextWindowConfiguration` | Enforce context limits |
 | `TestRegression007_LLMRetryConfiguration` | Retry on rate limit errors |
 | `TestRegression008_ToolOutputLimits` | Large output truncation |
@@ -187,7 +186,7 @@ stdio ACP JSON-RPC:
 | `TestE2E_SlashCommands` | Full server lifecycle: protocol errors → tool turns → large prompts → `/compact` → `/fork` → `/rewind` → `/new` → `/resume` → `/help` → EOF |
 | `TestE2E_BusyAndAbort` | Streaming-time policies (`reject`/`cancel`/`submit`), abort |
 | `TestE2E_TimeoutWatchdog` | Stall watchdog terminates the agent |
-| `TestE2E_FlagsAndRoles` | CLI flags (`-max-turns`/`-session`) and `--role` wiring |
+| `TestE2E_FlagsAndRoles` | CLI flags (`-session`) and `--role` wiring |
 | `TestE2E_Subcommands` | `ai serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
 | `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
 | `TestE2E_Skills` | Skill discovery from `~/.ai/skills` via `find_skill` |
