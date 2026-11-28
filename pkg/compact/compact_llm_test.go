@@ -50,3 +50,15 @@ func TestBuildCacheFriendlyLLMContext_FiltersImagesForTextOnlyModel(t *testing.T
 		}
 	}
 }
+
+func TestEstimateMessageTokensCountsVideo(t *testing.T) {
+	msg := agentctx.AgentMessage{
+		Role: "toolResult",
+		Content: []agentctx.ContentBlock{
+			agentctx.VideoContent{Type: "video", Data: "base64data", MimeType: "video/mp4"},
+		},
+	}
+	if got := estimateMessageTokens(msg); got != 1200 {
+		t.Fatalf("estimateMessageTokens = %d, want 1200", got)
+	}
+}

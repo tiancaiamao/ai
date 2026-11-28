@@ -43,6 +43,11 @@ var videoMimeByExtension = map[string]string{
 	".3gp":  "video/3gpp",
 }
 
+// videoTooLargeError reports a video that exceeds the attachment cap.
+func videoTooLargeError(path string, size int64) error {
+	return fmt.Errorf("video file %s is too large (%d bytes, max %d)", path, size, maxVideoBytes)
+}
+
 // getReadMaxBytes returns the effective max bytes for read operations.
 // Checks AI_READ_MAX_BYTES env var first, then falls back to default.
 func getReadMaxBytes() int {
@@ -131,6 +136,14 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		path = t.workspace.ResolvePath(path)
 	}
 
+	// Reject oversized videos before reading the whole file into memory.
+	// Extension-based detection covers the formats we attach as video.
+	if info, err := os.Stat(path); err == nil && info.Size() > int64(maxVideoBytes) {
+		if _, ok := videoMimeByExtension[strings.ToLower(filepath.Ext(path))]; ok {
+			return nil, videoTooLargeError(path, info.Size())
+		}
+	}
+
 	// Read file
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -173,7 +186,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 	if videoMime != "" {
 		if len(data) > maxVideoBytes {
-			return nil, fmt.Errorf("video file %s is too large (%d bytes, max %d)", path, len(data), maxVideoBytes)
+			return nil, videoTooLargeError(path, int64(len(data)))
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		return []agentctx.ContentBlock{

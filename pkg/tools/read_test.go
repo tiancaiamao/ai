@@ -652,3 +652,25 @@ func TestReadTool_VideoByExtension(t *testing.T) {
 		t.Errorf("MimeType = %q, want video/x-matroska", vc.MimeType)
 	}
 }
+
+func TestReadTool_VideoTooLargeRejectedBeforeRead(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "huge.mp4")
+	f, err := os.Create(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sparse file: no actual 32MB is written, but os.Stat sees the real size.
+	if err := f.Truncate(int64(maxVideoBytes) + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+	_, err = tool.Execute(context.Background(), map[string]any{"path": filePath})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("error = %v, want oversized video error", err)
+	}
+}

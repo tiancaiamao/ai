@@ -408,6 +408,9 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 		case agentctx.ImageContent:
 			// Roughly estimate images as 1200 tokens (4800 chars).
 			charCount += 4800
+		case agentctx.VideoContent:
+			// Same fixed cost as images; media token usage is provider-specific.
+			charCount += 4800
 		}
 	}
 	if charCount == 0 {

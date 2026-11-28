@@ -59,7 +59,7 @@ func EstimateToolsTokens(tools []Tool) int {
 }
 
 // EstimateMessageTokens estimates token count for a single message.
-// Accounts for all content block types (text, thinking, tool calls, images).
+// Accounts for all content block types (text, thinking, tool calls, images, videos).
 // Non-agent-visible messages return 0.
 // Uses ~4 chars per token heuristic.
 func EstimateMessageTokens(msg AgentMessage) int {
@@ -83,6 +83,9 @@ func EstimateMessageTokens(msg AgentMessage) int {
 			}
 		case ImageContent:
 			// Roughly estimate images as 1200 tokens (4800 chars)
+			charCount += 4800
+		case VideoContent:
+			// Same fixed cost as images; media token usage is provider-specific.
 			charCount += 4800
 		}
 	}
@@ -127,6 +130,8 @@ func estimateMessageChars(msg AgentMessage) int {
 				}
 			}
 		case ImageContent:
+			charCount += 4800
+		case VideoContent:
 			charCount += 4800
 		}
 	}
